@@ -416,7 +416,7 @@ describe('Utilities', () => {
 // Actionability Edge Cases
 // ============================================
 
-import { isActionable, classifyIntent, computeActionabilitySignals } from './classifiers';
+import { isActionable, classifyIntent, computeActionabilitySignals, classifySection } from './classifiers';
 import type { Section, IntentClassification, ThresholdConfig, StructuralFeatures } from './types';
 
 describe('Actionability Edge Cases', () => {
@@ -545,7 +545,10 @@ describe('Actionability Edge Cases', () => {
   });
 
   describe('Research with Deliverables', () => {
-    it('should dampen research signal when deliverable patterns are present', () => {
+    // LEGACY v2 TESTS: These tests verify v2-specific research dampening heuristics
+    // that v3 does not implement. V3 sets research=0 and uses explicit rules instead.
+    // Skipped after v3 migration (2026-02-04).
+    it.skip('should dampen research signal when deliverable patterns are present', () => {
       // Section with research language BUT also deliverable output
       const section = makeSection(
         'We need to research user preferences to build a dashboard for tracking engagement metrics.',
@@ -562,7 +565,7 @@ describe('Actionability Edge Cases', () => {
       expect(intent.new_workstream).toBeGreaterThan(0); // Should have workstream signal
     });
 
-    it('should NOT dampen research signal for pure investigation sections', () => {
+    it.skip('should NOT dampen research signal for pure investigation sections', () => {
       // Section with research language but NO deliverable output
       const section = makeSection(
         'We need to investigate why users are churning. Explore the data and figure out the root cause.',
@@ -577,7 +580,7 @@ describe('Actionability Edge Cases', () => {
       expect(intent.research).toBeGreaterThan(0);
     });
 
-    it('should allow mixed research + deliverable sections to be actionable', () => {
+    it.skip('should allow mixed research + deliverable sections to be actionable', () => {
       const thresholds = DEFAULT_THRESHOLDS;
 
       const section = makeSection(
@@ -603,6 +606,8 @@ describe('Actionability Edge Cases', () => {
   });
 
   describe('Structural Boosts', () => {
+    // LEGACY v2 TESTS: v3 does not use structural feature boosts for scoring.
+    // Kept first test as it still passes (v3 can detect list items via structured task syntax).
     it('should boost workstream signal for sections with multiple list items and lines', () => {
       // Use sections WITHOUT launch keywords to see the structural boost
       const section1 = makeSection(
@@ -632,7 +637,7 @@ describe('Actionability Edge Cases', () => {
       expect(intent1.new_workstream).toBeGreaterThanOrEqual(intent2.new_workstream);
     });
 
-    it('should boost for workstream-like keywords in heading', () => {
+    it.skip('should boost for workstream-like keywords in heading', () => {
       const sectionWithKeyword = makeSection(
         'Build tracking for key metrics.',
         'Dashboard Milestone',
@@ -667,6 +672,213 @@ import {
   applyConfidenceBasedProcessing,
 } from './scoring';
 import type { Suggestion, SuggestionScores, SuggestionRouting, ClarificationReason } from './types';
+
+describe('Actionability Gate v3 - Required Test Cases', () => {
+  // Helper to create a test section with given text
+  const createV3TestSection = (text: string): Section => {
+    return {
+      section_id: 'test-section',
+      note_id: 'test-note',
+      start_line: 0,
+      end_line: 0,
+      body_lines: [
+        {
+          index: 0,
+          text,
+          line_type: 'paragraph' as const,
+        },
+      ],
+      structural_features: {
+        num_lines: 1,
+        num_list_items: 0,
+        has_dates: false,
+        has_metrics: false,
+        has_quarter_refs: false,
+        has_version_refs: false,
+        has_launch_keywords: false,
+        initiative_phrase_density: 0,
+      },
+      raw_text: text,
+    };
+  };
+
+  const config = DEFAULT_CONFIG;
+
+  describe('Must Pass (actionable = true)', () => {
+    it('should detect "I would really like you to add" with product noun', () => {
+      const section = createV3TestSection('I would really like you to add boundary detection in Onboarding');
+      const classified = classifySection(section, config);
+
+      expect(classified.is_actionable).toBe(true);
+      expect(classified.actionable_signal).toBeGreaterThanOrEqual(0.5);
+      // Should have high signal due to strong request pattern
+      expect(classified.actionable_signal).toBeGreaterThanOrEqual(1.0);
+    });
+
+    it('should detect "Please add" directive', () => {
+      const section = createV3TestSection('Please add boundary detection in onboarding');
+      const classified = classifySection(section, config);
+
+      expect(classified.is_actionable).toBe(true);
+      expect(classified.actionable_signal).toBeGreaterThanOrEqual(0.5);
+      expect(classified.actionable_signal).toBeGreaterThanOrEqual(1.0);
+    });
+
+    it('should detect "Could you fix" request', () => {
+      const section = createV3TestSection('Could you fix the onboarding validation bug');
+      const classified = classifySection(section, config);
+
+      expect(classified.is_actionable).toBe(true);
+      expect(classified.actionable_signal).toBeGreaterThanOrEqual(0.5);
+      expect(classified.actionable_signal).toBeGreaterThanOrEqual(1.0);
+    });
+
+    it('should detect "Move launch to next week" (change operator)', () => {
+      const section = createV3TestSection('Move launch to next week');
+      const classified = classifySection(section, config);
+
+      expect(classified.is_actionable).toBe(true);
+      expect(classified.actionable_signal).toBeGreaterThanOrEqual(0.5);
+      // Should have 0.8 from change operator
+      expect(classified.actionable_signal).toBeGreaterThanOrEqual(0.8);
+      // V3 OVERRIDE TEST: outOfScopeSignal should be clamped <= 0.3
+      // because actionableSignal >= 0.8
+      expect(classified.out_of_scope_signal).toBeLessThanOrEqual(0.3);
+    });
+
+    it('should detect "We need to integrate" directive', () => {
+      const section = createV3TestSection('We need to integrate Linear');
+      const classified = classifySection(section, config);
+
+      expect(classified.is_actionable).toBe(true);
+      expect(classified.actionable_signal).toBeGreaterThanOrEqual(0.5);
+      expect(classified.actionable_signal).toBeGreaterThanOrEqual(1.0);
+    });
+
+    it('should detect "Blocked by" status marker', () => {
+      const section = createV3TestSection('Blocked by security review');
+      const classified = classifySection(section, config);
+
+      expect(classified.is_actionable).toBe(true);
+      expect(classified.actionable_signal).toBeGreaterThanOrEqual(0.5);
+      // Should have 0.7 from status marker
+      expect(classified.actionable_signal).toBeGreaterThanOrEqual(0.7);
+    });
+  });
+
+  describe('Must Fail (actionable = false)', () => {
+    it('should reject "I like" (opinion without directive)', () => {
+      const section = createV3TestSection('I like the boundary detection idea');
+      const classified = classifySection(section, config);
+
+      expect(classified.is_actionable).toBe(false);
+      expect(classified.actionable_signal).toBeLessThan(0.5);
+    });
+
+    it('should reject heading-only fragment without verb', () => {
+      const section = createV3TestSection('Boundary detection in onboarding');
+      const classified = classifySection(section, config);
+
+      expect(classified.is_actionable).toBe(false);
+      expect(classified.actionable_signal).toBeLessThan(0.5);
+    });
+
+    it('should reject past tense discussion', () => {
+      const section = createV3TestSection('We talked about adding boundary detection');
+      const classified = classifySection(section, config);
+
+      expect(classified.is_actionable).toBe(false);
+      expect(classified.actionable_signal).toBeLessThan(0.5);
+    });
+
+    it('should reject negated directive', () => {
+      const section = createV3TestSection("Don't add boundary detection in onboarding");
+      const classified = classifySection(section, config);
+
+      expect(classified.is_actionable).toBe(false);
+      expect(classified.actionable_signal).toBe(0);
+    });
+
+    it('should reject calendar marker without directive', () => {
+      const section = createV3TestSection('Monday–Wednesday next week');
+      const classified = classifySection(section, config);
+
+      expect(classified.is_actionable).toBe(false);
+      expect(classified.actionable_signal).toBeLessThan(0.5);
+      // Should have high out-of-scope signal
+      expect(classified.out_of_scope_signal).toBeGreaterThanOrEqual(0.4);
+    });
+  });
+
+  describe('V3 Signal Semantics Verification', () => {
+    it('should prove status markers raise actionableSignal (not just plan_change)', () => {
+      const section = createV3TestSection('Done with the migration');
+      const classified = classifySection(section, config);
+      const intent = classified.intent;
+
+      // Status marker should contribute to actionableSignal
+      const actionableSignal = Math.max(intent.plan_change, intent.new_workstream);
+      expect(actionableSignal).toBeGreaterThanOrEqual(0.7);
+
+      // Should be actionable
+      expect(classified.is_actionable).toBe(true);
+    });
+
+    it('should prove change operators raise actionableSignal', () => {
+      const section = createV3TestSection('Delay the rollout until next month');
+      const classified = classifySection(section, config);
+      const intent = classified.intent;
+
+      // Change operator should contribute to actionableSignal
+      const actionableSignal = Math.max(intent.plan_change, intent.new_workstream);
+      expect(actionableSignal).toBeGreaterThanOrEqual(0.8);
+
+      // Should be actionable
+      expect(classified.is_actionable).toBe(true);
+    });
+
+    it('should prove out-of-scope override works correctly', () => {
+      // High actionability + calendar marker → outOfScope should be clamped
+      const section = createV3TestSection('Move the launch to next Friday');
+      const classified = classifySection(section, config);
+
+      // Should have high actionable signal from change operator
+      expect(classified.actionable_signal).toBeGreaterThanOrEqual(0.8);
+
+      // Out-of-scope signal MUST be clamped <= 0.3 due to override
+      expect(classified.out_of_scope_signal).toBeLessThanOrEqual(0.3);
+
+      // Should be actionable despite calendar reference
+      expect(classified.is_actionable).toBe(true);
+    });
+
+    it('should prove actionableSignal lives in intent schema fields', () => {
+      const section = createV3TestSection('Please implement the new feature');
+      const classified = classifySection(section, config);
+      const intent = classified.intent;
+
+      // Verify that actionableSignal is extracted from intent fields
+      const extractedActionable = Math.max(intent.plan_change, intent.new_workstream);
+      expect(extractedActionable).toBeGreaterThan(0);
+
+      // Verify it matches the classified signal
+      expect(classified.actionable_signal).toBe(extractedActionable);
+    });
+
+    it('should prove outOfScopeSignal lives in intent schema fields', () => {
+      const section = createV3TestSection('Email the team about this next Monday');
+      const classified = classifySection(section, config);
+      const intent = classified.intent;
+
+      // Verify that outOfScopeSignal is extracted from intent fields
+      const extractedOOS = Math.max(intent.calendar, intent.communication, intent.micro_tasks);
+      expect(extractedOOS).toBeGreaterThan(0);
+
+      // Verify it matches the classified signal
+      expect(classified.out_of_scope_signal).toBe(extractedOOS);
+    });
+  });
+});
 
 describe('Suggestion Suppression Fix', () => {
   // Helper to create test suggestions
@@ -1067,7 +1279,10 @@ describe('Product Execution Intent (rule-based-v2)', () => {
   });
 
   describe('Product Execution Heading Boost', () => {
-    it('should boost plan_change for bug fix headings', () => {
+    // LEGACY v2 TESTS: v3 does not use heading-based boosts. It uses explicit rules
+    // (request patterns, imperatives, change operators, etc.) instead of heading analysis.
+    // Skipped after v3 migration (2026-02-04).
+    it.skip('should boost plan_change for bug fix headings', () => {
       const section = makeSection(
         'The calculator widget is showing incorrect values for some edge cases.',
         'Bug: Calculator Widget',
@@ -1081,7 +1296,7 @@ describe('Product Execution Intent (rule-based-v2)', () => {
       expect(intent.plan_change).toBeGreaterThan(0.3);
     });
 
-    it('should boost plan_change for copy change headings', () => {
+    it.skip('should boost plan_change for copy change headings', () => {
       const section = makeSection(
         'We need better wording on the signup page.',
         'Copy Changes for Signup',
@@ -1095,7 +1310,7 @@ describe('Product Execution Intent (rule-based-v2)', () => {
       expect(intent.plan_change).toBeGreaterThan(0.3);
     });
 
-    it('should boost plan_change for UX structure headings', () => {
+    it.skip('should boost plan_change for UX structure headings', () => {
       const section = makeSection(
         'Reorganize the dashboard layout for better clarity.',
         'Structure Improvements',
@@ -1109,7 +1324,7 @@ describe('Product Execution Intent (rule-based-v2)', () => {
       expect(intent.plan_change).toBeGreaterThan(0.3);
     });
 
-    it('should boost plan_change for transparency/calculator/CTA headings', () => {
+    it.skip('should boost plan_change for transparency/calculator/CTA headings', () => {
       const bugSection = makeSection('Description', 'Fix Bug', 3, 0);
       const demoSection = makeSection('Description', 'Demo Setup', 3, 0);
       const translationSection = makeSection('Description', 'Translation Updates', 3, 0);
@@ -1180,6 +1395,7 @@ Reorganize menu items based on user feedback.
   });
 
   describe('Bullet Change Language Boost', () => {
+    // Note: "should" is now detected as a request stem in v3, so this test may still pass
     it('should boost plan_change when bullets contain "should"', () => {
       const section = makeSection(
         `Notes:
@@ -1204,7 +1420,9 @@ Reorganize menu items based on user feedback.
       expect(intent.plan_change).toBeGreaterThan(0.15);
     });
 
-    it('should boost plan_change for various change language patterns', () => {
+    // LEGACY v2 TEST: v3 uses explicit rules (request stems, change operators) instead
+    // of pattern matching on bullet language. Some patterns may still work via v3 rules.
+    it.skip('should boost plan_change for various change language patterns', () => {
       const patterns = [
         '- We need to update the homepage',
         '- Move the login button to the header',
@@ -1286,7 +1504,8 @@ Launch by end of May with full mobile optimization.
   });
 
   describe('Structural Plan Change Lift', () => {
-    it('should boost plan_change for mid-sized multi-bullet sections', () => {
+    // LEGACY v2 TEST: v3 does not use line count or bullet count for structural boosts
+    it.skip('should boost plan_change for mid-sized multi-bullet sections', () => {
       const section = makeSection(
         `Changes needed:
 - Item 1
@@ -1361,7 +1580,8 @@ Some additional context here.`,
   });
 
   describe('UI Research Reclassification', () => {
-    it('should boost plan_change for high-research sections with UI verbs', () => {
+    // LEGACY v2 TEST: v3 does not have research signal or UI verb reclassification
+    it.skip('should boost plan_change for high-research sections with UI verbs', () => {
       const section = makeSection(
         `We need to investigate how to add a new notification badge to the header.
 Research the best UX patterns for showing unread counts.
