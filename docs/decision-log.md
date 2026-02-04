@@ -78,3 +78,43 @@ During verification, discovered 1 pre-existing failure in v1 engine (unrelated t
 - Marked as `.skip` to allow clean test suite pass
 - Issue: v1 generator not producing expected EXECUTION_ARTIFACT for new initiative pattern
 - Should be addressed separately from v3 work
+
+## 2026-02-04: V1 Validator Bypass for V2 Suggestions
+
+### Context
+
+The V1 Change-Test validator was originally designed for the V1 suggestion engine to ensure plan mutations contain delta signals and execution artifacts have required components. However, the V2 suggestion engine has its own quality gates (V2 Anti-Vacuity, V3 Evidence Sanity) that are better suited for V2-generated suggestions.
+
+### Decision
+
+Modified `runQualityValidators()` in `src/lib/suggestion-engine-v2/validators.ts:424-428` to:
+- Continue running V1 validator and capturing results
+- Do NOT block V2 suggestions when V1 fails
+- Only block on V2 (anti-vacuity) or V3 (evidence sanity) failures
+
+### Rationale
+
+V1 validator tests for specific patterns (delta signals like "from X to Y") that may not apply to all valid V2 suggestions. The V2 and V3 validators provide more appropriate quality checks:
+- V2: Prevents generic management-speak
+- V3: Validates evidence quality and mapping
+
+V1 results are retained in the validation results array for debugging and analysis purposes.
+
+### Implementation
+
+**Changed**:
+```typescript
+// V1: Change-test (debug/metadata only - does not block v2 suggestions)
+const v1Result = validateV1ChangeTest(suggestion, sectionText);
+results.push(v1Result);
+// V1 validator kept for debug metadata but does NOT drop v2 suggestions
+// (V1 validation only applies to v1 suggestion engine)
+```
+
+V1 failure no longer returns early from `runQualityValidators()`. Only V2 and V3 failures cause early return with `passed: false`.
+
+### Verification
+
+- All tests pass: `npm test` ✓
+- V1 validation logic unchanged, only bypass behavior modified
+- V2 and V3 validators continue to properly gate suggestions
