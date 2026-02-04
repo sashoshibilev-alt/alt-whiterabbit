@@ -227,106 +227,459 @@ function computeWorkstreamStructuralBoost(section: Section): number {
   return Math.min(0.35, boost); // Cap the structural boost
 }
 
+// ============================================
+// Actionability Gate v3 - Constants and Helpers
+// ============================================
+
+/**
+ * V3 Request stems for strong request pattern detection
+ */
+const V3_REQUEST_STEMS = [
+  'please',
+  'can you',
+  'could you',
+  'would you',
+  'i want you to',
+  "i'd like you to",
+  'i would like you to',
+  'i would really like you to',
+  'we should',
+  "let's",
+  'need to',
+  'we need to',
+];
+
+/**
+ * V3 Action verbs for directive detection
+ */
+const V3_ACTION_VERBS = [
+  'add',
+  'implement',
+  'build',
+  'create',
+  'enable',
+  'disable',
+  'remove',
+  'delete',
+  'fix',
+  'update',
+  'change',
+  'refactor',
+  'improve',
+  'support',
+  'integrate',
+  'adjust',
+  'modify',
+  'revise',
+];
+
+/**
+ * V3 Change operators for plan mutation detection
+ * Extended from spec to include commonly-used change language from existing patterns
+ */
+const V3_CHANGE_OPERATORS = [
+  'move',
+  'push',
+  'delay',
+  'slip',
+  'bring forward',
+  'postpone',
+  'deprioritize',
+  'prioritize',
+  // Additional change operators from production patterns
+  'shift',
+  'pivot',
+  'reframe',
+  'reprioritize',
+  'defer',
+  'accelerate',
+  'narrow',
+  'expand',
+  'refocus',
+  'adjust',
+  'modify',
+  'revise',
+];
+
+/**
+ * V3 Status/progress markers
+ */
+const V3_STATUS_MARKERS = [
+  'done',
+  'shipped',
+  'deployed',
+  'released',
+  'implemented',
+  'merged',
+  'blocked',
+  'waiting on',
+  'in progress',
+];
+
+/**
+ * V3 Product/target nouns for bonus scoring
+ */
+const V3_PRODUCT_NOUNS = [
+  'onboarding',
+  'signup',
+  'flow',
+  'ui',
+  'api',
+  'integration',
+  'pricing',
+  'dashboard',
+  'tracking',
+  'analytics',
+];
+
+/**
+ * V3 Negation patterns that override action verbs
+ */
+const V3_NEGATION_PATTERNS = [
+  "don't",
+  'do not',
+  'no need to',
+  'not necessary to',
+];
+
+/**
+ * V3 Calendar markers for out-of-scope detection
+ */
+const V3_CALENDAR_MARKERS = [
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+  'next week',
+  'this week',
+  'next month',
+  'q1',
+  'q2',
+  'q3',
+  'q4',
+  'quarter',
+  'january',
+  'february',
+  'march',
+  'april',
+  'may',
+  'june',
+  'july',
+  'august',
+  'september',
+  'october',
+  'november',
+  'december',
+];
+
+/**
+ * V3 Communication markers for out-of-scope detection
+ */
+const V3_COMMUNICATION_MARKERS = [
+  'email',
+  'send',
+  'slack',
+  'follow up',
+  'reach out',
+  'ping',
+];
+
+/**
+ * V3 Micro/admin markers for out-of-scope detection
+ */
+const V3_MICRO_ADMIN_MARKERS = [
+  'rename file',
+  'update doc link',
+  'fix typo',
+];
+
+/**
+ * Preprocess a line for v3 matching (lowercase, trim, collapse whitespace)
+ */
+function preprocessLine(lineText: string): string {
+  return lineText
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * V3 Rule 1: Strong request pattern (request stem + action verb) = +1.0
+ *
+ * Maps to actionableSignal. This is the highest-precision signal for
+ * explicit user requests like "I would really like you to add..."
+ */
+function matchStrongRequestPattern(line: string): number {
+  const hasStem = V3_REQUEST_STEMS.some(stem => line.includes(stem));
+  const hasVerb = V3_ACTION_VERBS.some(verb => {
+    const regex = new RegExp(`\\b${verb}\\b`, 'i');
+    return regex.test(line);
+  });
+  return hasStem && hasVerb ? 1.0 : 0.0;
+}
+
+/**
+ * V3 Rule 2: Imperative verb at line start = +0.9
+ *
+ * Maps to actionableSignal. Detects commands like "Add boundary detection"
+ */
+function matchImperativeVerb(line: string): number {
+  for (const verb of V3_ACTION_VERBS) {
+    const regex = new RegExp(`^${verb}\\b`, 'i');
+    if (regex.test(line)) {
+      return 0.9;
+    }
+  }
+  return 0.0;
+}
+
+/**
+ * V3 Rule 3: Change operator pattern = +0.8
+ *
+ * Maps to actionableSignal. Detects plan mutations like "Move launch to next week"
+ */
+function matchChangeOperator(line: string): number {
+  return V3_CHANGE_OPERATORS.some(op => line.includes(op)) ? 0.8 : 0.0;
+}
+
+/**
+ * V3 Rule 4: Status/progress markers = +0.7
+ *
+ * Maps to actionableSignal. Detects status updates like "Blocked by security review"
+ * or decisions like "Done", "Shipped"
+ */
+function matchStatusMarkers(line: string): number {
+  return V3_STATUS_MARKERS.some(marker => line.includes(marker)) ? 0.7 : 0.0;
+}
+
+/**
+ * V3 Rule 5: Structured task syntax = +0.8
+ *
+ * Maps to actionableSignal. Detects markdown tasks, TODOs, action items
+ */
+function matchStructuredTask(line: string): number {
+  if (
+    line.includes('- [ ]') ||
+    line.includes('todo:') ||
+    line.includes('action:') ||
+    line.includes('owner:')
+  ) {
+    return 0.8;
+  }
+  return 0.0;
+}
+
+/**
+ * V3 Rule 6: Target object bonus = +0.2
+ *
+ * Maps to actionableSignal. Applied only if currentScore >= 0.6 and line contains
+ * a product noun. Reduces noise by requiring existing actionable signal.
+ */
+function matchTargetObjectBonus(line: string, currentScore: number): number {
+  if (currentScore >= 0.6 && V3_PRODUCT_NOUNS.some(noun => line.includes(noun))) {
+    return 0.2;
+  }
+  return 0.0;
+}
+
+/**
+ * V3 Negative Rule: Negation override
+ *
+ * If a line contains both a negation pattern and an action verb,
+ * the line score is forced to 0.0
+ */
+function hasNegationOverride(line: string): boolean {
+  const hasNegation = V3_NEGATION_PATTERNS.some(neg => line.includes(neg));
+  const hasVerb = V3_ACTION_VERBS.some(verb => {
+    const regex = new RegExp(`\\b${verb}\\b`, 'i');
+    return regex.test(line);
+  });
+  return hasNegation && hasVerb;
+}
+
+/**
+ * V3 Out-of-scope signal computation
+ *
+ * Returns max out-of-scope signal for a line:
+ * - Calendar markers: +0.6
+ * - Communication markers: +0.6
+ * - Micro/admin markers: +0.4
+ */
+function computeOutOfScopeForLine(line: string): number {
+  let score = 0;
+
+  if (V3_CALENDAR_MARKERS.some(marker => line.includes(marker))) {
+    score = Math.max(score, 0.6);
+  }
+  if (V3_COMMUNICATION_MARKERS.some(marker => line.includes(marker))) {
+    score = Math.max(score, 0.6);
+  }
+  if (V3_MICRO_ADMIN_MARKERS.some(marker => line.includes(marker))) {
+    score = Math.max(score, 0.4);
+  }
+
+  return score;
+}
+
 /**
  * Classify a section's intent
  */
 export function classifyIntent(section: Section): IntentClassification {
-  const text = (section.heading_text || '') + ' ' + section.raw_text;
+  // ============================================
+  // ACTIONABILITY GATE V3 - Rule-Based Implementation
+  // ============================================
+  //
+  // V3 computes per-section actionableSignal and outOfScopeSignal using
+  // explicit, explainable rules instead of pattern counting.
+  //
+  // POSITIVE SIGNALS (all contribute to actionableSignal):
+  // 1. Strong request pattern (stem + verb): +1.0
+  // 2. Imperative verb at line start: +0.9
+  // 3. Change operator (move, delay, etc.): +0.8
+  // 4. Status/progress markers (done, blocked): +0.7
+  // 5. Structured task syntax (- [ ], TODO:): +0.8
+  // 6. Target object bonus (if score >= 0.6): +0.2
+  //
+  // NEGATIVE SIGNALS:
+  // - Negation override: if line has "don't" + verb → score = 0.0
+  //
+  // OUT-OF-SCOPE SIGNALS:
+  // - Calendar markers: 0.6
+  // - Communication markers: 0.6
+  // - Micro/admin markers: 0.4
+  //
+  // OVERRIDE:
+  // - If actionableSignal >= 0.8, clamp outOfScopeSignal <= 0.3
+  //
+  // MAPPING TO SCHEMA:
+  // - actionableSignal distributed to plan_change/new_workstream
+  // - outOfScopeSignal distributed to calendar/communication/micro_tasks
+  // - Downstream: computeActionabilitySignals() extracts max(plan_change, new_workstream)
+  //
+  // ============================================
 
-  // Count matches for each category
-  const planChangeMatches = countPatternMatches(text, PLAN_CHANGE_PATTERNS);
-  const newWorkstreamMatches = countPatternMatches(text, NEW_WORKSTREAM_PATTERNS);
-  const communicationMatches = countPatternMatches(text, COMMUNICATION_PATTERNS);
-  const researchMatches = countPatternMatches(text, RESEARCH_PATTERNS);
-  const calendarMatches = countPatternMatches(text, CALENDAR_PATTERNS);
-  const microTaskMatches = countPatternMatches(text, MICRO_TASK_PATTERNS);
+  const lines = section.body_lines.map(l => preprocessLine(l.text));
 
-  // Compute base signal strengths
-  const plan_change_base = computeSignalStrength(planChangeMatches, PLAN_CHANGE_PATTERNS.length);
-  const new_workstream_base = computeSignalStrength(newWorkstreamMatches, NEW_WORKSTREAM_PATTERNS.length);
-  const communication = computeSignalStrength(communicationMatches, COMMUNICATION_PATTERNS.length);
-  let research = computeSignalStrength(researchMatches, RESEARCH_PATTERNS.length);
-  const calendar = computeSignalStrength(calendarMatches, CALENDAR_PATTERNS.length);
-  const micro_tasks = computeSignalStrength(microTaskMatches, MICRO_TASK_PATTERNS.length);
+  let maxActionableScore = 0;
+  let maxOutOfScopeScore = 0;
 
-  // Structural feature boosts
-  let planBoost = 0;
-  let workstreamBoost = 0;
+  // Track which types of signals fired for intent distribution
+  let hasChangeOperators = false;
+  let hasStructuredTasks = false;
+  let hasCalendarMarkers = false;
+  let hasCommunicationMarkers = false;
+  let hasMicroAdminMarkers = false;
 
-  const sf = section.structural_features;
+  // Process each line
+  for (const line of lines) {
+    // Skip empty or very short lines (headings, fragments)
+    if (line.length < 5) continue;
 
-  // Quarter/version refs boost plan change signal
-  if (sf.has_quarter_refs || sf.has_version_refs) {
-    planBoost += 0.15;
+    // Compute positive signals (all contribute to actionableSignal)
+    let lineScore = 0;
+
+    // Rule 1: Strong request pattern
+    lineScore = Math.max(lineScore, matchStrongRequestPattern(line));
+
+    // Rule 2: Imperative verb at start
+    lineScore = Math.max(lineScore, matchImperativeVerb(line));
+
+    // Rule 3: Change operator
+    const changeOpScore = matchChangeOperator(line);
+    if (changeOpScore > 0) hasChangeOperators = true;
+    lineScore = Math.max(lineScore, changeOpScore);
+
+    // Rule 4: Status/progress markers (includes decisions like "done", "blocked")
+    lineScore = Math.max(lineScore, matchStatusMarkers(line));
+
+    // Rule 5: Structured task syntax
+    const structuredTaskScore = matchStructuredTask(line);
+    if (structuredTaskScore > 0) hasStructuredTasks = true;
+    lineScore = Math.max(lineScore, structuredTaskScore);
+
+    // Rule 6: Target object bonus (only if already actionable)
+    lineScore += matchTargetObjectBonus(line, lineScore);
+
+    // Negative rule: Negation override
+    if (hasNegationOverride(line)) {
+      lineScore = 0.0;
+    }
+
+    // Clamp line score to [0,1]
+    lineScore = Math.min(1.0, Math.max(0.0, lineScore));
+
+    maxActionableScore = Math.max(maxActionableScore, lineScore);
+
+    // Compute out-of-scope signal
+    const oosScore = computeOutOfScopeForLine(line);
+    if (oosScore > 0) {
+      if (V3_CALENDAR_MARKERS.some(m => line.includes(m))) {
+        hasCalendarMarkers = true;
+      }
+      if (V3_COMMUNICATION_MARKERS.some(m => line.includes(m))) {
+        hasCommunicationMarkers = true;
+      }
+      if (V3_MICRO_ADMIN_MARKERS.some(m => line.includes(m))) {
+        hasMicroAdminMarkers = true;
+      }
+    }
+    maxOutOfScopeScore = Math.max(maxOutOfScopeScore, oosScore);
   }
 
-  // Launch keywords boost new workstream signal
-  if (sf.has_launch_keywords) {
-    workstreamBoost += 0.2;
+  // V3 OVERRIDE: If actionableSignal >= 0.8, clamp outOfScopeSignal <= 0.3
+  // This prevents high-actionability sections with calendar references
+  // (e.g., "Move launch to next week") from being filtered as out-of-scope
+  if (maxActionableScore >= 0.8) {
+    maxOutOfScopeScore = Math.min(0.3, maxOutOfScopeScore);
   }
 
-  // High initiative phrase density boosts workstream
-  if (sf.initiative_phrase_density > 0.2) {
-    workstreamBoost += sf.initiative_phrase_density * 0.3;
+  // Map actionableSignal to plan_change/new_workstream distribution
+  // Heuristic: if section has change operators or structured tasks → plan_change dominant
+  // Otherwise → new_workstream dominant
+  const isPlanChangeDominant = hasChangeOperators || hasStructuredTasks;
+
+  let plan_change: number;
+  let new_workstream: number;
+
+  if (isPlanChangeDominant) {
+    // Plan change gets full signal, new_workstream gets partial
+    plan_change = maxActionableScore;
+    new_workstream = maxActionableScore * 0.4;
+  } else {
+    // New workstream gets full signal, plan_change gets partial
+    new_workstream = maxActionableScore;
+    plan_change = maxActionableScore * 0.4;
   }
 
-  // Metrics and dates boost plan relevance
-  if (sf.has_metrics || sf.has_dates) {
-    planBoost += 0.1;
+  // Distribute outOfScopeSignal to calendar/communication/micro_tasks
+  // based on which markers were detected
+  let calendar = 0;
+  let communication = 0;
+  let micro_tasks = 0;
+
+  if (hasCalendarMarkers) {
+    calendar = maxOutOfScopeScore;
+  }
+  if (hasCommunicationMarkers) {
+    communication = maxOutOfScopeScore;
+  }
+  if (hasMicroAdminMarkers) {
+    micro_tasks = maxOutOfScopeScore;
   }
 
-  // Additional workstream structural boosts for rule-based-v2 strengthening
-  const structuralBoost = computeWorkstreamStructuralBoost(section);
-  workstreamBoost += structuralBoost;
-
-  // Product execution heading boost (weak lift for bug/copy/UX notes)
-  if (hasProductExecutionHeading(section.heading_text)) {
-    planBoost += 0.35;
+  // If no specific markers detected but score > 0, default to calendar
+  if (maxOutOfScopeScore > 0 && !hasCalendarMarkers && !hasCommunicationMarkers && !hasMicroAdminMarkers) {
+    calendar = maxOutOfScopeScore;
   }
 
-  // Bullet change language boost
-  if (hasChangeLanguageInBullets(section)) {
-    planBoost += 0.20;
-  }
+  // Status/informational is inverse of actionable signals (keep existing logic for compatibility)
+  const status_informational = Math.max(0, 0.5 - maxActionableScore + maxOutOfScopeScore * 0.3);
 
-  // Structural boost for mid-sized, multi-bullet sections
-  if (sf.num_list_items >= 4 && sf.num_lines >= 4 && sf.num_lines <= 20) {
-    planBoost += 0.10;
-  }
-
-  // Apply boosts to get final plan/workstream signals
-  let plan_change = Math.min(1, plan_change_base + planBoost);
-  const new_workstream = Math.min(1, new_workstream_base + workstreamBoost);
-
-  // Refine research handling: if deliverable patterns are present AND
-  // we have moderate plan_change/new_workstream signals, reduce research's
-  // contribution to out-of-scope (research tied to deliverables is actionable)
-  const hasDeliverables = hasDeliverablePatterns(text);
-  const hasUIVerbs = hasUIChangeVerbs(text);
-  let actionableSignalBase = Math.max(plan_change, new_workstream);
-
-  // If section has deliverable cues and some actionable signal, dampen research
-  // This prevents pure "investigate X" from blocking "build dashboard to track X"
-  if (hasDeliverables && actionableSignalBase >= 0.3 && research > 0) {
-    // Reduce research signal proportionally to actionable signal strength
-    const dampingFactor = Math.min(0.7, actionableSignalBase);
-    research = research * (1 - dampingFactor);
-  }
-
-  // Reclassify high-research sections with concrete UI verbs as plan_change
-  // This ensures "research how to add X to dashboard" is treated as execution, not pure research
-  if (research >= 0.5 && hasUIVerbs) {
-    // Boost plan_change to at least moderate level for UI execution work
-    plan_change = Math.max(plan_change, 0.5);
-    // Apply stronger research damping when UI verbs are present
-    const uiDampingFactor = 0.8;
-    research = research * (1 - uiDampingFactor);
-  }
-
-  // Status/informational is inverse of actionable signals
-  const actionableSignal = Math.max(plan_change, new_workstream);
-  const outOfScopeSignal = Math.max(communication, research, calendar, micro_tasks);
-  const status_informational = Math.max(0, 0.5 - actionableSignal + outOfScopeSignal * 0.3);
+  // Research is not used in v3 gate logic (set to 0)
+  const research = 0;
 
   return {
     plan_change,
