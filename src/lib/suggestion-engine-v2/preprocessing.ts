@@ -1,0 +1,387 @@
+/**
+ * Suggestion Engine v2 - Preprocessing
+ *
+ * Markdown parsing, line annotation, and section segmentation.
+ */
+
+import type {
+  NoteInput,
+  Line,
+  LineType,
+  Section,
+  StructuralFeatures,
+  PreprocessingResult,
+} from './types';
+
+// ============================================
+// Line Annotation
+// ============================================
+
+/**
+ * Detect if a line is inside a code fence
+ */
+let inCodeFence = false;
+let codeFenceMarker = '';
+
+function resetCodeFenceState(): void {
+  inCodeFence = false;
+  codeFenceMarker = '';
+}
+
+/**
+ * Check if line is a code fence delimiter
+ */
+function isCodeFenceDelimiter(text: string): { is: boolean; marker: string } {
+  const match = text.match(/^(`{3,}|~{3,})/);
+  if (match) {
+    return { is: true, marker: match[1] };
+  }
+  return { is: false, marker: '' };
+}
+
+/**
+ * Determine the type of a line
+ */
+function getLineType(text: string, trimmed: string): LineType {
+  // Check code fence state
+  const fenceCheck = isCodeFenceDelimiter(trimmed);
+  if (fenceCheck.is) {
+    if (!inCodeFence) {
+      inCodeFence = true;
+      codeFenceMarker = fenceCheck.marker;
+      return 'code';
+    } else if (trimmed.startsWith(codeFenceMarker.charAt(0))) {
+      inCodeFence = false;
+      codeFenceMarker = '';
+      return 'code';
+    }
+  }
+
+  if (inCodeFence) {
+    return 'code';
+  }
+
+  // Blank line
+  if (trimmed === '') {
+    return 'blank';
+  }
+
+  // Heading
+  if (/^#{1,6}\s/.test(trimmed)) {
+    return 'heading';
+  }
+
+  // Blockquote
+  if (/^>\s/.test(trimmed)) {
+    return 'quote';
+  }
+
+  // List item (bullet or numbered)
+  if (/^[-*+•]\s/.test(trimmed) || /^\d+[.)]\s/.test(trimmed)) {
+    return 'list_item';
+  }
+
+  // Default to paragraph
+  return 'paragraph';
+}
+
+/**
+ * Get heading level from a heading line
+ */
+function getHeadingLevel(text: string): number | undefined {
+  const match = text.match(/^(#{1,6})\s/);
+  if (match) {
+    return match[1].length;
+  }
+  return undefined;
+}
+
+/**
+ * Get indent level for list items
+ */
+function getIndentLevel(text: string): number | undefined {
+  // Count leading spaces/tabs
+  const match = text.match(/^(\s*)/);
+  if (match) {
+    const indent = match[1];
+    // Convert tabs to spaces (assume 2 space indent)
+    const spaces = indent.replace(/\t/g, '  ').length;
+    return Math.floor(spaces / 2);
+  }
+  return 0;
+}
+
+/**
+ * Get heading text (without # markers)
+ */
+function getHeadingText(text: string): string {
+  return text.replace(/^#{1,6}\s+/, '').trim();
+}
+
+/**
+ * Annotate all lines in a note
+ */
+export function annotateLines(rawMarkdown: string): Line[] {
+  resetCodeFenceState();
+
+  const rawLines = rawMarkdown.split('\n');
+  const lines: Line[] = [];
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const text = rawLines[i];
+    const trimmed = text.trim();
+    const lineType = getLineType(text, trimmed);
+
+    const line: Line = {
+      index: i,
+      text: text,
+      line_type: lineType,
+    };
+
+    if (lineType === 'heading') {
+      line.heading_level = getHeadingLevel(trimmed);
+    }
+
+    if (lineType === 'list_item') {
+      line.indent_level = getIndentLevel(text);
+    }
+
+    if (lineType === 'code') {
+      line.is_code_fence = isCodeFenceDelimiter(trimmed).is;
+    }
+
+    lines.push(line);
+  }
+
+  return lines;
+}
+
+// ============================================
+// Section Segmentation
+// ============================================
+
+let sectionCounter = 0;
+
+function generateSectionId(noteId: string): string {
+  return `sec_${noteId.slice(0, 8)}_${++sectionCounter}`;
+}
+
+/**
+ * Reset section counter (for testing)
+ */
+export function resetSectionCounter(): void {
+  sectionCounter = 0;
+}
+
+/**
+ * Check if line is a pseudo-heading (strong cue without # markers)
+ */
+function isPseudoHeading(text: string): boolean {
+  const trimmed = text.trim();
+  const pseudoPatterns = [
+    /^(Plan|Roadmap|Execution|Next Steps|Decisions|Goals|Scope|Timeline|Strategy):/i,
+    /^(Q[1-4]\s+\d{4}|H[12]\s+\d{4})/i, // Quarter or half references
+    /^(Phase\s+\d+|Sprint\s+\d+)/i,
+  ];
+  return pseudoPatterns.some((p) => p.test(trimmed));
+}
+
+/**
+ * Compute structural features for a section
+ */
+function computeStructuralFeatures(bodyLines: Line[]): StructuralFeatures {
+  const numLines = bodyLines.length;
+  const numListItems = bodyLines.filter((l) => l.line_type === 'list_item').length;
+
+  const fullText = bodyLines.map((l) => l.text).join(' ').toLowerCase();
+
+  // Date patterns
+  const hasDatePattern =
+    /\b(january|february|march|april|may|june|july|august|september|october|november|december|\d{1,2}\/\d{1,2}|\d{4})\b/i;
+  const hasDates = hasDatePattern.test(fullText);
+
+  // Metric patterns
+  const hasMetricPattern = /\b(\d+%|\d+x|\$\d+|ARR|MRR|DAU|MAU|NPS|OKR)\b/i;
+  const hasMetrics = hasMetricPattern.test(fullText);
+
+  // Quarter references
+  const hasQuarterRefs = /\b(Q[1-4]|H[12])\b/i.test(fullText);
+
+  // Version references
+  const hasVersionRefs = /\b(v\d+|MVP|alpha|beta|GA|launch)\b/i.test(fullText);
+
+  // Launch keywords
+  const hasLaunchKeywords = /\b(launch|rollout|ship|release|deploy|go-live)\b/i.test(fullText);
+
+  // Initiative phrase density
+  const initiativePatterns = [
+    /\blaunch\s+\w+/gi,
+    /\bbuild\s+\w+/gi,
+    /\bcreate\s+\w+/gi,
+    /\bspin\s+up\s+\w+/gi,
+    /\brollout\s+\w+/gi,
+    /\bshipt\s+\w+/gi,
+    /\bdeliver\s+\w+/gi,
+    /\bimplement\s+\w+/gi,
+  ];
+
+  let initiativePhraseCount = 0;
+  for (const pattern of initiativePatterns) {
+    const matches = fullText.match(pattern);
+    if (matches) {
+      initiativePhraseCount += matches.length;
+    }
+  }
+
+  const wordCount = fullText.split(/\s+/).length;
+  const initiativePhraseDensity = wordCount > 0 ? Math.min(1, initiativePhraseCount / (wordCount / 10)) : 0;
+
+  return {
+    num_lines: numLines,
+    num_list_items: numListItems,
+    has_dates: hasDates,
+    has_metrics: hasMetrics,
+    has_quarter_refs: hasQuarterRefs,
+    has_version_refs: hasVersionRefs,
+    has_launch_keywords: hasLaunchKeywords,
+    initiative_phrase_density: initiativePhraseDensity,
+  };
+}
+
+/**
+ * Segment lines into sections based on headings
+ */
+export function segmentIntoSections(noteId: string, lines: Line[]): Section[] {
+  // Handle empty input
+  if (lines.length === 0) {
+    return [];
+  }
+
+  // Check if all lines are blank
+  const nonBlankLines = lines.filter((l) => l.line_type !== 'blank');
+  if (nonBlankLines.length === 0) {
+    return [];
+  }
+
+  const sections: Section[] = [];
+  let currentSection: Partial<Section> | null = null;
+  let currentBodyLines: Line[] = [];
+
+  function finalizeSection(): void {
+    if (currentSection && currentBodyLines.length > 0) {
+      currentSection.body_lines = currentBodyLines;
+      currentSection.end_line = currentBodyLines[currentBodyLines.length - 1].index;
+      currentSection.structural_features = computeStructuralFeatures(currentBodyLines);
+      currentSection.raw_text = currentBodyLines.map((l) => l.text).join('\n');
+      sections.push(currentSection as Section);
+    }
+    currentSection = null;
+    currentBodyLines = [];
+  }
+
+  // Handle content before first heading
+  let hasHeading = false;
+
+  for (const line of lines) {
+    if (line.line_type === 'heading') {
+      hasHeading = true;
+
+      // Finalize previous section
+      finalizeSection();
+
+      // Start new section
+      currentSection = {
+        section_id: generateSectionId(noteId),
+        note_id: noteId,
+        heading_text: getHeadingText(line.text),
+        heading_level: line.heading_level,
+        start_line: line.index,
+        end_line: line.index,
+        body_lines: [],
+        structural_features: {} as StructuralFeatures,
+        raw_text: '',
+      };
+    } else if (currentSection) {
+      // Add to current section body
+      currentBodyLines.push(line);
+    } else if (!hasHeading) {
+      // Content before first heading - create "General" section
+      if (!currentSection) {
+        currentSection = {
+          section_id: generateSectionId(noteId),
+          note_id: noteId,
+          heading_text: 'General',
+          heading_level: 1,
+          start_line: line.index,
+          end_line: line.index,
+          body_lines: [],
+          structural_features: {} as StructuralFeatures,
+          raw_text: '',
+        };
+      }
+      currentBodyLines.push(line);
+    } else if (isPseudoHeading(line.text)) {
+      // Pseudo-heading in unheaded section - start new section
+      finalizeSection();
+
+      currentSection = {
+        section_id: generateSectionId(noteId),
+        note_id: noteId,
+        heading_text: line.text.replace(/:$/, '').trim(),
+        heading_level: 2, // Treat as level 2
+        start_line: line.index,
+        end_line: line.index,
+        body_lines: [],
+        structural_features: {} as StructuralFeatures,
+        raw_text: '',
+      };
+    }
+  }
+
+  // Finalize last section
+  finalizeSection();
+
+  return sections;
+}
+
+// ============================================
+// Full Preprocessing Pipeline
+// ============================================
+
+/**
+ * Preprocess a note: annotate lines and segment into sections
+ */
+export function preprocessNote(note: NoteInput): PreprocessingResult {
+  // Normalize line endings
+  const normalizedMarkdown = note.raw_markdown.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  // Annotate lines
+  const lines = annotateLines(normalizedMarkdown);
+
+  // Segment into sections
+  const sections = segmentIntoSections(note.note_id, lines);
+
+  return {
+    lines,
+    sections,
+  };
+}
+
+/**
+ * Get the raw text of a section (for synthesis)
+ */
+export function getSectionText(section: Section, includeHeading: boolean = true): string {
+  const headingLine = includeHeading && section.heading_text ? `# ${section.heading_text}\n` : '';
+  return headingLine + section.raw_text;
+}
+
+/**
+ * Normalize text for comparison (case-fold, whitespace collapse)
+ */
+export function normalizeForComparison(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[^\w\s]/g, '')
+    .trim();
+}

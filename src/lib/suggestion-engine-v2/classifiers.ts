@@ -1,0 +1,855 @@
+/**
+ * Suggestion Engine v2 - Classifiers
+ *
+ * Section intent classification and type determination.
+ * Distinguishes plan mutations from execution artifacts and filters non-actionable content.
+ *
+ * Key signals:
+ * - actionableSignal = max(plan_change, new_workstream)
+ * - outOfScopeSignal = max(calendar, communication, micro_tasks)
+ * - isActionable = actionableSignal >= T_action && outOfScopeSignal < T_out_of_scope
+ *
+ * Note: research is excluded from outOfScopeSignal to allow high-research sections with
+ * concrete execution language (UI verbs, deliverables) to be treated as actionable.
+ */
+
+import type {
+  Section,
+  IntentClassification,
+  ClassifiedSection,
+  SectionType,
+  ThresholdConfig,
+} from './types';
+
+// ============================================
+// Intent Classification Patterns
+// ============================================
+
+/**
+ * Positive signals for plan-level content
+ */
+const PLAN_CHANGE_PATTERNS = [
+  // Heading patterns
+  /^(roadmap|execution|next phase|scope|plan|strategy|priorities)/i,
+  // Future state language
+  /\b(shift|pivot|reframe|reprioritize|defer|accelerate|narrow|expand|refocus)\b/i,
+  /\b(from\s+.+\s+to|instead of|stop doing|start doing|move from)\b/i,
+  // Scope language
+  /\b(in scope|out of scope|descope|include|exclude|add to scope|remove from)\b/i,
+  // Sequencing
+  /\b(phase\s*\d|pilot first|full rollout|later cohort|before|after|then)\b/i,
+  // Change indicators
+  /\b(update|change|modify|adjust|revise)\s+(the|our|this)?\s*(scope|plan|approach|timeline)/i,
+];
+
+const NEW_WORKSTREAM_PATTERNS = [
+  // Creation language
+  /\b(launch|spin up|kick off|create|build|start|introduce|roll out|ship)\s+/i,
+  // Program/initiative language
+  /\b(new\s+(initiative|project|workstream|program|effort|track))\b/i,
+  /\b(initiative|project|workstream|program)\s*:/i,
+  // Goal-oriented
+  /\b(goal|objective|mission|vision)\s*:/i,
+  /\b(deliver|achieve|accomplish|complete)\s+/i,
+];
+
+/**
+ * Deliverable-oriented patterns that indicate research tied to concrete outputs
+ * When present, research signal should not block actionability
+ */
+const DELIVERABLE_PATTERNS = [
+  // Concrete output types
+  /\b(dashboard|report|page|system|platform|tool|app|application|service)\b/i,
+  /\b(document|spec|specification|design|prototype|wireframe|mockup)\b/i,
+  /\b(transparency|visibility|tracking|monitoring)\s+(report|page|dashboard|system)/i,
+  // Outcome-oriented phrases
+  /\b(publish|release|deploy|deliver|ship|produce|output)\b/i,
+  /\b(build\s+.{3,30}|create\s+.{3,30}|develop\s+.{3,30})\b/i,
+  // Milestone/deadline language with deliverables
+  /\b(by\s+(end\s+of\s+)?(q\d|quarter|month|week)|deadline|due\s+date)\b/i,
+];
+
+/**
+ * Product execution heading keywords that indicate actionable execution notes
+ * These are weaker signals than strategic plan patterns but still actionable
+ */
+const PRODUCT_EXECUTION_HEADING_KEYWORDS = /\b(fix|bug|copy|structure|update|demo|translation|transparency|calculator|cta)\b/i;
+
+/**
+ * Change language in bullets that indicates actionable content
+ */
+const CHANGE_LANGUAGE_PATTERNS = [
+  /\bshould\b/i,
+  /\bneed to\b/i,
+  /\bmove\b/i,
+  /\badd\b/i,
+  /\bupdate\b/i,
+  /\bremove\b/i,
+  /\bfocus on\b/i,
+  /\bbalance between\b/i,
+];
+
+/**
+ * UI change verbs that indicate concrete execution work
+ * When present with research signals, treats section as execution rather than pure research
+ */
+const UI_CHANGE_VERBS = /\b(add|remove|show|label|notation)\b/i;
+
+/**
+ * Negative signals (out-of-scope content)
+ */
+const COMMUNICATION_PATTERNS = [
+  /\b(send|email|share|notify|announce|forward|cc)\s+(the|this|a)?\s*(summary|notes|update|team)/i,
+  /\b(let\s+.+\s+know|tell\s+.+\s+about|inform\s+.+\s+of)\b/i,
+  /\b(slack|message|dm|ping)\s+/i,
+];
+
+const RESEARCH_PATTERNS = [
+  /\b(investigate|figure out|explore|look into|research|understand|analyze)\b/i,
+  /\b(do\s+(some|more)?\s*research|conduct\s+.+\s+analysis)\b/i,
+  /\b(interview|survey|user research|competitive analysis)\b/i,
+  /\b(find out|learn more|gather data|collect feedback)\b/i,
+];
+
+const CALENDAR_PATTERNS = [
+  /\b(schedule|book|set up|find time|calendar|meeting)\s+(a|the)?\s*(meeting|call|sync)/i,
+  /\b(next|this)\s+(monday|tuesday|wednesday|thursday|friday|week|month)\b/i,
+  /\b(recurring|weekly|daily|monthly)\s+(meeting|sync|standup|check-in)/i,
+  /\b(block\s+(off|out)?\s*time|add to calendar)\b/i,
+];
+
+const MICRO_TASK_PATTERNS = [
+  /\b(update|edit|fix|tweak)\s+(the|a)?\s*(slide|doc|document|spreadsheet|deck)\b/i,
+  /\b(add\s+.+\s+to\s+the\s+(list|doc|page))\b/i,
+  /\b(clean up|organize|format|review)\s+(the|this)?\s*(notes|doc|file)/i,
+  /\b(follow up|check in|touch base)\s+(with|on)\b/i,
+  /\b(send\s+a\s+quick|drop\s+a|ping)\b/i,
+];
+
+// ============================================
+// Intent Classification
+// ============================================
+
+/**
+ * Count pattern matches in text
+ */
+function countPatternMatches(text: string, patterns: RegExp[]): number {
+  let count = 0;
+  for (const pattern of patterns) {
+    if (pattern.test(text)) {
+      count++;
+    }
+  }
+  return count;
+}
+
+/**
+ * Compute raw signal strength (0-1) based on pattern matches
+ */
+function computeSignalStrength(matchCount: number, totalPatterns: number): number {
+  // Logarithmic scaling to avoid saturation
+  const normalized = Math.min(1, matchCount / Math.max(1, totalPatterns * 0.3));
+  return normalized;
+}
+
+/**
+ * Check if text contains deliverable-oriented patterns
+ */
+function hasDeliverablePatterns(text: string): boolean {
+  return DELIVERABLE_PATTERNS.some(pattern => pattern.test(text));
+}
+
+/**
+ * Check if heading contains product execution keywords
+ */
+function hasProductExecutionHeading(headingText: string | undefined): boolean {
+  if (!headingText) return false;
+  return PRODUCT_EXECUTION_HEADING_KEYWORDS.test(headingText);
+}
+
+/**
+ * Check if bullets contain change language
+ */
+function hasChangeLanguageInBullets(section: Section): boolean {
+  const bulletText = section.body_lines
+    .filter(line => line.line_type === 'list_item')
+    .map(line => line.text)
+    .join(' ');
+  
+  return CHANGE_LANGUAGE_PATTERNS.some(pattern => pattern.test(bulletText));
+}
+
+/**
+ * Check if text contains UI change verbs
+ */
+function hasUIChangeVerbs(text: string): boolean {
+  return UI_CHANGE_VERBS.test(text);
+}
+
+/**
+ * Detect workstream-like structural cues in a section
+ * Returns a boost value (0-0.3) based on structural features
+ */
+function computeWorkstreamStructuralBoost(section: Section): number {
+  let boost = 0;
+  const sf = section.structural_features;
+  const text = (section.heading_text || '') + ' ' + section.raw_text;
+
+  // Title-case section titles suggest formal workstream naming
+  if (section.heading_text) {
+    const isTitleCase = /^[A-Z][a-z]+(\s+[A-Z][a-z]+)+/.test(section.heading_text);
+    if (isTitleCase) {
+      boost += 0.1;
+    }
+  }
+
+  // Workstream-like keywords in heading
+  if (section.heading_text && /\b(milestone|deliverable|dashboard|report|initiative|program|workstream)\b/i.test(section.heading_text)) {
+    boost += 0.15;
+  }
+
+  // Multi-bullet sections with substantial content
+  if (sf.num_list_items >= 3 && sf.num_lines >= 5) {
+    boost += 0.1;
+  }
+
+  // Presence of metrics, KPIs, or percentages suggests initiative planning
+  if (/\b(\d+%|\d+\s*(days?|weeks?|months?)|kpi|metric|target|goal)\b/i.test(text)) {
+    boost += 0.1;
+  }
+
+  // Imperative or outcome-focused verbs in bullets
+  const imperativePattern = /^[-*•]\s*(launch|build|create|deliver|implement|ship|develop|establish|deploy)/im;
+  if (imperativePattern.test(text)) {
+    boost += 0.1;
+  }
+
+  return Math.min(0.35, boost); // Cap the structural boost
+}
+
+/**
+ * Classify a section's intent
+ */
+export function classifyIntent(section: Section): IntentClassification {
+  const text = (section.heading_text || '') + ' ' + section.raw_text;
+
+  // Count matches for each category
+  const planChangeMatches = countPatternMatches(text, PLAN_CHANGE_PATTERNS);
+  const newWorkstreamMatches = countPatternMatches(text, NEW_WORKSTREAM_PATTERNS);
+  const communicationMatches = countPatternMatches(text, COMMUNICATION_PATTERNS);
+  const researchMatches = countPatternMatches(text, RESEARCH_PATTERNS);
+  const calendarMatches = countPatternMatches(text, CALENDAR_PATTERNS);
+  const microTaskMatches = countPatternMatches(text, MICRO_TASK_PATTERNS);
+
+  // Compute base signal strengths
+  const plan_change_base = computeSignalStrength(planChangeMatches, PLAN_CHANGE_PATTERNS.length);
+  const new_workstream_base = computeSignalStrength(newWorkstreamMatches, NEW_WORKSTREAM_PATTERNS.length);
+  const communication = computeSignalStrength(communicationMatches, COMMUNICATION_PATTERNS.length);
+  let research = computeSignalStrength(researchMatches, RESEARCH_PATTERNS.length);
+  const calendar = computeSignalStrength(calendarMatches, CALENDAR_PATTERNS.length);
+  const micro_tasks = computeSignalStrength(microTaskMatches, MICRO_TASK_PATTERNS.length);
+
+  // Structural feature boosts
+  let planBoost = 0;
+  let workstreamBoost = 0;
+
+  const sf = section.structural_features;
+
+  // Quarter/version refs boost plan change signal
+  if (sf.has_quarter_refs || sf.has_version_refs) {
+    planBoost += 0.15;
+  }
+
+  // Launch keywords boost new workstream signal
+  if (sf.has_launch_keywords) {
+    workstreamBoost += 0.2;
+  }
+
+  // High initiative phrase density boosts workstream
+  if (sf.initiative_phrase_density > 0.2) {
+    workstreamBoost += sf.initiative_phrase_density * 0.3;
+  }
+
+  // Metrics and dates boost plan relevance
+  if (sf.has_metrics || sf.has_dates) {
+    planBoost += 0.1;
+  }
+
+  // Additional workstream structural boosts for rule-based-v2 strengthening
+  const structuralBoost = computeWorkstreamStructuralBoost(section);
+  workstreamBoost += structuralBoost;
+
+  // Product execution heading boost (weak lift for bug/copy/UX notes)
+  if (hasProductExecutionHeading(section.heading_text)) {
+    planBoost += 0.35;
+  }
+
+  // Bullet change language boost
+  if (hasChangeLanguageInBullets(section)) {
+    planBoost += 0.20;
+  }
+
+  // Structural boost for mid-sized, multi-bullet sections
+  if (sf.num_list_items >= 4 && sf.num_lines >= 4 && sf.num_lines <= 20) {
+    planBoost += 0.10;
+  }
+
+  // Apply boosts to get final plan/workstream signals
+  let plan_change = Math.min(1, plan_change_base + planBoost);
+  const new_workstream = Math.min(1, new_workstream_base + workstreamBoost);
+
+  // Refine research handling: if deliverable patterns are present AND
+  // we have moderate plan_change/new_workstream signals, reduce research's
+  // contribution to out-of-scope (research tied to deliverables is actionable)
+  const hasDeliverables = hasDeliverablePatterns(text);
+  const hasUIVerbs = hasUIChangeVerbs(text);
+  let actionableSignalBase = Math.max(plan_change, new_workstream);
+
+  // If section has deliverable cues and some actionable signal, dampen research
+  // This prevents pure "investigate X" from blocking "build dashboard to track X"
+  if (hasDeliverables && actionableSignalBase >= 0.3 && research > 0) {
+    // Reduce research signal proportionally to actionable signal strength
+    const dampingFactor = Math.min(0.7, actionableSignalBase);
+    research = research * (1 - dampingFactor);
+  }
+
+  // Reclassify high-research sections with concrete UI verbs as plan_change
+  // This ensures "research how to add X to dashboard" is treated as execution, not pure research
+  if (research >= 0.5 && hasUIVerbs) {
+    // Boost plan_change to at least moderate level for UI execution work
+    plan_change = Math.max(plan_change, 0.5);
+    // Apply stronger research damping when UI verbs are present
+    const uiDampingFactor = 0.8;
+    research = research * (1 - uiDampingFactor);
+  }
+
+  // Status/informational is inverse of actionable signals
+  const actionableSignal = Math.max(plan_change, new_workstream);
+  const outOfScopeSignal = Math.max(communication, research, calendar, micro_tasks);
+  const status_informational = Math.max(0, 0.5 - actionableSignal + outOfScopeSignal * 0.3);
+
+  return {
+    plan_change,
+    new_workstream,
+    status_informational,
+    communication,
+    research,
+    calendar,
+    micro_tasks,
+  };
+}
+
+// ============================================
+// Actionability Determination
+// ============================================
+
+/**
+ * Check if an intent classification represents a plan_change intent label
+ * 
+ * This mirrors the debug JSON notion of intentLabel === "plan_change".
+ * A section is considered plan_change if plan_change score is the highest
+ * among all intent scores (pure argmax, no floor).
+ */
+export function isPlanChangeIntentLabel(intent: IntentClassification): boolean {
+  const scoresByLabel = {
+    plan_change: intent.plan_change,
+    new_workstream: intent.new_workstream,
+    status_informational: intent.status_informational,
+    communication: intent.communication,
+    research: intent.research,
+    calendar: intent.calendar,
+    micro_tasks: intent.micro_tasks,
+  };
+
+  const maxScore = Math.max(...Object.values(scoresByLabel));
+
+  // Match debug semantics: top label is plan_change (pure argmax)
+  return scoresByLabel.plan_change === maxScore;
+}
+
+/**
+ * Compute actionability signals from intent classification
+ * 
+ * actionableSignal = max(plan_change, new_workstream)
+ * outOfScopeSignal = max(calendar, communication, micro_tasks)
+ * 
+ * Note: research is deliberately excluded from outOfScopeSignal to allow
+ * high-research sections with concrete execution language to be actionable.
+ * Research signal is dampened in classifyIntent when deliverable patterns or
+ * UI verbs are detected.
+ */
+export function computeActionabilitySignals(intent: IntentClassification): {
+  actionableSignal: number;
+  outOfScopeSignal: number;
+} {
+  const actionableSignal = Math.max(intent.plan_change, intent.new_workstream);
+  const outOfScopeSignal = Math.max(
+    intent.calendar,
+    intent.communication,
+    intent.micro_tasks
+  );
+  return { actionableSignal, outOfScopeSignal };
+}
+
+/**
+ * Determine if a section is actionable based on intent
+ * 
+ * Gating condition (per spec):
+ *   isActionable = actionableSignal >= T_action && outOfScopeSignal < T_out_of_scope
+ * 
+ * PLAN_CHANGE PROTECTION: plan_change sections are NEVER dropped at ACTIONABILITY stage.
+ * They always pass through to ensure "plan_change intent always yields at least one suggestion".
+ * 
+ * Note: Uses >= for actionability threshold so equality passes.
+ */
+export function isActionable(
+  intent: IntentClassification,
+  section: Section,
+  thresholds: ThresholdConfig
+): { actionable: boolean; reason: string; actionableSignal: number; outOfScopeSignal: number } {
+  const { actionableSignal, outOfScopeSignal } = computeActionabilitySignals(intent);
+
+  // Short sections require higher thresholds (penalty for very short sections)
+  const shortSectionPenalty = section.structural_features.num_lines <= 2 ? 0.15 : 0;
+  const effectiveThreshold = thresholds.T_action + shortSectionPenalty;
+
+  // PLAN_CHANGE PROTECTION: Use canonical helper to detect plan_change intent
+  const isPlanChange = isPlanChangeIntentLabel(intent);
+  
+  if (isPlanChange) {
+    // PLAN_CHANGE OVERRIDE: never drop at ACTIONABILITY gate
+    return {
+      actionable: true,
+      reason: `plan_change override: bypass ACTIONABILITY gate (signal=${actionableSignal.toFixed(3)}, outOfScope=${outOfScopeSignal.toFixed(3)}, T_action=${effectiveThreshold.toFixed(3)})`,
+      actionableSignal,
+      outOfScopeSignal,
+    };
+  }
+
+  // Existing non-plan_change gates remain as-is
+  
+  // Check actionability: actionableSignal >= T_action (with penalty for short sections)
+  // Using >= means that a section with actionableSignal == T_action passes
+  if (actionableSignal < effectiveThreshold) {
+    return {
+      actionable: false,
+      reason: `Action signal too low: ${actionableSignal.toFixed(3)} < ${effectiveThreshold.toFixed(3)} (T_action=${thresholds.T_action}, penalty=${shortSectionPenalty.toFixed(2)})`,
+      actionableSignal,
+      outOfScopeSignal,
+    };
+  }
+
+  // Check out-of-scope: outOfScopeSignal < T_out_of_scope
+  // Using >= here means that if outOfScopeSignal == T_out_of_scope, section is NOT actionable
+  if (outOfScopeSignal >= thresholds.T_out_of_scope) {
+    return {
+      actionable: false,
+      reason: `Out-of-scope signal too high: ${outOfScopeSignal.toFixed(3)} >= ${thresholds.T_out_of_scope} (cal=${intent.calendar.toFixed(2)}, comm=${intent.communication.toFixed(2)}, micro=${intent.micro_tasks.toFixed(2)}) [research=${intent.research.toFixed(2)} excluded from gate]`,
+      actionableSignal,
+      outOfScopeSignal,
+    };
+  }
+
+  // Additional check: very short sections with borderline signals need extra scrutiny
+  // Only apply if the section barely crosses the threshold
+  const marginAboveThreshold = actionableSignal - effectiveThreshold;
+  if (marginAboveThreshold < 0.1 && section.structural_features.num_lines <= 3 && section.structural_features.num_list_items === 0) {
+    return {
+      actionable: false,
+      reason: `Insufficient content for borderline signal: margin=${marginAboveThreshold.toFixed(3)}, lines=${section.structural_features.num_lines}`,
+      actionableSignal,
+      outOfScopeSignal,
+    };
+  }
+
+  return {
+    actionable: true,
+    reason: `Actionable: signal=${actionableSignal.toFixed(3)} >= ${effectiveThreshold.toFixed(3)}, outOfScope=${outOfScopeSignal.toFixed(3)} < ${thresholds.T_out_of_scope}`,
+    actionableSignal,
+    outOfScopeSignal,
+  };
+}
+
+// ============================================
+// Type Classification
+// ============================================
+
+/**
+ * Patterns indicating plan mutation (change to existing)
+ */
+const PLAN_MUTATION_PATTERNS = [
+  // Adjustment language
+  /\b(narrow|expand|shift|reframe|reprioritize|defer|adjust|revise|update)\b/i,
+  // Reference to current state
+  /\b(current|existing|today's|our\s+current|the\s+current)\b/i,
+  // Comparative/contrastive
+  /\b(from\s+.+\s+to|instead of|rather than|no longer|previously)\b/i,
+  // Scope modification
+  /\b(descope|add to|remove from|in scope|out of scope)\b/i,
+];
+
+/**
+ * Patterns indicating execution artifact (new creation)
+ */
+const EXECUTION_ARTIFACT_PATTERNS = [
+  // New creation
+  /\b(new|launch|spin up|kick off|create|build|start|introduce)\s+(a\s+|an\s+|the\s+)?/i,
+  // Program language
+  /\b(initiative|project|workstream|program|effort|track)\b/i,
+  // Standalone goal
+  /\b(objective|goal|mission)\s*:/i,
+  // From scratch
+  /\b(from scratch|greenfield|net new|brand new)\b/i,
+];
+
+/**
+ * Classify section type (plan_mutation vs execution_artifact)
+ */
+export function classifyType(section: Section, intent: IntentClassification): {
+  type: SectionType;
+  confidence: number;
+  p_mutation: number;
+  p_artifact: number;
+} {
+  const text = (section.heading_text || '') + ' ' + section.raw_text;
+
+  const mutationMatches = countPatternMatches(text, PLAN_MUTATION_PATTERNS);
+  const artifactMatches = countPatternMatches(text, EXECUTION_ARTIFACT_PATTERNS);
+
+  // Base probabilities from pattern matches
+  let p_mutation = computeSignalStrength(mutationMatches, PLAN_MUTATION_PATTERNS.length);
+  let p_artifact = computeSignalStrength(artifactMatches, EXECUTION_ARTIFACT_PATTERNS.length);
+
+  // Boost from intent classification
+  p_mutation += intent.plan_change * 0.3;
+  p_artifact += intent.new_workstream * 0.3;
+
+  // Cap at 1
+  p_mutation = Math.min(1, p_mutation);
+  p_artifact = Math.min(1, p_artifact);
+
+  // Determine type based on higher probability
+  if (p_mutation < 0.2 && p_artifact < 0.2) {
+    return {
+      type: 'non_actionable',
+      confidence: 1 - Math.max(p_mutation, p_artifact),
+      p_mutation,
+      p_artifact,
+    };
+  }
+
+  if (p_mutation > p_artifact) {
+    const margin = p_mutation - p_artifact;
+    return {
+      type: 'plan_mutation',
+      confidence: Math.min(1, 0.5 + margin),
+      p_mutation,
+      p_artifact,
+    };
+  } else {
+    const margin = p_artifact - p_mutation;
+    return {
+      type: 'execution_artifact',
+      confidence: Math.min(1, 0.5 + margin),
+      p_mutation,
+      p_artifact,
+    };
+  }
+}
+
+// ============================================
+// Full Classification Pipeline
+// ============================================
+
+/**
+ * Classify a section (intent + actionability + type)
+ */
+export function classifySection(
+  section: Section,
+  thresholds: ThresholdConfig
+): ClassifiedSection {
+  // Classify intent
+  const intent = classifyIntent(section);
+
+  // Use canonical plan_change detection
+  const isPlanChange = isPlanChangeIntentLabel(intent);
+
+  // Determine actionability
+  const actionabilityResult = isActionable(intent, section, thresholds);
+
+  // If actionability thinks not actionable BUT intent label is plan_change,
+  // upgrade to actionable and rely on downgrade semantics later.
+  if (!actionabilityResult.actionable && isPlanChange) {
+    return {
+      ...section,
+      intent,
+      is_actionable: true,
+      actionability_reason: `${actionabilityResult.reason} (overridden for plan_change intent)`,
+      actionable_signal: actionabilityResult.actionableSignal,
+      out_of_scope_signal: actionabilityResult.outOfScopeSignal,
+      suggested_type: 'plan_mutation',
+      type_confidence: 0.3, // explicit low confidence
+    };
+  }
+
+  // Classify type if actionable
+  let suggestedType: SectionType | undefined;
+  let typeConfidence: number | undefined;
+
+  if (actionabilityResult.actionable) {
+    const typeResult = classifyType(section, intent);
+
+    if (typeResult.type === 'non_actionable') {
+      if (isPlanChange) {
+        // Strengthened PLAN_CHANGE PROTECTION at TYPE stage
+        // Force plan_mutation type and ensure actionability stays true
+        suggestedType = 'plan_mutation';
+        typeConfidence = 0.3;
+        // Return early with forced plan_mutation to prevent any drop
+        return {
+          ...section,
+          intent,
+          is_actionable: true,
+          actionability_reason:
+            `${actionabilityResult.reason} (type non_actionable overridden for plan_change)`,
+          actionable_signal: actionabilityResult.actionableSignal,
+          out_of_scope_signal: actionabilityResult.outOfScopeSignal,
+          suggested_type: suggestedType,
+          type_confidence: typeConfidence,
+        };
+      } else {
+        // Non-plan_change can still be dropped by TYPE
+        return {
+          ...section,
+          intent,
+          is_actionable: false,
+          actionability_reason: 'Type classification: non-actionable',
+          actionable_signal: actionabilityResult.actionableSignal,
+          out_of_scope_signal: actionabilityResult.outOfScopeSignal,
+          suggested_type: undefined,
+          type_confidence: undefined,
+        };
+      }
+    } else {
+      suggestedType = typeResult.type;
+      typeConfidence = typeResult.confidence;
+
+      // For plan_change with artifact type, force to plan_mutation
+      if (isPlanChange && suggestedType === 'execution_artifact') {
+        suggestedType = 'plan_mutation';
+      }
+    }
+  }
+
+  // For plan_change sections with no suggested type, force plan_mutation
+  if (isPlanChange && !suggestedType) {
+    suggestedType = 'plan_mutation';
+    typeConfidence = 0.2; // explicit "fallback" confidence
+  }
+
+  return {
+    ...section,
+    intent,
+    is_actionable: actionabilityResult.actionable,
+    actionability_reason: actionabilityResult.reason,
+    actionable_signal: actionabilityResult.actionableSignal,
+    out_of_scope_signal: actionabilityResult.outOfScopeSignal,
+    suggested_type: suggestedType,
+    type_confidence: typeConfidence,
+  };
+}
+
+/**
+ * Classify all sections in a note
+ */
+export function classifySections(
+  sections: Section[],
+  thresholds: ThresholdConfig
+): ClassifiedSection[] {
+  return sections.map((section) => classifySection(section, thresholds));
+}
+
+/**
+ * Filter to only actionable sections
+ * 
+ * PLAN_CHANGE PROTECTION: plan_change sections are never filtered out,
+ * even if some upstream bug left is_actionable false. This function also
+ * heals any plan_change sections that were mis-classified as non-actionable
+ * to ensure they always proceed to synthesis.
+ */
+export function filterActionableSections(
+  classifiedSections: ClassifiedSection[]
+): ClassifiedSection[] {
+  // First pass: heal any plan_change sections that are marked non-actionable
+  const upgraded = classifiedSections.map((s) => {
+    const isPlanChange = isPlanChangeIntentLabel(s.intent);
+    if (isPlanChange && !s.is_actionable) {
+      // Force actionable and document the override
+      return {
+        ...s,
+        is_actionable: true,
+        actionability_reason:
+          s.actionability_reason ||
+          'plan_change override: forced actionable at ACTIONABILITY gate',
+      };
+    }
+    return s;
+  });
+
+  // Second pass: filter to include plan_change or actionable sections
+  return upgraded.filter((s) => {
+    const isPlanChange = isPlanChangeIntentLabel(s.intent);
+    return isPlanChange || s.is_actionable;
+  });
+}
+
+// ============================================
+// LLM-Enhanced Classification (when enabled)
+// ============================================
+
+import type { LLMProvider } from './llmClassifiers';
+import { classifyIntentWithLLM, blendIntentScores } from './llmClassifiers';
+
+/**
+ * Options for LLM-enhanced classification
+ */
+export interface LLMClassificationOptions {
+  /** LLM provider instance */
+  llmProvider: LLMProvider;
+  /** Whether to blend LLM + rule-based scores (default: true) */
+  blendWithRuleBased?: boolean;
+}
+
+/**
+ * Classify a section using LLM-enhanced classification
+ * Falls back to rule-based if LLM fails
+ */
+export async function classifySectionWithLLM(
+  section: Section,
+  thresholds: ThresholdConfig,
+  options: LLMClassificationOptions
+): Promise<ClassifiedSection> {
+  // Get rule-based intent as baseline/fallback
+  const ruleBasedIntent = classifyIntent(section);
+
+  let intent: IntentClassification;
+
+  try {
+    // Get LLM-based intent
+    const llmIntent = await classifyIntentWithLLM(section, options.llmProvider);
+
+    // Blend or use LLM directly
+    if (options.blendWithRuleBased !== false) {
+      // Blend LLM with rule-based for robustness
+      intent = blendIntentScores(llmIntent, ruleBasedIntent, 0.7);
+    } else {
+      intent = llmIntent;
+    }
+  } catch (error) {
+    // Fall back to rule-based on LLM failure
+    console.warn('LLM classification failed, falling back to rule-based:', error);
+    intent = ruleBasedIntent;
+  }
+
+  // Use canonical plan_change detection
+  const isPlanChange = isPlanChangeIntentLabel(intent);
+
+  // Determine actionability
+  const actionabilityResult = isActionable(intent, section, thresholds);
+
+  // PLAN_CHANGE PROTECTION: upgrade non-actionable to actionable (low signal override)
+  if (!actionabilityResult.actionable && isPlanChange) {
+    return {
+      ...section,
+      intent,
+      is_actionable: true,
+      actionability_reason: `${actionabilityResult.reason} (overridden for plan_change intent)`,
+      actionable_signal: actionabilityResult.actionableSignal,
+      out_of_scope_signal: actionabilityResult.outOfScopeSignal,
+      suggested_type: 'plan_mutation',
+      type_confidence: 0.3,
+    };
+  }
+
+  // Classify type if actionable
+  let suggestedType: SectionType | undefined;
+  let typeConfidence: number | undefined;
+
+  if (actionabilityResult.actionable) {
+    // For now, use rule-based type classification
+    // LLM type classification can be added later if needed
+    const typeResult = classifyType(section, intent);
+
+    if (typeResult.type === 'non_actionable') {
+      if (isPlanChange) {
+        // Strengthened PLAN_CHANGE PROTECTION at TYPE stage
+        // Force plan_mutation type and ensure actionability stays true
+        suggestedType = 'plan_mutation';
+        typeConfidence = 0.3;
+        // Return early with forced plan_mutation to prevent any drop
+        return {
+          ...section,
+          intent,
+          is_actionable: true,
+          actionability_reason:
+            `${actionabilityResult.reason} (type non_actionable overridden for plan_change)`,
+          actionable_signal: actionabilityResult.actionableSignal,
+          out_of_scope_signal: actionabilityResult.outOfScopeSignal,
+          suggested_type: suggestedType,
+          type_confidence: typeConfidence,
+        };
+      } else {
+        // Non-plan_change can still be dropped by TYPE
+        return {
+          ...section,
+          intent,
+          is_actionable: false,
+          actionability_reason: 'Type classification: non-actionable',
+          actionable_signal: actionabilityResult.actionableSignal,
+          out_of_scope_signal: actionabilityResult.outOfScopeSignal,
+          suggested_type: undefined,
+          type_confidence: undefined,
+        };
+      }
+    } else {
+      suggestedType = typeResult.type;
+      typeConfidence = typeResult.confidence;
+
+      // For plan_change with artifact type, force to plan_mutation
+      if (isPlanChange && suggestedType === 'execution_artifact') {
+        suggestedType = 'plan_mutation';
+      }
+    }
+  }
+
+  // Fallback: plan_change with no suggested type → force plan_mutation
+  if (isPlanChange && !suggestedType) {
+    suggestedType = 'plan_mutation';
+    typeConfidence = 0.2;
+  }
+
+  return {
+    ...section,
+    intent,
+    is_actionable: actionabilityResult.actionable,
+    actionability_reason: actionabilityResult.reason,
+    actionable_signal: actionabilityResult.actionableSignal,
+    out_of_scope_signal: actionabilityResult.outOfScopeSignal,
+    suggested_type: suggestedType,
+    type_confidence: typeConfidence,
+  };
+}
+
+/**
+ * Classify all sections with LLM enhancement
+ */
+export async function classifySectionsWithLLM(
+  sections: Section[],
+  thresholds: ThresholdConfig,
+  options: LLMClassificationOptions
+): Promise<ClassifiedSection[]> {
+  // Process sections in parallel for efficiency
+  return Promise.all(
+    sections.map((section) => classifySectionWithLLM(section, thresholds, options))
+  );
+}
