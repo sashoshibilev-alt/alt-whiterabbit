@@ -58,3 +58,42 @@ Downstream consumers extract:
 ### Plan Change Protection
 
 Sections with `intentLabel = "plan_change"` (where plan_change is highest score) are **never dropped** at ACTIONABILITY stage. The gate forces `actionable=true` regardless of signal thresholds to ensure plan changes always generate suggestions.
+
+## Quality Validators (V1-V3)
+
+**Location**: `src/lib/suggestion-engine-v2/validators.ts:runQualityValidators()`
+
+**Purpose**: Hard quality gates that run after synthesis and before scoring to filter out low-quality suggestions.
+
+### V1: Change-Test Validator (Debug Metadata Only)
+
+**Status**: Retained for debug metadata but does NOT block V2 suggestions.
+
+The V1 validator checks for:
+- Plan mutations: Delta/change patterns (from X to Y, instead of, no longer, etc.)
+- Execution artifacts: Required components (title, description with objective/scope/approach)
+
+V1 validation results are captured in the results array but failures do not drop suggestions. V1 was originally designed for the V1 suggestion engine and is preserved for debugging purposes only.
+
+### V2: Anti-Vacuity Validator (Active)
+
+**Status**: Active - blocks suggestions on failure.
+
+Prevents generic management-speak by checking:
+- Generic ratio (verbs: improve, optimize, align; nouns: process, stakeholders, efficiency)
+- Domain noun presence (at least 2 domain-specific nouns required)
+- Title generic ratio (must be < 0.7)
+
+Failures block suggestion from reaching scoring stage.
+
+### V3: Evidence Sanity Validator (Active)
+
+**Status**: Active - blocks suggestions on failure.
+
+Validates evidence quality by checking:
+- At least one evidence span present
+- Evidence spans map to actual section content (substring matching)
+- Minimum evidence length (unless bullet points present)
+- Presence of action-bearing lines preferred
+
+Failures block suggestion from reaching scoring stage.

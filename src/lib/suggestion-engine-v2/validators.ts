@@ -421,17 +421,11 @@ export function runQualityValidators(
   const sectionText = section.raw_text;
   const results: ValidationResult[] = [];
 
-  // V1: Change-test
+  // V1: Change-test (debug/metadata only - does not block v2 suggestions)
   const v1Result = validateV1ChangeTest(suggestion, sectionText);
   results.push(v1Result);
-  if (!v1Result.passed) {
-    return {
-      passed: false,
-      results,
-      failedValidator: 'V1_change_test',
-      failureReason: v1Result.reason,
-    };
-  }
+  // V1 validator kept for debug metadata but does NOT drop v2 suggestions
+  // (V1 validation only applies to v1 suggestion engine)
 
   // V2: Anti-vacuity
   const v2Result = validateV2AntiVacuity(suggestion, sectionText, thresholds);
