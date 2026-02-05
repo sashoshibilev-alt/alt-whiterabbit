@@ -13,6 +13,7 @@ import type {
   Line,
 } from './types';
 import { normalizeForComparison } from './preprocessing';
+import { isPlanChangeIntentLabel } from './classifiers';
 
 // ============================================
 // V1 - Change-Test Validator
@@ -324,12 +325,18 @@ export function validateV2AntiVacuity(
 // ============================================
 
 /**
- * V3: Evidence sanity validator
+ * V3: Evidence sanity validator (type-aware)
+ *
+ * Applies different rules based on typeLabel:
+ * - execution_artifact: strict (bullets OR length >= 120)
+ * - feature_request: relaxed (length >= 20 + request signal in section)
+ * - plan_change intent: bypasses strict validation (always passes)
  */
 export function validateV3EvidenceSanity(
   suggestion: Suggestion,
   section: Section,
-  thresholds: ThresholdConfig
+  thresholds: ThresholdConfig,
+  typeLabel?: 'feature_request' | 'execution_artifact'
 ): ValidationResult {
   const evidenceSpans = suggestion.evidence_spans;
 
@@ -341,6 +348,108 @@ export function validateV3EvidenceSanity(
       reason: 'No evidence spans provided',
     };
   }
+
+  // Check: exact substring mapping (common to both types)
+  const sectionText = section.raw_text;
+  const normalizedSection = normalizeForComparison(sectionText);
+
+  for (const span of evidenceSpans) {
+    const normalizedSpan = normalizeForComparison(span.text);
+    if (!normalizedSection.includes(normalizedSpan)) {
+      // Try partial match (first 50 chars)
+      const partialSpan = normalizedSpan.slice(0, 50);
+      if (!normalizedSection.includes(partialSpan)) {
+        return {
+          passed: false,
+          validator: 'V3_evidence_sanity',
+          reason: 'Evidence span text does not match section content',
+        };
+      }
+    }
+  }
+
+  // Calculate total character count
+  const totalChars = evidenceSpans.reduce((sum, s) => sum + s.text.length, 0);
+
+  // PLAN_CHANGE PATH: Bypass strict validation for plan_change intents
+  // Check if section has intent field (ClassifiedSection) and is plan_change
+  const sectionWithIntent = section as any;
+  if (sectionWithIntent.intent && isPlanChangeIntentLabel(sectionWithIntent.intent)) {
+    // Plan change suggestions always pass - no length or bullet requirements
+    return { passed: true, validator: 'V3_evidence_sanity' };
+  }
+
+  // TYPE-AWARE VALIDATION: feature_request vs execution_artifact
+  if (typeLabel === 'feature_request') {
+    // FEATURE_REQUEST PATH: Relaxed rules for short, single-line requests
+
+    // Check minimum character floor (avoid pure noise)
+    if (totalChars < 20) {
+      return {
+        passed: false,
+        validator: 'V3_evidence_sanity',
+        reason: `Evidence too short for feature request (${totalChars} chars, minimum 20)`,
+      };
+    }
+
+    // Check for request pattern OR action verb in section text
+    // (Same patterns used in type classification, ensures consistency)
+    const V3_REQUEST_STEMS = [
+      'please',
+      'can you',
+      'could you',
+      'would you',
+      'i want you to',
+      "i'd like you to",
+      'i would like you to',
+      'i would really like you to',
+      'we should',
+      "let's",
+      'need to',
+      'we need to',
+    ];
+
+    const V3_ACTION_VERBS = [
+      'add',
+      'implement',
+      'build',
+      'create',
+      'enable',
+      'disable',
+      'remove',
+      'delete',
+      'fix',
+      'update',
+      'change',
+      'refactor',
+      'improve',
+      'support',
+      'integrate',
+      'adjust',
+      'modify',
+      'revise',
+    ];
+
+    const normalizedSectionLower = normalizeForComparison(sectionText).toLowerCase();
+    const hasRequestStem = V3_REQUEST_STEMS.some(stem => normalizedSectionLower.includes(stem.toLowerCase()));
+    const hasActionVerb = V3_ACTION_VERBS.some(verb => {
+      const regex = new RegExp(`\\b${verb}\\b`, 'i');
+      return regex.test(sectionText);
+    });
+
+    if (!hasRequestStem && !hasActionVerb) {
+      return {
+        passed: false,
+        validator: 'V3_evidence_sanity',
+        reason: 'Feature request lacks request pattern or action verb',
+      };
+    }
+
+    // Feature request passes
+    return { passed: true, validator: 'V3_evidence_sanity' };
+  }
+
+  // EXECUTION_ARTIFACT PATH: Strict rules (existing behavior)
 
   // Check: action-bearing line presence
   let hasActionBearingLine = false;
@@ -361,8 +470,6 @@ export function validateV3EvidenceSanity(
     }
   }
 
-  // Calculate total character count
-  const totalChars = evidenceSpans.reduce((sum, s) => sum + s.text.length, 0);
   const hasBullet = evidenceSpans.some((s) => /^[-*•]\s/.test(s.text.trim()));
 
   // Evidence must have a bullet OR meet minimum character count
@@ -372,25 +479,6 @@ export function validateV3EvidenceSanity(
       validator: 'V3_evidence_sanity',
       reason: `Evidence too short (${totalChars} chars) and no bullet points`,
     };
-  }
-
-  // Check: exact substring mapping
-  const sectionText = section.raw_text;
-  const normalizedSection = normalizeForComparison(sectionText);
-
-  for (const span of evidenceSpans) {
-    const normalizedSpan = normalizeForComparison(span.text);
-    if (!normalizedSection.includes(normalizedSpan)) {
-      // Try partial match (first 50 chars)
-      const partialSpan = normalizedSpan.slice(0, 50);
-      if (!normalizedSection.includes(partialSpan)) {
-        return {
-          passed: false,
-          validator: 'V3_evidence_sanity',
-          reason: 'Evidence span text does not match section content',
-        };
-      }
-    }
   }
 
   // Warn if evidence is only headings (but don't fail)
@@ -411,7 +499,8 @@ export function validateV3EvidenceSanity(
 export function runQualityValidators(
   suggestion: Suggestion,
   section: Section,
-  thresholds: ThresholdConfig
+  thresholds: ThresholdConfig,
+  typeLabel?: 'feature_request' | 'execution_artifact'
 ): {
   passed: boolean;
   results: ValidationResult[];
@@ -439,8 +528,8 @@ export function runQualityValidators(
     };
   }
 
-  // V3: Evidence sanity
-  const v3Result = validateV3EvidenceSanity(suggestion, section, thresholds);
+  // V3: Evidence sanity (type-aware)
+  const v3Result = validateV3EvidenceSanity(suggestion, section, thresholds, typeLabel);
   results.push(v3Result);
   if (!v3Result.passed) {
     return {
