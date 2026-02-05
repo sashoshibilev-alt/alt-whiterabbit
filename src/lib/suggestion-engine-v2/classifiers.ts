@@ -244,6 +244,7 @@ const V3_REQUEST_STEMS = [
   'i would like you to',
   'i would really like you to',
   'we should',
+  'should',
   "let's",
   'need to',
   'we need to',
@@ -382,6 +383,16 @@ const V3_PRODUCT_NOUNS = [
   'dashboard',
   'tracking',
   'analytics',
+];
+
+/**
+ * V3 Bullet action verbs — when ≥2 bullets start with these verbs the section
+ * is treated as actionable (micro_tasks or execution_artifact).
+ */
+const V3_BULLET_ACTION_VERBS = [
+  'add', 'verify', 'update', 'share', 'remove', 'fix', 'create', 'build',
+  'implement', 'test', 'review', 'check', 'ensure', 'set up', 'deploy',
+  'migrate', 'refactor', 'integrate', 'move', 'send', 'confirm', 'finalize',
 ];
 
 /**
@@ -679,6 +690,21 @@ export function classifyIntent(section: Section): IntentClassification {
       }
     }
     maxOutOfScopeScore = Math.max(maxOutOfScopeScore, oosScore);
+  }
+
+  // V3 Rule 7: Action-verb bullets boost.
+  // If ≥2 bullets start with a common action verb the section is actionable,
+  // but only when the section doesn't already carry strong out-of-scope
+  // signals (calendar, communication, micro-admin). This prevents generic
+  // admin task lists from being promoted.
+  const bulletLines = section.body_lines
+    .filter(l => l.line_type === 'list_item')
+    .map(l => l.text.replace(/^[-*+•]\s*/, '').replace(/^\d+[.)]\s*/, '').toLowerCase().trim());
+  const actionVerbBulletCount = bulletLines.filter(b =>
+    V3_BULLET_ACTION_VERBS.some(v => b.startsWith(v + ' ') || b.startsWith(v + '\t'))
+  ).length;
+  if (actionVerbBulletCount >= 2 && maxOutOfScopeScore < 0.4) {
+    maxActionableScore = Math.max(maxActionableScore, 0.8);
   }
 
   // V3 OVERRIDE: If actionableSignal >= 0.8, clamp outOfScopeSignal <= 0.3
@@ -1094,6 +1120,13 @@ export function classifySection(
       if (isPlanChange && suggestedType === 'execution_artifact') {
         suggestedType = 'plan_mutation';
       }
+
+      // Guard: plan_mutation only for plan_change intent.
+      // Non-plan_change sections that happen to match mutation patterns
+      // should stay as execution_artifact.
+      if (!isPlanChange && suggestedType === 'plan_mutation') {
+        suggestedType = 'execution_artifact';
+      }
     }
   }
 
@@ -1278,6 +1311,11 @@ export async function classifySectionWithLLM(
       // For plan_change with artifact type, force to plan_mutation
       if (isPlanChange && suggestedType === 'execution_artifact') {
         suggestedType = 'plan_mutation';
+      }
+
+      // Guard: plan_mutation only for plan_change intent.
+      if (!isPlanChange && suggestedType === 'plan_mutation') {
+        suggestedType = 'execution_artifact';
       }
     }
   }

@@ -2632,3 +2632,92 @@ Next steps
     });
   });
 });
+
+// ============================================
+// FP3 regression: colon headings, actionability, type gating
+// ============================================
+
+describe('FP3 regression – multi-topic meeting note', () => {
+  const FP3_NOTE: NoteInput = {
+    note_id: 'fp3-regression',
+    raw_markdown: `Onboarding feedback
+- Users drop off at step 3
+- Tooltip copy is confusing
+- Need clearer CTA on signup page
+
+Quick update on ingestion refactor:
+- Pipeline latency down 40%
+- One edge case still failing on large payloads
+
+Dashboard improvements
+We should add a transparency dashboard to surface ingestion health.
+- Add real-time status panel
+- Show error rates per source
+- Include retry queue depth
+
+Execution follow-up
+- Verify alerting thresholds for new monitors
+- Update runbook with latest failure modes
+- Share post-mortem template with on-call team
+`,
+  };
+
+  beforeEach(() => {
+    resetSectionCounter();
+    resetSuggestionCounter();
+  });
+
+  it('colon headings create section boundaries', () => {
+    const { sections } = preprocessNote(FP3_NOTE);
+    const headingTexts = sections.map(s => s.heading_text);
+
+    expect(headingTexts).toContain('Onboarding feedback');
+    expect(headingTexts).toContain('Quick update on ingestion refactor');
+    expect(headingTexts).toContain('Dashboard improvements');
+    expect(headingTexts).toContain('Execution follow-up');
+    expect(sections.length).toBe(4);
+  });
+
+  it('"Dashboard improvements" is actionable new_workstream', () => {
+    const { sections } = preprocessNote(FP3_NOTE);
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+    const dashboard = classified.find(s => s.heading_text === 'Dashboard improvements');
+    expect(dashboard).toBeDefined();
+    expect(dashboard!.is_actionable).toBe(true);
+
+    // Intent should be new_workstream dominant (not status_informational)
+    expect(dashboard!.intent.new_workstream).toBeGreaterThan(dashboard!.intent.status_informational);
+    expect(dashboard!.intent.new_workstream).toBeGreaterThan(dashboard!.intent.plan_change);
+  });
+
+  it('"Execution follow-up" is actionable (not dropped)', () => {
+    const { sections } = preprocessNote(FP3_NOTE);
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+    const execution = classified.find(s => s.heading_text === 'Execution follow-up');
+    expect(execution).toBeDefined();
+    expect(execution!.is_actionable).toBe(true);
+  });
+
+  it('plan_mutation only for plan_change sections', () => {
+    const { sections } = preprocessNote(FP3_NOTE);
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+    for (const section of classified) {
+      if (section.suggested_type === 'plan_mutation') {
+        expect(isPlanChangeIntentLabel(section.intent)).toBe(true);
+      }
+    }
+
+    // Dashboard and Execution follow-up should NOT be plan_mutation
+    const dashboard = classified.find(s => s.heading_text === 'Dashboard improvements');
+    const execution = classified.find(s => s.heading_text === 'Execution follow-up');
+    if (dashboard?.suggested_type) {
+      expect(dashboard.suggested_type).not.toBe('plan_mutation');
+    }
+    if (execution?.suggested_type) {
+      expect(execution.suggested_type).not.toBe('plan_mutation');
+    }
+  });
+});
