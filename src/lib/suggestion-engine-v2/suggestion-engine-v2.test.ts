@@ -2463,4 +2463,172 @@ Move launch to next week
       expect(result.suggestions[0].type).toBe('plan_mutation');
     });
   });
+
+  describe('Multi-topic meeting note segmentation', () => {
+    beforeEach(() => {
+      resetSectionCounter();
+      resetSuggestionCounter();
+    });
+
+    it('should segment plain-text headings and produce multiple suggestions', () => {
+      const multiTopicNote: NoteInput = {
+        note_id: 'test-multi-topic',
+        raw_markdown: `Timeline change
+
+The project launch was originally Q1 but we're moving it to Q2 to add more features.
+
+Onboarding feedback
+
+Users are asking for better documentation and step-by-step tutorials in the app.
+
+Team updates
+
+Sarah will take over the billing project.
+
+Priority shifts
+
+The analytics dashboard is now P0 instead of P1.
+`,
+      };
+
+      // Preprocess and check sections
+      const { sections } = preprocessNote(multiTopicNote);
+
+      // Should have at least 4 sections (one per plain-text heading)
+      expect(sections.length).toBeGreaterThanOrEqual(4);
+
+      // Check that plain-text headings were recognized
+      const headingTexts = sections.map((s) => s.heading_text);
+      expect(headingTexts).toContain('Timeline change');
+      expect(headingTexts).toContain('Onboarding feedback');
+      expect(headingTexts).toContain('Team updates');
+      expect(headingTexts).toContain('Priority shifts');
+
+      // Classify sections
+      const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+      // Timeline change section should have plan_change intent
+      const timelineSection = classified.find((s) =>
+        s.heading_text?.includes('Timeline change')
+      );
+      expect(timelineSection).toBeDefined();
+
+      expect(isPlanChangeIntentLabel(timelineSection!.intent)).toBe(true);
+
+      // Onboarding feedback should be actionable (new_workstream or feature_request)
+      const onboardingSection = classified.find((s) =>
+        s.heading_text?.includes('Onboarding feedback')
+      );
+      expect(onboardingSection).toBeDefined();
+      // Should have actionable intent, not dominated by plan_change
+      const onboardingIsPlanChange = isPlanChangeIntentLabel(onboardingSection!.intent);
+      expect(onboardingIsPlanChange).toBe(false);
+
+      // Generate suggestions
+      const actionable = filterActionableSections(classified);
+      const suggestions = synthesizeSuggestions(actionable);
+
+      // Should produce multiple suggestions (not just 1)
+      expect(suggestions.length).toBeGreaterThan(1);
+
+      // Timeline change should produce plan_mutation
+      const planMutations = suggestions.filter((s) => s.type === 'plan_mutation');
+      expect(planMutations.length).toBeGreaterThan(0);
+    });
+
+    it('should not treat sentences ending with punctuation as headings', () => {
+      const punctuatedNote: NoteInput = {
+        note_id: 'test-punctuated',
+        raw_markdown: `This is a sentence.
+
+This should not be a heading either?
+
+This neither!
+
+Actual heading
+
+This is content under the heading.
+`,
+      };
+
+      const { sections } = preprocessNote(punctuatedNote);
+
+      // Only "Actual heading" should be recognized
+      const headingTexts = sections.map((s) => s.heading_text);
+      expect(headingTexts).toContain('Actual heading');
+
+      // Sentences with punctuation should NOT be headings
+      expect(headingTexts).not.toContain('This is a sentence.');
+      expect(headingTexts).not.toContain('This should not be a heading either?');
+      expect(headingTexts).not.toContain('This neither!');
+    });
+
+    it('should not treat long lines as headings', () => {
+      const longLineNote: NoteInput = {
+        note_id: 'test-long-line',
+        raw_markdown: `This is a very long line that exceeds forty characters and should not be treated as heading
+
+Short heading
+
+Content here.
+`,
+      };
+
+      const { sections } = preprocessNote(longLineNote);
+
+      const headingTexts = sections.map((s) => s.heading_text);
+
+      // Short heading should be recognized
+      expect(headingTexts).toContain('Short heading');
+
+      // Long line should NOT be heading
+      const hasLongLineAsHeading = headingTexts.some((h) =>
+        h.includes('This is a very long line')
+      );
+      expect(hasLongLineAsHeading).toBe(false);
+    });
+
+    it('should recognize headings followed by blank line', () => {
+      const blankLineNote: NoteInput = {
+        note_id: 'test-blank-line',
+        raw_markdown: `First topic
+
+Content for first topic.
+
+Second topic
+
+Content for second topic.
+`,
+      };
+
+      const { sections } = preprocessNote(blankLineNote);
+
+      const headingTexts = sections.map((s) => s.heading_text);
+      expect(headingTexts).toContain('First topic');
+      expect(headingTexts).toContain('Second topic');
+      expect(sections.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('should recognize headings followed by bullet lists', () => {
+      const bulletListNote: NoteInput = {
+        note_id: 'test-bullet-list',
+        raw_markdown: `Action items
+- Complete design review
+- Update documentation
+- Test new features
+
+Next steps
+- Schedule follow-up meeting
+- Send summary to team
+`,
+      };
+
+      const { sections } = preprocessNote(bulletListNote);
+
+      const headingTexts = sections.map((s) => s.heading_text);
+      expect(headingTexts).toContain('Action items');
+      expect(headingTexts).toContain('Next steps');
+      expect(sections.length).toBeGreaterThanOrEqual(2);
+    });
+  });
 });

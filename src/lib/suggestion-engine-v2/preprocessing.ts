@@ -174,6 +174,56 @@ export function resetSectionCounter(): void {
 }
 
 /**
+ * Check if line is a plain-text heading based on structural rules
+ *
+ * A line is treated as a heading if ALL are true:
+ * - line length ≤ 40 characters
+ * - not a bullet or list item
+ * - does not end with punctuation (., :, ?, !)
+ * - followed by either: a blank line OR a paragraph or bullet list
+ */
+function isPlainTextHeading(line: Line, nextLine: Line | undefined): boolean {
+  // Must be a paragraph type line (not heading, list, etc.)
+  if (line.line_type !== 'paragraph') {
+    return false;
+  }
+
+  const trimmed = line.text.trim();
+
+  // Check length constraint
+  if (trimmed.length > 40) {
+    return false;
+  }
+
+  // Check it's not a bullet point (additional safety)
+  if (/^[-*+•]\s/.test(trimmed) || /^\d+[.)]\s/.test(trimmed)) {
+    return false;
+  }
+
+  // Check it doesn't end with punctuation
+  if (/[.:?!]$/.test(trimmed)) {
+    return false;
+  }
+
+  // Check what follows
+  if (!nextLine) {
+    // End of document - accept as heading
+    return true;
+  }
+
+  // Must be followed by blank line, paragraph, or list
+  if (
+    nextLine.line_type === 'blank' ||
+    nextLine.line_type === 'paragraph' ||
+    nextLine.line_type === 'list_item'
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Check if line is a pseudo-heading (strong cue without # markers)
  */
 function isPseudoHeading(text: string): boolean {
@@ -279,12 +329,19 @@ export function segmentIntoSections(noteId: string, lines: Line[]): Section[] {
     currentBodyLines = [];
   }
 
-  // Handle content before first heading
-  let hasHeading = false;
+  // Track whether we have seen a markdown heading (# markers)
+  // Plain-text headings are only recognized when not under a markdown heading
+  let hasMarkdownHeading = false;
+  let hasAnyHeading = false;
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const nextLine = i + 1 < lines.length ? lines[i + 1] : undefined;
+
+    // Check for markdown heading (# markers)
     if (line.line_type === 'heading') {
-      hasHeading = true;
+      hasMarkdownHeading = true;
+      hasAnyHeading = true;
 
       // Finalize previous section
       finalizeSection();
@@ -301,10 +358,59 @@ export function segmentIntoSections(noteId: string, lines: Line[]): Section[] {
         structural_features: {} as StructuralFeatures,
         raw_text: '',
       };
-    } else if (currentSection) {
-      // Add to current section body
+      continue;
+    }
+
+    // Check for plain-text heading (only when not under a markdown heading section)
+    // Plain-text headings are recognized in "General" sections or when no markdown heading exists
+    const isInGeneralSection = currentSection && currentSection.heading_text === 'General';
+    if ((!hasMarkdownHeading || isInGeneralSection) && isPlainTextHeading(line, nextLine)) {
+      hasAnyHeading = true;
+
+      // Finalize previous section
+      finalizeSection();
+
+      // Start new section with plain-text heading
+      currentSection = {
+        section_id: generateSectionId(noteId),
+        note_id: noteId,
+        heading_text: line.text.trim(),
+        heading_level: 2, // Treat plain-text headings as level 2
+        start_line: line.index,
+        end_line: line.index,
+        body_lines: [],
+        structural_features: {} as StructuralFeatures,
+        raw_text: '',
+      };
+      continue;
+    }
+
+    // Check for pseudo-heading patterns (legacy support)
+    if (isPseudoHeading(line.text) && !hasAnyHeading) {
+      hasAnyHeading = true;
+
+      // Finalize previous section
+      finalizeSection();
+
+      // Start new section
+      currentSection = {
+        section_id: generateSectionId(noteId),
+        note_id: noteId,
+        heading_text: line.text.replace(/:$/, '').trim(),
+        heading_level: 2, // Treat as level 2
+        start_line: line.index,
+        end_line: line.index,
+        body_lines: [],
+        structural_features: {} as StructuralFeatures,
+        raw_text: '',
+      };
+      continue;
+    }
+
+    // Add to current section body
+    if (currentSection) {
       currentBodyLines.push(line);
-    } else if (!hasHeading) {
+    } else if (!hasAnyHeading) {
       // Content before first heading - create "General" section
       if (!currentSection) {
         currentSection = {
@@ -320,21 +426,6 @@ export function segmentIntoSections(noteId: string, lines: Line[]): Section[] {
         };
       }
       currentBodyLines.push(line);
-    } else if (isPseudoHeading(line.text)) {
-      // Pseudo-heading in unheaded section - start new section
-      finalizeSection();
-
-      currentSection = {
-        section_id: generateSectionId(noteId),
-        note_id: noteId,
-        heading_text: line.text.replace(/:$/, '').trim(),
-        heading_level: 2, // Treat as level 2
-        start_line: line.index,
-        end_line: line.index,
-        body_lines: [],
-        structural_features: {} as StructuralFeatures,
-        raw_text: '',
-      };
     }
   }
 
