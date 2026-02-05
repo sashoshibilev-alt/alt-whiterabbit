@@ -200,8 +200,9 @@ function isPlainTextHeading(line: Line, nextLine: Line | undefined): boolean {
     return false;
   }
 
-  // Check it doesn't end with punctuation
-  if (/[.:?!]$/.test(trimmed)) {
+  // Check it doesn't end with sentence-terminating punctuation.
+  // Colon endings are allowed — they are a common heading pattern (e.g. "Quick update on ingestion refactor:")
+  if (/[.?!]$/.test(trimmed)) {
     return false;
   }
 
@@ -374,7 +375,7 @@ export function segmentIntoSections(noteId: string, lines: Line[]): Section[] {
       currentSection = {
         section_id: generateSectionId(noteId),
         note_id: noteId,
-        heading_text: line.text.trim(),
+        heading_text: line.text.trim().replace(/:$/, ''),
         heading_level: 2, // Treat plain-text headings as level 2
         start_line: line.index,
         end_line: line.index,

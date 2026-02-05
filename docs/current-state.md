@@ -1,5 +1,23 @@
 # Current State
 
+## FP3 Regression Fixes (2025-02-05)
+
+Three changes to segmentation, actionability, and type gating:
+
+### 1. Colon-heading segmentation (preprocessing.ts)
+Lines ending with `:` (e.g., "Quick update on ingestion refactor:") are now recognized as section boundaries in `isPlainTextHeading()`. The punctuation check was updated to only reject `.?!`, allowing colons through. Heading text strips the trailing `:` for consistency with pseudo-headings.
+
+### 2. "Should" request stem + action-verb bullet boost (classifiers.ts)
+- Added `'should'` to `V3_REQUEST_STEMS` so "should add X" patterns trigger the strong request pattern rule (+1.0 signal).
+- Added **Rule 7 (action-verb bullets)**: Sections with ≥2 bullets starting with action verbs (add, verify, update, etc.) are boosted to 0.8 actionableSignal, **guarded** by `maxOutOfScopeScore < 0.4` to avoid promoting generic admin task lists like "Send email" / "Schedule meeting".
+
+### 3. Type gating: plan_mutation only for plan_change (classifiers.ts)
+Added guards in both `classifySection()` and `classifySectionWithLLM()` to prevent non-plan_change sections from being assigned `plan_mutation` type. If a non-plan_change section matches mutation patterns, it is forced to `execution_artifact` instead.
+
+**Impact**: "Dashboard improvements" (new_workstream) and "Execution follow-up" (new_workstream with action-verb bullets) now emit as execution_artifacts instead of being dropped as status_informational.
+
+---
+
 ## Actionability Gate v3
 
 **Location**: `src/lib/suggestion-engine-v2/classifiers.ts:classifyIntent()`
