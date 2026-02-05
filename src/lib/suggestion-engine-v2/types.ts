@@ -132,6 +132,8 @@ export interface ClassifiedSection extends Section {
   out_of_scope_signal?: number;
   suggested_type?: SectionType;
   type_confidence?: number;
+  /** Type label for validator behavior: feature_request vs execution_artifact */
+  typeLabel?: 'feature_request' | 'execution_artifact';
 }
 
 // ============================================

@@ -279,7 +279,8 @@ export function generateSuggestionsWithDebug(
       const validationResult = runQualityValidators(
         suggestion,
         section,
-        finalConfig.thresholds
+        finalConfig.thresholds,
+        section.typeLabel
       );
 
       // Record validation results

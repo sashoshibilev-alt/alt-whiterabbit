@@ -192,7 +192,8 @@ export function generateSuggestions(
     const validationResult = runQualityValidators(
       suggestion,
       section,
-      finalConfig.thresholds
+      finalConfig.thresholds,
+      section.typeLabel
     );
 
     if (validationResult.passed) {
