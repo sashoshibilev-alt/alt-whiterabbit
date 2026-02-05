@@ -1,5 +1,22 @@
 # Current State
 
+## Classification Fixes (2026-02-05)
+
+Three fixes to actionability, type classification, and segmentation hygiene:
+
+### 1. Hedged directive recognition (classifiers.ts)
+Added Rule 6b: hedged directive phrases ("we should", "we probably should", "maybe we need", "we may need to", "it would be good to", "let's"/"lets") are self-sufficient actionable signals at +0.9, without requiring a paired action verb. These map to new_workstream intent (not plan_change). The out-of-scope override (clamp to ≤0.3) now only fires when the high signal comes from a non-hedged rule, so hedged directives about admin tasks ("we should send an email") are still filtered.
+
+Also fixed: out-of-scope calendar marker matching now uses word-boundary regex instead of substring includes, preventing false positives like "maybe" matching the "may" month marker.
+
+### 2. Relaxed feature_request typing (classifiers.ts)
+`computeTypeLabel` no longer requires single-line or ≤200 chars. Feature_request is now assigned when: intentLabel==new_workstream, bulletCount==0, body contains request stem OR action verb, and body has ≥20 non-whitespace chars. Execution_artifact remains the fallback for bullet-based task lists and multi-step drafts.
+
+### 3. Empty section cleanup (preprocessing.ts)
+Post-segmentation step (`removeEmptySections`) drops sections whose body is all whitespace. When an empty section precedes a non-empty one, its heading is merged (e.g., "Parent > Child"). Trailing empty sections are dropped entirely.
+
+---
+
 ## FP3 Regression Fixes (2025-02-05)
 
 Three changes to segmentation, actionability, and type gating:
@@ -31,6 +48,7 @@ For each line in a section, v3 computes:
 **Positive Signals** (contribute to actionableSignal):
 - Strong request pattern (stem + verb): +1.0
 - Imperative verb at line start: +0.9
+- Hedged directive (we should, maybe we need, etc.): +0.9
 - Change operator (move, delay, shift, etc.): +0.8
 - Status/progress markers (done, blocked, etc.): +0.7
 - Structured task syntax (- [ ], TODO:, etc.): +0.8
@@ -55,9 +73,9 @@ Section score = max line score across all lines.
 
 ### Out-of-Scope Override
 
-**Critical feature**: If actionableSignal ≥ 0.8, outOfScopeSignal is clamped ≤ 0.3.
+**Critical feature**: If non-hedged actionableSignal ≥ 0.8, outOfScopeSignal is clamped ≤ 0.3.
 
-This ensures timeline changes like "Move launch to next week" are not filtered as calendar noise despite containing date references.
+This ensures timeline changes like "Move launch to next week" are not filtered as calendar noise despite containing date references. The override only fires for non-hedged signals (strong request, imperative, change operator, bullet verbs) so that hedged directives about admin tasks are still filtered.
 
 ### Signal Mapping to Schema
 

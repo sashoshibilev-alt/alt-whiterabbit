@@ -157,7 +157,8 @@ describe('Preprocessing', () => {
   it('should segment into sections correctly', () => {
     const result = preprocessNote(PLAN_MUTATION_NOTE);
 
-    expect(result.sections.length).toBe(3); // 3 headings = 3 sections
+    // 3 headings but "Q2 Onboarding Roadmap" has no body → merged into "Scope Changes"
+    expect(result.sections.length).toBe(2);
 
     // Check section structure
     const scopeSection = result.sections.find((s) =>
@@ -2719,5 +2720,421 @@ Execution follow-up
     if (execution?.suggested_type) {
       expect(execution.suggested_type).not.toBe('plan_mutation');
     }
+  });
+});
+
+// ============================================
+// Hedged Directive, Feature Request Typing, and Empty Section Tests
+// ============================================
+
+describe('Hedged directive recognition', () => {
+  beforeEach(() => {
+    resetSectionCounter();
+    resetSuggestionCounter();
+  });
+
+  const HEDGED_DIRECTIVES_NOTE: NoteInput = {
+    note_id: 'test-hedged',
+    raw_markdown: `## Sprint retro
+
+We talked about the deployment pipeline and how slow it is.
+
+## Pipeline improvements
+
+We should invest in better CI caching to cut deploy times.
+We probably should also look into parallelizing the test suite.
+
+## Pricing review
+
+Maybe we need to rethink the pricing tiers for the SMB segment.
+There is growing feedback that the current model is too rigid.
+
+## Admin tasks
+
+We should send the invoice to the finance team by Friday.
+
+## Timeline changes
+
+We need to shift the launch from March to April due to resourcing.
+- Defer beta sign-ups to mid-April
+- Accelerate docs work to compensate
+`,
+  };
+
+  it('sections with "we should" / "we probably should" are actionable new_workstream', () => {
+    const { sections } = preprocessNote(HEDGED_DIRECTIVES_NOTE);
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+    const pipeline = classified.find(s => s.heading_text === 'Pipeline improvements');
+    expect(pipeline).toBeDefined();
+    expect(pipeline!.is_actionable).toBe(true);
+    expect(pipeline!.intent.new_workstream).toBeGreaterThan(pipeline!.intent.plan_change);
+  });
+
+  it('sections with "maybe we need" are actionable new_workstream', () => {
+    const { sections } = preprocessNote(HEDGED_DIRECTIVES_NOTE);
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+    const pricing = classified.find(s => s.heading_text === 'Pricing review');
+    expect(pricing).toBeDefined();
+    expect(pricing!.is_actionable).toBe(true);
+    expect(pricing!.intent.new_workstream).toBeGreaterThan(pricing!.intent.plan_change);
+  });
+
+  it('hedged directives do NOT trigger plan_change', () => {
+    const { sections } = preprocessNote(HEDGED_DIRECTIVES_NOTE);
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+    const pipeline = classified.find(s => s.heading_text === 'Pipeline improvements');
+    const pricing = classified.find(s => s.heading_text === 'Pricing review');
+
+    expect(isPlanChangeIntentLabel(pipeline!.intent)).toBe(false);
+    expect(isPlanChangeIntentLabel(pricing!.intent)).toBe(false);
+  });
+
+  it('existing plan_change behavior is preserved (shift + bullets)', () => {
+    const { sections } = preprocessNote(HEDGED_DIRECTIVES_NOTE);
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+    const timeline = classified.find(s => s.heading_text === 'Timeline changes');
+    expect(timeline).toBeDefined();
+    expect(timeline!.is_actionable).toBe(true);
+    expect(isPlanChangeIntentLabel(timeline!.intent)).toBe(true);
+    expect(timeline!.suggested_type).toBe('plan_mutation');
+  });
+
+  it('status_informational retro section stays non-actionable', () => {
+    const { sections } = preprocessNote(HEDGED_DIRECTIVES_NOTE);
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+    const retro = classified.find(s => s.heading_text === 'Sprint retro');
+    expect(retro).toBeDefined();
+    expect(retro!.is_actionable).toBe(false);
+  });
+});
+
+describe('Feature request vs execution_artifact typing', () => {
+  beforeEach(() => {
+    resetSectionCounter();
+    resetSuggestionCounter();
+  });
+
+  const FEATURE_REQUEST_NOTE: NoteInput = {
+    note_id: 'test-feature-type',
+    raw_markdown: `## Boundary detection
+
+I would really like you to add boundary detection to the onboarding flow.
+This would help new users understand where they are in the process and reduce drop-off.
+
+## Notification preferences
+
+We should add a preference center so users can control which notifications they receive.
+Right now everything is on by default and the feedback is consistently negative.
+
+## Monitoring setup
+
+- Add Datadog dashboards for core metrics
+- Set up PagerDuty escalation policies
+- Configure alert thresholds for latency and error rates
+`,
+  };
+
+  it('prose request without bullets becomes feature_request', () => {
+    const { sections } = preprocessNote(FEATURE_REQUEST_NOTE);
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+    const boundary = classified.find(s => s.heading_text === 'Boundary detection');
+    expect(boundary).toBeDefined();
+    expect(boundary!.is_actionable).toBe(true);
+    expect(boundary!.typeLabel).toBe('feature_request');
+  });
+
+  it('multi-line prose request with hedged directive becomes feature_request', () => {
+    const { sections } = preprocessNote(FEATURE_REQUEST_NOTE);
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+    const notifications = classified.find(s => s.heading_text === 'Notification preferences');
+    expect(notifications).toBeDefined();
+    expect(notifications!.is_actionable).toBe(true);
+    expect(notifications!.typeLabel).toBe('feature_request');
+  });
+
+  it('bullet-based task list remains execution_artifact', () => {
+    const { sections } = preprocessNote(FEATURE_REQUEST_NOTE);
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+    const monitoring = classified.find(s => s.heading_text === 'Monitoring setup');
+    expect(monitoring).toBeDefined();
+    if (monitoring!.typeLabel) {
+      expect(monitoring!.typeLabel).toBe('execution_artifact');
+    }
+  });
+});
+
+describe('Empty section cleanup', () => {
+  beforeEach(() => {
+    resetSectionCounter();
+    resetSuggestionCounter();
+  });
+
+  it('heading-only sections are not emitted', () => {
+    const note: NoteInput = {
+      note_id: 'test-empty-sections',
+      raw_markdown: `## Empty heading
+
+## Actual content
+
+We should add caching to the API layer to improve latency.
+`,
+    };
+
+    const { sections } = preprocessNote(note);
+
+    // The empty heading should be merged or dropped
+    expect(sections.every(s => s.raw_text.trim().length > 0)).toBe(true);
+    // Should have at most 1 section (the one with content)
+    expect(sections.length).toBe(1);
+  });
+
+  it('empty section heading is merged into next section', () => {
+    const note: NoteInput = {
+      note_id: 'test-merge-heading',
+      raw_markdown: `## Category
+
+## Specific topic
+
+This section has actual content worth processing.
+`,
+    };
+
+    const { sections } = preprocessNote(note);
+
+    expect(sections.length).toBe(1);
+    // The merged heading should contain both headings
+    expect(sections[0].heading_text).toContain('Category');
+    expect(sections[0].heading_text).toContain('Specific topic');
+  });
+
+  it('trailing empty section is dropped', () => {
+    const note: NoteInput = {
+      note_id: 'test-trailing-empty',
+      raw_markdown: `## Content section
+
+We need to improve the search functionality.
+
+## Empty trailing section
+`,
+    };
+
+    const { sections } = preprocessNote(note);
+
+    expect(sections.length).toBe(1);
+    expect(sections[0].heading_text).toBe('Content section');
+  });
+
+  it('sections with body content are preserved unchanged', () => {
+    const note: NoteInput = {
+      note_id: 'test-no-empty',
+      raw_markdown: `## First topic
+
+This has content.
+
+## Second topic
+
+This also has content.
+`,
+    };
+
+    const { sections } = preprocessNote(note);
+
+    expect(sections.length).toBe(2);
+    expect(sections[0].heading_text).toBe('First topic');
+    expect(sections[1].heading_text).toBe('Second topic');
+  });
+});
+
+// ============================================
+// Regression Tests for FP3 Fixes (2026-02-05)
+// ============================================
+
+describe('FP3 regression fixes', () => {
+  beforeEach(() => {
+    resetSectionCounter();
+    resetSuggestionCounter();
+  });
+
+  describe('Out-of-scope marker word-boundary matching', () => {
+    it('"maybe" does not match "may" calendar marker', () => {
+      const note: NoteInput = {
+        note_id: 'test-maybe-may',
+        raw_markdown: `## Planning thoughts
+
+Maybe we need to rethink the pricing model.
+`,
+      };
+
+      const { sections } = preprocessNote(note);
+      const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+      expect(classified.length).toBeGreaterThan(0);
+      const section = classified[0];
+
+      // "maybe we need" is a hedged directive that should fire actionability
+      const { actionableSignal, outOfScopeSignal } = computeActionabilitySignals(section.intent);
+
+      // Should have actionable signal from "maybe we need" hedged directive
+      expect(actionableSignal).toBeGreaterThan(0.5);
+
+      // Should NOT have out-of-scope signal from "may" calendar marker
+      // (word boundary should prevent "maybe" from matching "may")
+      expect(section.intent.calendar).toBe(0);
+    });
+  });
+
+  describe('Hedged directive actionability in section body', () => {
+    it('detects "we should probably" in body as actionable new_workstream', () => {
+      const note: NoteInput = {
+        note_id: 'test-we-should-probably',
+        raw_markdown: `## Dashboard improvements
+
+We should probably add more filtering options. Maybe we need better sorting too.
+`,
+      };
+
+      const { sections } = preprocessNote(note);
+      const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+      const actionable = filterActionableSections(classified);
+
+      expect(actionable.length).toBeGreaterThan(0);
+      const section = actionable[0];
+
+      // Should be actionable with new_workstream intent
+      expect(section.is_actionable).toBe(true);
+      expect(section.intent.new_workstream).toBeGreaterThan(section.intent.plan_change);
+
+      // actionableSignal should be high (from hedged directive)
+      const { actionableSignal } = computeActionabilitySignals(section.intent);
+      expect(actionableSignal).toBeGreaterThanOrEqual(0.9);
+
+      // Should NOT be classified as plan_change
+      expect(isPlanChangeIntentLabel(section.intent)).toBe(false);
+    });
+
+    it('detects "maybe we need" in body as actionable new_workstream', () => {
+      const note: NoteInput = {
+        note_id: 'test-maybe-we-need',
+        raw_markdown: `## Feature ideas
+
+Maybe we need to redesign the navigation. It's not intuitive enough.
+`,
+      };
+
+      const { sections } = preprocessNote(note);
+      const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+      const actionable = filterActionableSections(classified);
+
+      expect(actionable.length).toBeGreaterThan(0);
+      const section = actionable[0];
+
+      expect(section.is_actionable).toBe(true);
+      expect(section.intent.new_workstream).toBeGreaterThan(section.intent.plan_change);
+      expect(isPlanChangeIntentLabel(section.intent)).toBe(false);
+    });
+
+    it('hedged directives about admin tasks are still filtered by out-of-scope', () => {
+      const note: NoteInput = {
+        note_id: 'test-hedged-admin',
+        raw_markdown: `## Action items
+
+We should send the invoice by Friday and schedule the meeting for next week.
+`,
+      };
+
+      const { sections } = preprocessNote(note);
+      const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+      const actionable = filterActionableSections(classified);
+
+      // This section contains hedged directive "we should" BUT also has
+      // calendar marker ("friday", "next week") and communication ("send")
+      // Since hedged directive score (0.9) doesn't trigger the out-of-scope
+      // override (which requires non-hedged score >= 0.8), this should be
+      // filtered as out-of-scope.
+      expect(actionable.length).toBe(0);
+    });
+  });
+
+  describe('Feature request typing from section body', () => {
+    it('body-based request with bulletCount=0 is typed as feature_request', () => {
+      const note: NoteInput = {
+        note_id: 'test-body-feature-request',
+        raw_markdown: `## Onboarding feedback
+
+We need to add boundary detection in the onboarding flow. Users are confused about the limits.
+`,
+      };
+
+      const { sections } = preprocessNote(note);
+      const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+      const actionable = filterActionableSections(classified);
+
+      expect(actionable.length).toBeGreaterThan(0);
+      const section = actionable[0];
+
+      // Should be actionable new_workstream
+      expect(section.is_actionable).toBe(true);
+      expect(section.intent.new_workstream).toBeGreaterThan(section.intent.plan_change);
+
+      // Bullet count should be 0 (no bullets)
+      expect(section.structural_features.num_list_items).toBe(0);
+
+      // Should be typed as feature_request (not execution_artifact)
+      expect(section.typeLabel).toBe('feature_request');
+    });
+
+    it('bullet-based sections remain execution_artifact', () => {
+      const note: NoteInput = {
+        note_id: 'test-bullet-execution',
+        raw_markdown: `## Implementation plan
+
+- Add new API endpoint
+- Update database schema
+- Write tests
+`,
+      };
+
+      const { sections } = preprocessNote(note);
+      const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+      const actionable = filterActionableSections(classified);
+
+      expect(actionable.length).toBeGreaterThan(0);
+      const section = actionable[0];
+
+      // Should have bullets
+      expect(section.structural_features.num_list_items).toBeGreaterThan(0);
+
+      // Should be typed as execution_artifact (not feature_request)
+      expect(section.typeLabel).toBe('execution_artifact');
+    });
+
+    it('request in body with action verb is typed as feature_request', () => {
+      const note: NoteInput = {
+        note_id: 'test-body-action-verb',
+        raw_markdown: `## User request
+
+Please improve the search functionality to support fuzzy matching.
+`,
+      };
+
+      const { sections } = preprocessNote(note);
+      const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+      const actionable = filterActionableSections(classified);
+
+      expect(actionable.length).toBeGreaterThan(0);
+      const section = actionable[0];
+
+      expect(section.is_actionable).toBe(true);
+      expect(section.structural_features.num_list_items).toBe(0);
+      expect(section.typeLabel).toBe('feature_request');
+    });
   });
 });

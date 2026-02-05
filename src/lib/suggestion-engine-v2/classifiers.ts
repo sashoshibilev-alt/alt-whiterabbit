@@ -244,10 +244,15 @@ const V3_REQUEST_STEMS = [
   'i would like you to',
   'i would really like you to',
   'we should',
+  'we probably should',
   'should',
   "let's",
+  'lets',
   'need to',
   'we need to',
+  'maybe we need',
+  'we may need to',
+  'it would be good to',
   'asking for',
   'requested',
   'want to',
@@ -396,6 +401,22 @@ const V3_BULLET_ACTION_VERBS = [
 ];
 
 /**
+ * V3 Hedged directive phrases that are self-sufficient actionable signals.
+ * These don't require a paired action verb — the hedge + directive structure
+ * itself expresses intent (e.g. "maybe we need to rethink the pricing model").
+ * Scored at +0.9 to pass the actionability gate.
+ */
+const V3_HEDGED_DIRECTIVES = [
+  'we should',
+  'we probably should',
+  'maybe we need',
+  'we may need to',
+  'it would be good to',
+  "let's",
+  'lets',
+];
+
+/**
  * V3 Negation patterns that override action verbs
  */
 const V3_NEGATION_PATTERNS = [
@@ -536,6 +557,18 @@ function matchStructuredTask(line: string): number {
 }
 
 /**
+ * V3 Rule 6b: Hedged directive = +0.9
+ *
+ * Maps to actionableSignal. Detects hedged but directive phrases like
+ * "we should rethink the pricing model" or "maybe we need a new approach".
+ * These phrases are self-sufficient — they don't require a paired action verb
+ * because the hedge + directive structure itself implies a call to action.
+ */
+function matchHedgedDirective(line: string): number {
+  return V3_HEDGED_DIRECTIVES.some(phrase => line.includes(phrase)) ? 0.9 : 0.0;
+}
+
+/**
  * V3 Rule 6: Target object bonus = +0.2
  *
  * Maps to actionableSignal. Applied only if currentScore >= 0.6 and line contains
@@ -564,27 +597,49 @@ function hasNegationOverride(line: string): boolean {
 }
 
 /**
+ * Check if a marker appears in text as a whole word (word-boundary match).
+ * Prevents false positives like "maybe" matching the "may" calendar marker.
+ */
+function markerMatchesWord(line: string, marker: string): boolean {
+  // Multi-word markers use includes (word boundaries are implicit)
+  if (marker.includes(' ')) {
+    return line.includes(marker);
+  }
+  const regex = new RegExp(`\\b${marker}\\b`);
+  return regex.test(line);
+}
+
+/**
  * V3 Out-of-scope signal computation
  *
- * Returns max out-of-scope signal for a line:
+ * Returns max out-of-scope signal for a line plus matched markers for debug:
  * - Calendar markers: +0.6
  * - Communication markers: +0.6
  * - Micro/admin markers: +0.4
  */
-function computeOutOfScopeForLine(line: string): number {
+function computeOutOfScopeForLine(line: string): { score: number; markers: string[] } {
   let score = 0;
+  const markers: string[] = [];
 
-  if (V3_CALENDAR_MARKERS.some(marker => line.includes(marker))) {
+  const calendarMatches = V3_CALENDAR_MARKERS.filter(marker => markerMatchesWord(line, marker));
+  if (calendarMatches.length > 0) {
     score = Math.max(score, 0.6);
+    markers.push(...calendarMatches.map(m => `calendar:${m}`));
   }
-  if (V3_COMMUNICATION_MARKERS.some(marker => line.includes(marker))) {
+
+  const commMatches = V3_COMMUNICATION_MARKERS.filter(marker => markerMatchesWord(line, marker));
+  if (commMatches.length > 0) {
     score = Math.max(score, 0.6);
+    markers.push(...commMatches.map(m => `communication:${m}`));
   }
-  if (V3_MICRO_ADMIN_MARKERS.some(marker => line.includes(marker))) {
+
+  const microMatches = V3_MICRO_ADMIN_MARKERS.filter(marker => markerMatchesWord(line, marker));
+  if (microMatches.length > 0) {
     score = Math.max(score, 0.4);
+    markers.push(...microMatches.map(m => `micro:${m}`));
   }
 
-  return score;
+  return { score, markers };
 }
 
 /**
@@ -628,6 +683,9 @@ export function classifyIntent(section: Section): IntentClassification {
 
   let maxActionableScore = 0;
   let maxOutOfScopeScore = 0;
+  // Track max score from non-hedged rules so out-of-scope override only
+  // fires when a strong non-hedged signal is present.
+  let maxNonHedgedActionableScore = 0;
 
   // Track which types of signals fired for intent distribution
   let hasChangeOperators = false;
@@ -663,6 +721,12 @@ export function classifyIntent(section: Section): IntentClassification {
     if (structuredTaskScore > 0) hasStructuredTasks = true;
     lineScore = Math.max(lineScore, structuredTaskScore);
 
+    // Snapshot non-hedged score before applying hedged directive rule
+    const nonHedgedLineScore = lineScore;
+
+    // Rule 6b: Hedged directive (self-sufficient, no action verb required)
+    lineScore = Math.max(lineScore, matchHedgedDirective(line));
+
     // Rule 6: Target object bonus (only if already actionable)
     lineScore += matchTargetObjectBonus(line, lineScore);
 
@@ -675,21 +739,25 @@ export function classifyIntent(section: Section): IntentClassification {
     lineScore = Math.min(1.0, Math.max(0.0, lineScore));
 
     maxActionableScore = Math.max(maxActionableScore, lineScore);
+    maxNonHedgedActionableScore = Math.max(maxNonHedgedActionableScore, nonHedgedLineScore);
 
     // Compute out-of-scope signal
-    const oosScore = computeOutOfScopeForLine(line);
-    if (oosScore > 0) {
-      if (V3_CALENDAR_MARKERS.some(m => line.includes(m))) {
+    const oosResult = computeOutOfScopeForLine(line);
+    if (oosResult.score > 0) {
+      // Track which marker types fired for intent distribution
+      if (V3_CALENDAR_MARKERS.some(m => markerMatchesWord(line, m))) {
         hasCalendarMarkers = true;
       }
-      if (V3_COMMUNICATION_MARKERS.some(m => line.includes(m))) {
+      if (V3_COMMUNICATION_MARKERS.some(m => markerMatchesWord(line, m))) {
         hasCommunicationMarkers = true;
       }
-      if (V3_MICRO_ADMIN_MARKERS.some(m => line.includes(m))) {
+      if (V3_MICRO_ADMIN_MARKERS.some(m => markerMatchesWord(line, m))) {
         hasMicroAdminMarkers = true;
       }
+      // Debug breadcrumb: markers are tracked in oosResult.markers but not propagated
+      // to maintain minimal external contract changes. Available for future debug logging.
     }
-    maxOutOfScopeScore = Math.max(maxOutOfScopeScore, oosScore);
+    maxOutOfScopeScore = Math.max(maxOutOfScopeScore, oosResult.score);
   }
 
   // V3 Rule 7: Action-verb bullets boost.
@@ -705,12 +773,16 @@ export function classifyIntent(section: Section): IntentClassification {
   ).length;
   if (actionVerbBulletCount >= 2 && maxOutOfScopeScore < 0.4) {
     maxActionableScore = Math.max(maxActionableScore, 0.8);
+    maxNonHedgedActionableScore = Math.max(maxNonHedgedActionableScore, 0.8);
   }
 
   // V3 OVERRIDE: If actionableSignal >= 0.8, clamp outOfScopeSignal <= 0.3
   // This prevents high-actionability sections with calendar references
-  // (e.g., "Move launch to next week") from being filtered as out-of-scope
-  if (maxActionableScore >= 0.8) {
+  // (e.g., "Move launch to next week") from being filtered as out-of-scope.
+  // Only apply when the high signal comes from a non-hedged rule — hedged
+  // directives about admin tasks ("we should send an email") should still
+  // be filtered by out-of-scope logic.
+  if (maxNonHedgedActionableScore >= 0.8) {
     maxOutOfScopeScore = Math.min(0.3, maxOutOfScopeScore);
   }
 
@@ -994,15 +1066,17 @@ export function classifyType(section: Section, intent: IntentClassification): {
 
 /**
  * Compute typeLabel for new_workstream sections to distinguish
- * feature_request (short, single-line requests) from execution_artifact (initiatives).
+ * feature_request (prose requests) from execution_artifact (bullet-based initiatives).
  *
  * Returns "feature_request" when ALL of:
  * - intentLabel is new_workstream (not plan_change)
- * - lineCount == 1 OR charCount <= 200
  * - bulletCount == 0
- * - section text contains request stem OR action verb
+ * - section body contains request stem OR action verb (not both required)
+ * - total non-whitespace chars in section body >= 20
  *
- * Otherwise returns "execution_artifact"
+ * execution_artifact remains the fallback for:
+ * - bullet-based task lists
+ * - multi-step drafts
  */
 function computeTypeLabel(
   section: Section,
@@ -1015,15 +1089,15 @@ function computeTypeLabel(
     return 'execution_artifact';
   }
 
-  // Check structural constraints
-  const lineCount = section.structural_features.num_lines;
+  // Bullet-based sections remain execution_artifact
   const bulletCount = section.structural_features.num_list_items;
-  const charCount = section.raw_text.length;
+  if (bulletCount > 0) {
+    return 'execution_artifact';
+  }
 
-  const isShort = lineCount === 1 || charCount <= 200;
-  const noBullets = bulletCount === 0;
-
-  if (!isShort || !noBullets) {
+  // Require minimum substance (>= 20 non-whitespace chars)
+  const nonWhitespaceCount = section.raw_text.replace(/\s/g, '').length;
+  if (nonWhitespaceCount < 20) {
     return 'execution_artifact';
   }
 
