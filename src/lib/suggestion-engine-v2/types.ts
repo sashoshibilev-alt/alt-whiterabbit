@@ -117,7 +117,7 @@ export interface IntentClassification {
 /**
  * Section type classification
  */
-export type SectionType = 'plan_mutation' | 'execution_artifact' | 'non_actionable';
+export type SectionType = 'plan_mutation' | 'execution_artifact' | 'feature_request' | 'non_actionable';
 
 /**
  * Classified section with actionability determination
@@ -132,8 +132,8 @@ export interface ClassifiedSection extends Section {
   out_of_scope_signal?: number;
   suggested_type?: SectionType;
   type_confidence?: number;
-  /** Type label for validator behavior: feature_request vs execution_artifact */
-  typeLabel?: 'feature_request' | 'execution_artifact';
+  /** Type label for validator behavior: feature_request | execution_artifact | plan_mutation */
+  typeLabel?: 'feature_request' | 'execution_artifact' | 'plan_mutation';
 }
 
 // ============================================
@@ -156,7 +156,7 @@ export interface EvidenceSpan {
 /**
  * Suggestion type enum
  */
-export type SuggestionType = 'plan_mutation' | 'execution_artifact';
+export type SuggestionType = 'plan_mutation' | 'execution_artifact' | 'feature_request';
 
 /**
  * Plan mutation payload
@@ -239,6 +239,8 @@ export interface Suggestion {
   evidence_spans: EvidenceSpan[];
   scores: SuggestionScores;
   routing: SuggestionRouting;
+  // Structural hint distinguishing prose feature requests from task-based artifacts
+  structural_hint?: 'feature_request' | 'execution_artifact' | 'plan_mutation';
   // Clarification flags (per suggestion-suppression-fix plan)
   needs_clarification?: boolean;
   clarification_reasons?: ClarificationReason[];

@@ -1065,8 +1065,9 @@ export function classifyType(section: Section, intent: IntentClassification): {
 // ============================================
 
 /**
- * Compute typeLabel for new_workstream sections to distinguish
- * feature_request (prose requests) from execution_artifact (bullet-based initiatives).
+ * Compute typeLabel to distinguish feature_request, execution_artifact, and plan_mutation.
+ *
+ * Returns "plan_mutation" when plan_change is the dominant intent.
  *
  * Returns "feature_request" when ALL of:
  * - intentLabel is new_workstream (not plan_change)
@@ -1081,7 +1082,12 @@ export function classifyType(section: Section, intent: IntentClassification): {
 function computeTypeLabel(
   section: Section,
   intent: IntentClassification
-): 'feature_request' | 'execution_artifact' {
+): 'feature_request' | 'execution_artifact' | 'plan_mutation' {
+  // plan_change dominant → plan_mutation label (consistent with suggested_type)
+  if (isPlanChangeIntentLabel(intent)) {
+    return 'plan_mutation';
+  }
+
   // Check if intent is new_workstream dominant
   const isNewWorkstream = intent.new_workstream >= intent.plan_change;
 
@@ -1145,6 +1151,7 @@ export function classifySection(
       out_of_scope_signal: actionabilityResult.outOfScopeSignal,
       suggested_type: 'plan_mutation',
       type_confidence: 0.3, // explicit low confidence
+      typeLabel: 'plan_mutation',
     };
   }
 
@@ -1172,6 +1179,7 @@ export function classifySection(
           out_of_scope_signal: actionabilityResult.outOfScopeSignal,
           suggested_type: suggestedType,
           type_confidence: typeConfidence,
+          typeLabel: 'plan_mutation',
         };
       } else {
         // Non-plan_change can still be dropped by TYPE
@@ -1210,8 +1218,14 @@ export function classifySection(
     typeConfidence = 0.2; // explicit "fallback" confidence
   }
 
-  // Compute typeLabel for validator behavior (feature_request vs execution_artifact)
+  // Compute typeLabel for validator behavior and type promotion
   const typeLabel = computeTypeLabel(section, intent);
+
+  // Promote execution_artifact → feature_request when typeLabel says so
+  // (new_workstream prose sections with request/action signals)
+  if (suggestedType === 'execution_artifact' && typeLabel === 'feature_request') {
+    suggestedType = 'feature_request';
+  }
 
   return {
     ...section,
@@ -1364,6 +1378,7 @@ export async function classifySectionWithLLM(
           out_of_scope_signal: actionabilityResult.outOfScopeSignal,
           suggested_type: suggestedType,
           type_confidence: typeConfidence,
+          typeLabel: 'plan_mutation',
         };
       } else {
         // Non-plan_change can still be dropped by TYPE
@@ -1400,8 +1415,13 @@ export async function classifySectionWithLLM(
     typeConfidence = 0.2;
   }
 
-  // Compute typeLabel for validator behavior (feature_request vs execution_artifact)
+  // Compute typeLabel for validator behavior and type promotion
   const typeLabel = computeTypeLabel(section, intent);
+
+  // Promote execution_artifact → feature_request when typeLabel says so
+  if (suggestedType === 'execution_artifact' && typeLabel === 'feature_request') {
+    suggestedType = 'feature_request';
+  }
 
   return {
     ...section,

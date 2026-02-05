@@ -1,5 +1,36 @@
 # Current State
 
+## feature_request as First-Class Type (2026-02-05)
+
+**Files**: `types.ts`, `classifiers.ts`, `synthesis.ts`, `scoring.ts`, `validators.ts`, `debugGenerator.ts`
+
+Promoted `feature_request` from a structural hint to a first-class suggestion type alongside `plan_mutation` and `execution_artifact`. Prose-based feature requests now flow through the entire pipeline with their own type label.
+
+**Type Model**:
+- **`feature_request`**: Prose sections (no bullets, ≥20 chars, request stem OR action verb) with new_workstream intent
+- **`execution_artifact`**: Bullet-based task lists or multi-step initiatives (unchanged)
+- **`plan_mutation`**: Plan change sections (unchanged)
+
+**Pipeline Integration**:
+1. **Classification** (`classifiers.ts`): For new_workstream sections, if `computeTypeLabel()` returns `'feature_request'`, promote `suggested_type` from `'execution_artifact'` to `'feature_request'`
+2. **Synthesis** (`synthesis.ts`): `feature_request` uses same title/payload generation as `execution_artifact` (both create draft_initiative)
+3. **Scoring** (`scoring.ts`): `feature_request` treated like `execution_artifact` for threshold/capping (both cappable, not protected like `plan_mutation`)
+4. **Validators** (`validators.ts`): V1 validator handles `feature_request` via the execution_artifact path; V3 evidence validator already supports feature_request relaxed validation
+5. **Debug** (`debugGenerator.ts`): `afterTypeClassification` now receives `feature_request` type; flows to `typeClassification.scoresByLabel`, `typeClassification.topLabel`, `section.decisions.typeLabel`, and `candidate.metadata.type`
+
+**Output Contract Change**:
+- `SuggestionType` expanded: `'plan_mutation' | 'execution_artifact' | 'feature_request'`
+- `suggestion.type` can now be `'feature_request'`
+- `suggestion.structural_hint` can now be `'feature_request' | 'execution_artifact' | 'plan_mutation'` (set from final type label)
+- Debug output: `typeClassification.scoresByLabel` now includes `feature_request` entries for prose feature requests
+- Debug output: `candidate.metadata.type` now can be `'feature_request'`
+
+**Backward Compatibility**: Downstream consumers checking `type === 'execution_artifact'` for non-plan types should update to `type !== 'plan_mutation'` to include feature_request.
+
+**Tests**: Added 4 integration tests verifying feature_request flows correctly through typeClassification, scoresByLabel, and metadata.type fields.
+
+---
+
 ## Classification Fixes (2026-02-05)
 
 Three fixes to actionability, type classification, and segmentation hygiene:
