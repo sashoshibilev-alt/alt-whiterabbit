@@ -2320,11 +2320,147 @@ This will reduce time-to-value from 2 weeks to 2 days.
         });
 
         // INVARIANT: Final suggestions must include plan_mutation types
-        const planMutationSuggestions = result.suggestions.filter(s => 
+        const planMutationSuggestions = result.suggestions.filter(s =>
           s.type === 'plan_mutation'
         );
         expect(planMutationSuggestions.length).toBeGreaterThan(0);
       }
+    });
+  });
+
+  // ============================================
+  // Feature Request Type Tests
+  // ============================================
+
+  describe('Feature Request Type Label', () => {
+    it('Test A: Single-line feature request is emitted', async () => {
+      const note: NoteInput = {
+        note_id: 'test-feature-request',
+        raw_markdown: `# Product Notes
+
+I would really like you to add boundary detection in onboarding
+`,
+      };
+
+      const result = generateSuggestionsWithDebug(
+        note,
+        {},
+        { enable_debug: true },
+        { verbosity: 'REDACTED' }
+      );
+
+      // Should generate at least one suggestion
+      expect(result.suggestions.length).toBeGreaterThan(0);
+
+      // Check section classification
+      const { sections } = preprocessNote(note);
+      const classifiedSections = classifySections(sections, DEFAULT_THRESHOLDS);
+      const actionableSections = filterActionableSections(classifiedSections);
+
+      expect(actionableSections.length).toBeGreaterThan(0);
+
+      const section = actionableSections[0];
+
+      // Verify intentLabel is new_workstream
+      expect(section.intent.new_workstream).toBeGreaterThan(section.intent.plan_change);
+
+      // Verify typeLabel is feature_request
+      expect(section.typeLabel).toBe('feature_request');
+
+      // Verify V3 passes (no V3 drops)
+      expect(result.debugRun).toBeDefined();
+      const v3Drops = result.debugRun!.sections.flatMap(s => s.candidates)
+        .filter(c => c.dropReason === 'VALIDATION_V3_EVIDENCE_TOO_WEAK').length;
+      expect(v3Drops).toBe(0);
+
+      // Verify at least one suggestion is emitted
+      expect(result.suggestions.length).toBeGreaterThan(0);
+      expect(result.suggestions[0].dropped).toBeUndefined();
+    });
+
+    it('Test B: Thin execution artifact stays strict', async () => {
+      const note: NoteInput = {
+        note_id: 'test-thin-initiative',
+        raw_markdown: `# Ideas
+
+New initiative: Improve onboarding
+`,
+      };
+
+      const result = generateSuggestionsWithDebug(
+        note,
+        {},
+        { enable_debug: true },
+        { verbosity: 'REDACTED' }
+      );
+
+      // Should classify as execution_artifact (not feature_request)
+      const { sections } = preprocessNote(note);
+      const classifiedSections = classifySections(sections, DEFAULT_THRESHOLDS);
+      const actionableSections = filterActionableSections(classifiedSections);
+
+      if (actionableSections.length > 0) {
+        const section = actionableSections[0];
+
+        // Should be execution_artifact, not feature_request
+        expect(section.typeLabel).toBe('execution_artifact');
+      }
+
+      // Thin initiative without structure should fail V3 or produce low-quality suggestion
+      // Either no suggestions OR dropped suggestions
+      expect(result.debugRun).toBeDefined();
+      const v3Drops = result.debugRun!.sections.flatMap(s => s.candidates)
+        .filter(c => c.dropReason === 'VALIDATION_V3_EVIDENCE_TOO_WEAK').length;
+      const hasDrops = v3Drops > 0 || result.suggestions.length === 0;
+      expect(hasDrops).toBe(true);
+    });
+
+    it('Test C: Plan-change behavior unchanged', async () => {
+      const note: NoteInput = {
+        note_id: 'test-plan-change-unchanged',
+        raw_markdown: `# Roadmap Update
+
+Move launch to next week
+`,
+      };
+
+      const result = generateSuggestionsWithDebug(
+        note,
+        {},
+        { enable_debug: true },
+        { verbosity: 'REDACTED' }
+      );
+
+      // Check section classification
+      const { sections } = preprocessNote(note);
+      const classifiedSections = classifySections(sections, DEFAULT_THRESHOLDS);
+      const actionableSections = filterActionableSections(classifiedSections);
+
+      expect(actionableSections.length).toBeGreaterThan(0);
+
+      const section = actionableSections[0];
+
+      // Verify intentLabel is plan_change
+      const isPlanChange = isPlanChangeIntentLabel(section.intent);
+      expect(isPlanChange).toBe(true);
+
+      // Debug output
+      console.log('Test C Debug:', JSON.stringify({
+        suggestions: result.suggestions,
+        debugRun: result.debugRun?.sections.map(s => ({
+          intent: s.intentLabel,
+          typeLabel: s.typeLabel,
+          candidates: s.candidates.map(c => ({
+            emitted: c.emitted,
+            dropReason: c.dropReason,
+            dropStage: c.dropStage
+          }))
+        }))
+      }, null, 2));
+
+      // Plan change behavior unchanged: should always emit
+      expect(result.suggestions.length).toBeGreaterThan(0);
+      expect(result.suggestions[0].type).toBe('plan_mutation');
     });
   });
 });

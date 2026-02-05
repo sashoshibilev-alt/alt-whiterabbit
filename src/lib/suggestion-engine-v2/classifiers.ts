@@ -915,6 +915,57 @@ export function classifyType(section: Section, intent: IntentClassification): {
 // ============================================
 
 /**
+ * Compute typeLabel for new_workstream sections to distinguish
+ * feature_request (short, single-line requests) from execution_artifact (initiatives).
+ *
+ * Returns "feature_request" when ALL of:
+ * - intentLabel is new_workstream (not plan_change)
+ * - lineCount == 1 OR charCount <= 200
+ * - bulletCount == 0
+ * - section text contains request stem OR action verb
+ *
+ * Otherwise returns "execution_artifact"
+ */
+function computeTypeLabel(
+  section: Section,
+  intent: IntentClassification
+): 'feature_request' | 'execution_artifact' {
+  // Check if intent is new_workstream dominant
+  const isNewWorkstream = intent.new_workstream >= intent.plan_change;
+
+  if (!isNewWorkstream) {
+    return 'execution_artifact';
+  }
+
+  // Check structural constraints
+  const lineCount = section.structural_features.num_lines;
+  const bulletCount = section.structural_features.num_list_items;
+  const charCount = section.raw_text.length;
+
+  const isShort = lineCount === 1 || charCount <= 200;
+  const noBullets = bulletCount === 0;
+
+  if (!isShort || !noBullets) {
+    return 'execution_artifact';
+  }
+
+  // Check for request stem OR action verb in section text
+  const normalizedText = preprocessLine(section.raw_text);
+
+  const hasRequestStem = V3_REQUEST_STEMS.some(stem => normalizedText.includes(stem));
+  const hasActionVerb = V3_ACTION_VERBS.some(verb => {
+    const regex = new RegExp(`\\b${verb}\\b`, 'i');
+    return regex.test(normalizedText);
+  });
+
+  if (hasRequestStem || hasActionVerb) {
+    return 'feature_request';
+  }
+
+  return 'execution_artifact';
+}
+
+/**
  * Classify a section (intent + actionability + type)
  */
 export function classifySection(
@@ -1000,6 +1051,9 @@ export function classifySection(
     typeConfidence = 0.2; // explicit "fallback" confidence
   }
 
+  // Compute typeLabel for validator behavior (feature_request vs execution_artifact)
+  const typeLabel = computeTypeLabel(section, intent);
+
   return {
     ...section,
     intent,
@@ -1009,6 +1063,7 @@ export function classifySection(
     out_of_scope_signal: actionabilityResult.outOfScopeSignal,
     suggested_type: suggestedType,
     type_confidence: typeConfidence,
+    typeLabel,
   };
 }
 
@@ -1181,6 +1236,9 @@ export async function classifySectionWithLLM(
     typeConfidence = 0.2;
   }
 
+  // Compute typeLabel for validator behavior (feature_request vs execution_artifact)
+  const typeLabel = computeTypeLabel(section, intent);
+
   return {
     ...section,
     intent,
@@ -1190,6 +1248,7 @@ export async function classifySectionWithLLM(
     out_of_scope_signal: actionabilityResult.outOfScopeSignal,
     suggested_type: suggestedType,
     type_confidence: typeConfidence,
+    typeLabel,
   };
 }
 
