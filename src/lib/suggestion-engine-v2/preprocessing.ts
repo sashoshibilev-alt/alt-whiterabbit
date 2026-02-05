@@ -300,6 +300,52 @@ function computeStructuralFeatures(bodyLines: Line[]): StructuralFeatures {
 }
 
 /**
+ * Remove empty sections (heading-only, no body content).
+ * When an empty section precedes a non-empty section, its heading is
+ * prepended to the next section's heading (e.g. "Parent > Child").
+ * Otherwise the empty section is dropped entirely.
+ *
+ * Structural only — no content-specific logic.
+ */
+function removeEmptySections(sections: Section[]): Section[] {
+  const result: Section[] = [];
+  let pendingHeading: string | undefined;
+
+  for (const section of sections) {
+    const hasBody = section.raw_text.trim().length > 0;
+
+    if (!hasBody) {
+      // Empty section: stash its heading for merging into the next section
+      if (section.heading_text && section.heading_text !== 'General') {
+        pendingHeading = pendingHeading
+          ? `${pendingHeading} > ${section.heading_text}`
+          : section.heading_text;
+      }
+      continue;
+    }
+
+    // Non-empty section: merge any pending heading
+    if (pendingHeading && section.heading_text) {
+      result.push({
+        ...section,
+        heading_text: `${pendingHeading} > ${section.heading_text}`,
+      });
+    } else if (pendingHeading) {
+      result.push({
+        ...section,
+        heading_text: pendingHeading,
+      });
+    } else {
+      result.push(section);
+    }
+    pendingHeading = undefined;
+  }
+
+  // Any trailing pending heading with no following section is simply dropped
+  return result;
+}
+
+/**
  * Segment lines into sections based on headings
  */
 export function segmentIntoSections(noteId: string, lines: Line[]): Section[] {
@@ -433,7 +479,10 @@ export function segmentIntoSections(noteId: string, lines: Line[]): Section[] {
   // Finalize last section
   finalizeSection();
 
-  return sections;
+  // Post-processing: remove empty sections (heading with no substantive body).
+  // A section is empty if its raw_text is all whitespace (charCount == 0 after trim).
+  // Merge its heading into the next section when possible, otherwise drop.
+  return removeEmptySections(sections);
 }
 
 // ============================================

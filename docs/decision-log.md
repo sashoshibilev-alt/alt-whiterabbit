@@ -146,3 +146,35 @@ Introduced `NON_BLOCKING_DROP_REASONS` set in `debugTypes.ts` containing `VALIDA
 - Tests added: V1 excluded from top reasons, NON_BLOCKING_DROP_REASONS membership checks
 - Integration test: full pipeline with TEST_NOTE confirms no V1 drop reasons on candidates
 - Manual: create note with "I would really like you to add boundary detection in onboarding" → Regenerate → expect suggestions > 0, V1 not in Top reasons
+
+## 2026-02-05: Out-of-Scope Marker Matching Changed to Word-Boundary
+
+### Context
+
+Calendar marker `'may'` was matching the substring "may" inside "maybe", causing false positives: "Maybe we need to rethink pricing" was classified as calendar out-of-scope.
+
+### Decision
+
+Changed all out-of-scope marker matching from `line.includes(marker)` to word-boundary regex matching (`\b<marker>\b`). Multi-word markers continue to use substring matching since word boundaries are implicit.
+
+### Rationale
+
+Substring matching is inherently fragile for short common words that appear as substrings in other words (may/maybe, sun/Sunday). Word-boundary matching eliminates this class of false positives without affecting multi-word marker detection.
+
+### Alternatives Rejected
+
+**Add "maybe" to an exception list**: Would be whack-a-mole; word-boundary matching solves the entire class.
+
+## 2026-02-05: Hedged Directive Out-of-Scope Override Scoping
+
+### Context
+
+The V3 out-of-scope override (actionableSignal ≥ 0.8 → clamp outOfScope ≤ 0.3) was designed for plan mutations with incidental calendar references ("Move launch to next week"). Hedged directives score +0.9, which would trigger this override even for admin tasks ("we should send the invoice by Friday"), defeating out-of-scope filtering.
+
+### Decision
+
+The override now only fires when the high signal comes from a non-hedged rule. We track `maxNonHedgedActionableScore` separately and use it for the override check. Hedged directives that also trigger non-hedged rules (e.g., "we should add caching" where "add" is an imperative) still benefit from the override via the non-hedged score.
+
+### Alternatives Rejected
+
+**Lower hedged directive score to < 0.8**: Would put hedged directives at risk of being filtered by the short-section penalty (T_action + 0.15 = 0.65), making them fragile.
