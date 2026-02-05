@@ -118,3 +118,31 @@ V1 failure no longer returns early from `runQualityValidators()`. Only V2 and V3
 - All tests pass: `npm test` ✓
 - V1 validation logic unchanged, only bypass behavior modified
 - V2 and V3 validators continue to properly gate suggestions
+
+## 2026-02-05: V1 Excluded from Debug Drop Reasons and Top Reasons
+
+### Context
+
+After making V1 non-blocking in `runQualityValidators()`, the debug UI could still show `VALIDATION_V1_CHANGE_TEST_FAILED` in "Top reasons" if stale debug data existed or if any edge case set it as a `dropReason` on a candidate/section. This gave a misleading impression that V1 was still blocking.
+
+### Decision
+
+Introduced `NON_BLOCKING_DROP_REASONS` set in `debugTypes.ts` containing `VALIDATION_V1_CHANGE_TEST_FAILED`. `computeDebugRunSummary()` now skips non-blocking reasons when counting drop reasons for `dropReasonTop` and `dropStageHistogram`.
+
+### Rationale
+
+- Defensive: even if stale data or a regression sets V1 as a drop reason, it won't pollute the summary
+- Extensible: future validators can be marked non-blocking by adding to the set
+- V1 validator results remain visible on per-candidate debug cards as informational metadata
+
+### Alternatives Rejected
+
+**Hard-delete V1 from DropReason enum**: Would break backwards compatibility with stored debug runs.
+
+**Remove V1 from `mapValidatorToDropReason`**: Insufficient—wouldn't handle stale data already containing V1 drop reasons.
+
+### Verification
+
+- Tests added: V1 excluded from top reasons, NON_BLOCKING_DROP_REASONS membership checks
+- Integration test: full pipeline with TEST_NOTE confirms no V1 drop reasons on candidates
+- Manual: create note with "I would really like you to add boundary detection in onboarding" → Regenerate → expect suggestions > 0, V1 not in Top reasons
