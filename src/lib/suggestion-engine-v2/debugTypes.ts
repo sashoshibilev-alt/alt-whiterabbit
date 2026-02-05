@@ -49,6 +49,15 @@ export enum DropReason {
 }
 
 /**
+ * Non-blocking drop reasons: these are informational only and should NOT
+ * appear in "Top reasons" or cause suggestions to be marked as dropped.
+ * V1 Change-Test is non-blocking in the v2 pipeline (see decision-log.md).
+ */
+export const NON_BLOCKING_DROP_REASONS: ReadonlySet<DropReason> = new Set([
+  DropReason.VALIDATION_V1_CHANGE_TEST_FAILED,
+]);
+
+/**
  * Explicit mapping from DropReason to DropStage
  */
 export const DROP_REASON_STAGE: Record<DropReason, DropStage> = {
@@ -359,7 +368,7 @@ export function computeDebugRunSummary(debugRun: DebugRun): DebugRunSummary {
         (dropStageHistogram[section.dropStage] || 0) + 1;
     }
 
-    if (section.dropReason) {
+    if (section.dropReason && !NON_BLOCKING_DROP_REASONS.has(section.dropReason)) {
       dropReasonCounts[section.dropReason] =
         (dropReasonCounts[section.dropReason] || 0) + 1;
     }
@@ -380,7 +389,7 @@ export function computeDebugRunSummary(debugRun: DebugRun): DebugRunSummary {
           dropStageHistogram[candidate.dropStage] =
             (dropStageHistogram[candidate.dropStage] || 0) + 1;
         }
-        if (candidate.dropReason) {
+        if (candidate.dropReason && !NON_BLOCKING_DROP_REASONS.has(candidate.dropReason)) {
           dropReasonCounts[candidate.dropReason] =
             (dropReasonCounts[candidate.dropReason] || 0) + 1;
         }

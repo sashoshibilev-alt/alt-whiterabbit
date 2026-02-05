@@ -65,15 +65,17 @@ Sections with `intentLabel = "plan_change"` (where plan_change is highest score)
 
 **Purpose**: Hard quality gates that run after synthesis and before scoring to filter out low-quality suggestions.
 
-### V1: Change-Test Validator (Debug Metadata Only)
+### V1: Change-Test Validator (Informational Only)
 
-**Status**: Retained for debug metadata but does NOT block V2 suggestions.
+**Status**: Informational only. Does NOT block V2 suggestions. Excluded from drop reasons and "Top reasons" in debug summary.
 
 The V1 validator checks for:
 - Plan mutations: Delta/change patterns (from X to Y, instead of, no longer, etc.)
 - Execution artifacts: Required components (title, description with objective/scope/approach)
 
-V1 validation results are captured in the results array but failures do not drop suggestions. V1 was originally designed for the V1 suggestion engine and is preserved for debugging purposes only.
+V1 validation results are captured in the results array for per-candidate debug display, but:
+- V1 failures do **not** drop suggestions (non-blocking in `runQualityValidators`)
+- V1 is listed in `NON_BLOCKING_DROP_REASONS` (debugTypes.ts), so it is excluded from `computeDebugRunSummary` top reasons and drop stage histograms
 
 ### V2: Anti-Vacuity Validator (Active)
 
