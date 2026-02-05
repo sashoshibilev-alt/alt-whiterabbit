@@ -336,7 +336,7 @@ export function validateV3EvidenceSanity(
   suggestion: Suggestion,
   section: Section,
   thresholds: ThresholdConfig,
-  typeLabel?: 'feature_request' | 'execution_artifact'
+  typeLabel?: 'feature_request' | 'execution_artifact' | 'plan_mutation'
 ): ValidationResult {
   const evidenceSpans = suggestion.evidence_spans;
 
@@ -500,7 +500,7 @@ export function runQualityValidators(
   suggestion: Suggestion,
   section: Section,
   thresholds: ThresholdConfig,
-  typeLabel?: 'feature_request' | 'execution_artifact'
+  typeLabel?: 'feature_request' | 'execution_artifact' | 'plan_mutation'
 ): {
   passed: boolean;
   results: ValidationResult[];

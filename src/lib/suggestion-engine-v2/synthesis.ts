@@ -427,6 +427,7 @@ export function synthesizeSuggestion(section: ClassifiedSection): Suggestion | n
   }
 
   // Generate title
+  // feature_request uses same title/payload generation as execution_artifact
   const title =
     type === 'plan_mutation'
       ? generatePlanMutationTitle(section)
@@ -474,6 +475,7 @@ export function synthesizeSuggestion(section: ClassifiedSection): Suggestion | n
     evidence_spans: evidenceSpans,
     scores,
     routing,
+    structural_hint: section.typeLabel,
   };
 }
 

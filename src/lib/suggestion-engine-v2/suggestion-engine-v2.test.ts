@@ -3137,4 +3137,261 @@ Please improve the search functionality to support fuzzy matching.
       expect(section.typeLabel).toBe('feature_request');
     });
   });
+
+  describe('Structural Hint Metadata', () => {
+    beforeEach(() => {
+      resetSectionCounter();
+      resetSuggestionCounter();
+    });
+
+    it('should propagate structural_hint for prose feature requests', () => {
+      const note: NoteInput = {
+        note_id: 'test-feature-request-hint',
+        raw_markdown: `# Product Requests
+
+## Add Dark Mode
+
+We should add a dark mode toggle to the settings page to improve accessibility and user comfort during evening hours.
+`,
+      };
+
+      const result = generateSuggestions(note);
+
+      expect(result.suggestions).toHaveLength(1);
+      const suggestion = result.suggestions[0];
+
+      // Should be marked as feature_request structurally
+      expect(suggestion.structural_hint).toBe('feature_request');
+
+      // Should be routed as create_new
+      expect(suggestion.routing.create_new).toBe(true);
+
+      // Should have feature_request type (not plan_mutation or execution_artifact)
+      expect(suggestion.type).toBe('feature_request');
+    });
+
+    it('should propagate structural_hint for bullet-based initiatives', () => {
+      const note: NoteInput = {
+        note_id: 'test-execution-artifact-hint',
+        raw_markdown: `# Q3 Initiatives
+
+## Launch Partner Portal
+
+Create a partner portal for third-party integrations.
+
+Goal: 15 active partners by Q4.
+
+Features:
+- API documentation
+- Sandbox environment
+- Partner analytics dashboard
+
+Approach:
+1. Build portal backend
+2. Create partner onboarding flow
+3. Launch beta program
+`,
+      };
+
+      const result = generateSuggestions(note);
+
+      expect(result.suggestions).toHaveLength(1);
+      const suggestion = result.suggestions[0];
+
+      // Should be marked as execution_artifact structurally (has bullets)
+      expect(suggestion.structural_hint).toBe('execution_artifact');
+
+      // Should be execution_artifact type
+      expect(suggestion.type).toBe('execution_artifact');
+
+      // Verify it has structured payload
+      expect(suggestion.payload).toHaveProperty('draft_initiative');
+      if ('draft_initiative' in suggestion.payload) {
+        expect(suggestion.payload.draft_initiative.title).toBeDefined();
+      }
+    });
+
+    it('should preserve structural hints for multiple candidates in mixed notes', () => {
+      const note: NoteInput = {
+        note_id: 'test-mixed-structural',
+        raw_markdown: `# Planning Session
+
+## Feature Request
+
+We should add export functionality for reports. Users have been asking for CSV and PDF downloads.
+
+## Launch Analytics Platform
+
+Create an analytics platform for customer insights.
+
+Goal: Track 10+ key metrics.
+
+Features:
+- Real-time dashboards
+- Custom report builder
+- Data export API
+
+Plan:
+1. Design dashboard UI
+2. Build data pipeline
+3. Launch beta
+`,
+      };
+
+      const result = generateSuggestions(note);
+
+      // Should emit 2 distinct suggestions
+      expect(result.suggestions.length).toBeGreaterThanOrEqual(2);
+
+      // Find feature request (prose, no bullets)
+      const featureRequest = result.suggestions.find(
+        s => s.structural_hint === 'feature_request'
+      );
+      expect(featureRequest).toBeDefined();
+      expect(featureRequest?.title).toMatch(/feature.request/i);
+
+      // Find execution artifact (bullet-based)
+      const executionArtifact = result.suggestions.find(
+        s => s.structural_hint === 'execution_artifact'
+      );
+      expect(executionArtifact).toBeDefined();
+      expect(executionArtifact?.title).toMatch(/analytics/i);
+
+      // Both should be routed as create_new
+      expect(featureRequest?.routing.create_new).toBe(true);
+      expect(executionArtifact?.routing.create_new).toBe(true);
+    });
+  });
+
+  // ==========================================================================
+  // feature_request as first-class type label
+  // ==========================================================================
+  describe('feature_request first-class type', () => {
+    beforeEach(() => {
+      resetSectionCounter();
+      resetSuggestionCounter();
+    });
+
+    it('prose feature request produces typeLabel == feature_request with scoresByLabel', () => {
+      const note: NoteInput = {
+        note_id: 'test-fr-prose',
+        raw_markdown: `## Boundary detection
+
+I would really like you to add boundary detection to the onboarding flow.
+This would help new users understand where they are in the process and reduce drop-off.
+`,
+      };
+
+      const result = generateSuggestionsWithDebug(note, {}, { enable_debug: true }, { verbosity: 'REDACTED' });
+
+      // Should emit one suggestion
+      expect(result.suggestions).toHaveLength(1);
+      const suggestion = result.suggestions[0];
+
+      // suggestion.type must be feature_request
+      expect(suggestion.type).toBe('feature_request');
+
+      // structural_hint must match
+      expect(suggestion.structural_hint).toBe('feature_request');
+
+      // Debug: typeClassification must contain feature_request
+      const debugSection = result.debugRun!.sections.find(
+        s => s.sectionId === suggestion.section_id
+      );
+      expect(debugSection).toBeDefined();
+      expect(debugSection!.typeClassification?.topLabel).toBe('feature_request');
+      expect(debugSection!.typeClassification?.scoresByLabel).toHaveProperty('feature_request');
+
+      // Debug: decisions.typeLabel must be feature_request
+      expect(debugSection!.decisions.typeLabel).toBe('feature_request');
+
+      // candidate.metadata.type must be feature_request
+      const candidate = debugSection!.candidates.find(
+        c => c.candidateId === suggestion.suggestion_id
+      );
+      expect(candidate).toBeDefined();
+      expect(candidate!.metadata?.type).toBe('feature_request');
+    });
+
+    it('bullet execution list remains execution_artifact', () => {
+      const note: NoteInput = {
+        note_id: 'test-fr-bullets',
+        raw_markdown: `## Monitoring setup
+
+- Add Datadog dashboards for core metrics
+- Set up PagerDuty escalation policies
+- Configure alert thresholds for latency and error rates
+`,
+      };
+
+      const result = generateSuggestionsWithDebug(note, {}, { enable_debug: true }, { verbosity: 'REDACTED' });
+
+      expect(result.suggestions).toHaveLength(1);
+      const suggestion = result.suggestions[0];
+
+      // Bullet-based sections stay execution_artifact
+      expect(suggestion.type).toBe('execution_artifact');
+      expect(suggestion.structural_hint).toBe('execution_artifact');
+
+      // Debug: typeClassification
+      const debugSection = result.debugRun!.sections.find(
+        s => s.sectionId === suggestion.section_id
+      );
+      expect(debugSection).toBeDefined();
+      expect(debugSection!.typeClassification?.topLabel).toBe('execution_artifact');
+      expect(debugSection!.typeClassification?.scoresByLabel).toHaveProperty('execution_artifact');
+    });
+
+    it('plan change produces typeLabel == plan_mutation (unchanged)', () => {
+      const note: NoteInput = {
+        note_id: 'test-fr-planchange',
+        raw_markdown: `## Timeline adjustment
+
+We need to push Q2 launch to Q3 because the integration work is taking longer than expected.
+Shift the beta milestone from April to June.
+`,
+      };
+
+      const result = generateSuggestions(note);
+
+      expect(result.suggestions.length).toBeGreaterThanOrEqual(1);
+      const suggestion = result.suggestions[0];
+
+      // plan_change sections must remain plan_mutation
+      expect(suggestion.type).toBe('plan_mutation');
+    });
+
+    it('mixed note emits feature_request, execution_artifact, and plan_mutation distinctly', () => {
+      const note: NoteInput = {
+        note_id: 'test-fr-mixed',
+        raw_markdown: `## Feature request
+
+We should add a preference center so users can control which notifications they receive.
+Right now everything is on by default and the feedback is consistently negative.
+
+## Monitoring setup
+
+- Add Datadog dashboards for core metrics
+- Set up PagerDuty escalation policies
+- Configure alert thresholds for latency and error rates
+
+## Timeline change
+
+Push the Q2 launch to Q3 because the integration work is taking longer than expected.
+Shift the beta milestone from April to June.
+`,
+      };
+
+      const result = generateSuggestions(note);
+
+      // Should emit at least 3 suggestions
+      expect(result.suggestions.length).toBeGreaterThanOrEqual(3);
+
+      // Collect all types
+      const types = result.suggestions.map(s => s.type);
+      expect(types).toContain('feature_request');
+      expect(types).toContain('execution_artifact');
+      expect(types).toContain('plan_mutation');
+    });
+  });
 });

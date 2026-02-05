@@ -488,9 +488,10 @@ export function runScoringPipeline(
   // 3) Apply confidence-based processing (respects plan_change invariants)
   const { passed, dropped, downgraded } = applyConfidenceBasedProcessing(scored, config.thresholds);
 
-  // 4) Separate plan_mutation from execution_artifact for plan_change-aware capping
+  // 4) Separate plan_mutation from non-plan types for plan_change-aware capping
+  // feature_request and execution_artifact are both cappable; plan_mutation is not
   const planMutations = passed.filter(s => s.type === 'plan_mutation');
-  const executionArtifacts = passed.filter(s => s.type === 'execution_artifact');
+  const executionArtifacts = passed.filter(s => s.type !== 'plan_mutation');
 
   // 5) Sort each group by score
   const sortedPlan = sortByScore(planMutations);
