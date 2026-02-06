@@ -49,11 +49,6 @@ function computeSectionActionability(section: ClassifiedSection): number {
   // Boost for structural features
   const sf = section.structural_features;
 
-  // Lists with multiple items are more actionable
-  if (sf.num_list_items >= 3) {
-    score += 0.1;
-  }
-
   // Quarter/milestone references indicate planning
   if (sf.has_quarter_refs || sf.has_version_refs) {
     score += 0.1;
