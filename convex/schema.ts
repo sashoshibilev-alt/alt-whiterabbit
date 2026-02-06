@@ -454,4 +454,22 @@ export default defineSchema({
     .index("by_ruleOrPromptId", ["ruleOrPromptId"])
     .index("by_qualityScore", ["qualityScore"])
     .index("by_lastComputedAt", ["lastComputedAt"]),
+
+  // ============================================
+  // Suggestion Decisions - Stable Apply/Dismiss Persistence
+  // ============================================
+
+  // Suggestion decisions table - persists user actions keyed by (noteId, suggestionKey)
+  // This allows dismissed/applied suggestions to remain hidden across regenerations
+  suggestionDecisions: defineTable({
+    noteId: v.id("notes"),
+    suggestionKey: v.string(), // Stable key computed from suggestion content
+    status: v.union(v.literal("dismissed"), v.literal("applied")), // User decision
+    initiativeId: v.optional(v.id("v0Initiatives")), // FK when applied
+    appliedMode: v.optional(v.union(v.literal("existing"), v.literal("created"))), // How it was applied
+    updatedAt: v.number(), // Timestamp of decision
+  })
+    .index("by_noteId", ["noteId"])
+    .index("by_noteId_suggestionKey", ["noteId", "suggestionKey"])
+    .index("by_initiativeId", ["initiativeId"]),
 });
