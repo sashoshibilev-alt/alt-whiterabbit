@@ -25,7 +25,7 @@ export default function NoteDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
-  
+
   const getWithComputedSuggestions = useAction(api.notes.getWithComputedSuggestions);
   const activeInitiatives = useQuery(api.v0Initiatives.listActive);
 
