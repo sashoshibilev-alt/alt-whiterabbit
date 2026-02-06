@@ -227,6 +227,17 @@ export type ClarificationReason =
   | 'fallback_synthesis';
 
 /**
+ * Standalone suggestion context (additive)
+ */
+export interface SuggestionContext {
+  title: string;
+  body: string;
+  evidencePreview?: string[];
+  sourceSectionId: string;
+  sourceHeading: string;
+}
+
+/**
  * Full suggestion representation
  */
 export interface Suggestion {
@@ -246,6 +257,8 @@ export interface Suggestion {
   clarification_reasons?: ClarificationReason[];
   // High confidence flag (true when both actionability and overall scores pass thresholds)
   is_high_confidence?: boolean;
+  // Standalone context (additive)
+  suggestion?: SuggestionContext;
   // Debug info
   validation_results?: ValidationResult[];
   dropped?: boolean;

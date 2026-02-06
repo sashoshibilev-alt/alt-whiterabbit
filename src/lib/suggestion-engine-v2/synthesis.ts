@@ -12,6 +12,7 @@ import type {
   Suggestion,
   SuggestionScores,
   SuggestionRouting,
+  SuggestionContext,
   Line,
 } from './types';
 import { normalizeForComparison } from './preprocessing';
@@ -334,6 +335,193 @@ function generateDraftInitiative(
 }
 
 // ============================================
+// Body Generation (Standalone Context)
+// ============================================
+
+/**
+ * Generate standalone body for idea suggestions
+ * Format: problem → proposed change → purpose (if present)
+ */
+function generateIdeaBody(section: ClassifiedSection): string {
+  const bodyText = section.raw_text;
+  const parts: string[] = [];
+
+  // Extract problem statement
+  const problemPatterns = [
+    /\b(problem|issue|challenge|pain\s+point)\s*(?::|is|involves?)\s*([^.!?\n]{10,150})/i,
+    /\b(currently|today|right\s+now)\s+([^.!?\n]{10,150})/i,
+  ];
+
+  for (const pattern of problemPatterns) {
+    const match = bodyText.match(pattern);
+    if (match && match[2]) {
+      parts.push(capitalizeFirst(match[2].trim()));
+      break;
+    }
+  }
+
+  // Extract proposed change/solution
+  const solutionPatterns = [
+    /\b(launch|build|create|implement|develop)\s+(?:a\s+|an\s+|the\s+)?([^.!?\n]{10,150})/i,
+    /\b(solution|approach|idea)\s*(?::|is|would\s+be)\s*([^.!?\n]{10,150})/i,
+  ];
+
+  for (const pattern of solutionPatterns) {
+    const match = bodyText.match(pattern);
+    if (match && match[2]) {
+      const solution = match[2].trim();
+      parts.push(capitalizeFirst(solution));
+      break;
+    }
+  }
+
+  // Extract purpose/goal if present
+  const purposePatterns = [
+    /\b(goal|purpose|objective|to)\s+(?:is\s+)?(?:to\s+)?([^.!?\n]{10,100})/i,
+    /\b(enable|allow|help)\s+(?:us\s+to\s+)?([^.!?\n]{10,100})/i,
+  ];
+
+  for (const pattern of purposePatterns) {
+    const match = bodyText.match(pattern);
+    if (match && match[2]) {
+      parts.push(capitalizeFirst(match[2].trim()));
+      break;
+    }
+  }
+
+  // Fallback: extract first meaningful sentences
+  if (parts.length === 0) {
+    const sentences = bodyText
+      .split(/[.!?]+/)
+      .map(s => s.trim())
+      .filter(s => s.length > 20 && s.length < 200);
+    parts.push(...sentences.slice(0, 2));
+  }
+
+  // Build body with max 300 characters
+  let body = parts.join('. ').trim();
+  if (!body.endsWith('.')) body += '.';
+
+  // Truncate if needed
+  if (body.length > 300) {
+    body = body.substring(0, 297) + '...';
+  }
+
+  return body || 'New initiative proposed in section.';
+}
+
+/**
+ * Generate standalone body for project_update suggestions
+ * Format: what changed → why → timing (if present)
+ */
+function generateProjectUpdateBody(section: ClassifiedSection): string {
+  const bodyText = section.raw_text;
+  const parts: string[] = [];
+
+  // Extract what changed
+  const changePatterns = [
+    /\b(shift|pivot|refocus|change|adjust|narrow|expand)\s+(?:to|towards?|the\s+)?([^.!?\n]{10,150})/i,
+    /\b(now|moving|transitioning)\s+(?:to|towards?)\s+([^.!?\n]{10,150})/i,
+    /\b(from\s+.{5,50}\s+to\s+[^.!?\n]{5,150})/i,
+  ];
+
+  for (const pattern of changePatterns) {
+    const match = bodyText.match(pattern);
+    if (match) {
+      const change = match[2] || match[1];
+      if (change && change.length >= 10) {
+        parts.push(capitalizeFirst(change.trim()));
+        break;
+      }
+    }
+  }
+
+  // Extract why/reason
+  const reasonPatterns = [
+    /\b(because|since|due\s+to|reason)\s+([^.!?\n]{10,150})/i,
+    /\b(to\s+better|in\s+order\s+to|so\s+that)\s+([^.!?\n]{10,150})/i,
+  ];
+
+  for (const pattern of reasonPatterns) {
+    const match = bodyText.match(pattern);
+    if (match && match[2]) {
+      parts.push(capitalizeFirst(match[2].trim()));
+      break;
+    }
+  }
+
+  // Extract timing if present
+  const timingPatterns = [
+    /\b(by\s+Q[1-4]|by\s+\w+\s+\d{4}|this\s+quarter|next\s+quarter)\b/i,
+    /\b(target|timeline|deadline)\s*(?::|is)\s*([^.!?\n]{5,100})/i,
+  ];
+
+  for (const pattern of timingPatterns) {
+    const match = bodyText.match(pattern);
+    if (match) {
+      const timing = match[2] || match[0];
+      parts.push(capitalizeFirst(timing.trim()));
+      break;
+    }
+  }
+
+  // Fallback: extract first meaningful sentences or bullets
+  if (parts.length === 0) {
+    const sentences = bodyText
+      .split(/[.!?]+/)
+      .map(s => s.trim())
+      .filter(s => s.length > 20 && s.length < 200);
+    parts.push(...sentences.slice(0, 2));
+  }
+
+  // Build body with max 300 characters
+  let body = parts.join('. ').trim();
+  if (!body.endsWith('.')) body += '.';
+
+  // Truncate if needed
+  if (body.length > 300) {
+    body = body.substring(0, 297) + '...';
+  }
+
+  return body || 'Project scope and focus updated.';
+}
+
+/**
+ * Extract evidence previews from evidence spans
+ * Returns 1-2 short quotes (max 150 chars each)
+ */
+function extractEvidencePreviews(evidenceSpans: EvidenceSpan[]): string[] | undefined {
+  if (!evidenceSpans || evidenceSpans.length === 0) {
+    return undefined;
+  }
+
+  const previews: string[] = [];
+
+  for (const span of evidenceSpans.slice(0, 2)) {
+    if (span.text) {
+      let preview = span.text.trim();
+
+      // Take first meaningful sentence or line
+      const firstSentence = preview.split(/[.!?\n]/)[0].trim();
+      if (firstSentence.length > 20) {
+        preview = firstSentence;
+      }
+
+      // Truncate to 150 characters
+      if (preview.length > 150) {
+        preview = preview.substring(0, 147) + '...';
+      }
+
+      if (preview.length > 20) {
+        previews.push(preview);
+      }
+    }
+  }
+
+  return previews.length > 0 ? previews : undefined;
+}
+
+// ============================================
 // Evidence Extraction
 // ============================================
 
@@ -464,6 +652,19 @@ export function synthesizeSuggestion(section: ClassifiedSection): Suggestion | n
     create_new: true,
   };
 
+  // Generate standalone context (additive)
+  const body = type === 'project_update'
+    ? generateProjectUpdateBody(section)
+    : generateIdeaBody(section);
+
+  const suggestionContext: SuggestionContext = {
+    title,
+    body,
+    evidencePreview: extractEvidencePreviews(evidenceSpans),
+    sourceSectionId: section.section_id,
+    sourceHeading: section.heading_text || '',
+  };
+
   return {
     suggestion_id: generateSuggestionId(section.note_id),
     note_id: section.note_id,
@@ -475,6 +676,7 @@ export function synthesizeSuggestion(section: ClassifiedSection): Suggestion | n
     scores,
     routing,
     structural_hint: section.typeLabel,
+    suggestion: suggestionContext,
   };
 }
 

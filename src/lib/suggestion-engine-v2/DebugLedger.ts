@@ -211,9 +211,14 @@ export class DebugLedger {
         actionabilityThreshold: this.config.thresholds.T_action,
         outOfScopeThreshold: this.config.thresholds.T_out_of_scope,
       };
-    }
 
-    if (!isActionable && actionabilityReason) {
+      // Fix debug consistency: use computed actionableSignal instead of topScore
+      // This ensures scoreSummary.actionabilityScore matches actionabilitySignals.actionableSignal
+      if (!isActionable && actionabilityReason) {
+        section.scoreSummary.actionabilityScore = actionabilitySignals.actionableSignal;
+      }
+    } else if (!isActionable && actionabilityReason) {
+      // Fallback to topScore if actionabilitySignals not provided (shouldn't happen in normal flow)
       section.scoreSummary.actionabilityScore = topScore;
     }
   }
