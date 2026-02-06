@@ -59,15 +59,78 @@ export const getWithSuggestions = query({
   handler: async (ctx, args) => {
     const note = await ctx.db.get(args.id);
     if (!note) return null;
-    
+
     const suggestions = await ctx.db
       .query("suggestions")
       .withIndex("by_noteId", (q) => q.eq("noteId", args.id))
       .collect();
-    
+
     return {
       note,
       suggestions,
+    };
+  },
+});
+
+// Query to get note with live computed suggestions from v2 engine
+// Returns the note and an array of suggestions computed in real-time from the note body.
+// Each suggestion includes a structured `suggestion` context object with:
+//   - title: Suggestion title
+//   - body: 1-3 line standalone description (max ~300 chars)
+//   - evidencePreview?: Array of 1-2 short quotes from the note (max 150 chars each)
+//   - sourceSectionId: Section ID for navigation
+//   - sourceHeading: Section heading text
+export const getWithComputedSuggestions = query({
+  args: { id: v.id("notes") },
+  handler: async (ctx, args) => {
+    const note = await ctx.db.get(args.id);
+    if (!note) return null;
+
+    // Import suggestion engine v2
+    const { generateSuggestions, adaptConvexNote } = await import("../src/lib/suggestion-engine-v2");
+
+    // Adapt note to engine format
+    const engineNote = adaptConvexNote({
+      _id: note._id,
+      body: note.body,
+      createdAt: note.createdAt,
+      title: note.title,
+    });
+
+    // Run suggestion engine v2
+    const result = generateSuggestions(engineNote);
+
+    // Transform engine suggestions to UI-ready format
+    const uiSuggestions = result.suggestions.map((engineSug) => {
+      // Map to V0Suggestion-like structure for UI compatibility
+      return {
+        _id: engineSug.suggestion_id as any, // Use engine ID as UI ID
+        noteId: args.id,
+        content: engineSug.title,
+        status: "new" as const,
+        createdAt: Date.now(),
+        modelVersion: "v2-engine",
+        suggestionFamily: engineSug.type,
+        modelConfidenceScore: engineSug.scores.overall,
+        // Add the structured suggestion context
+        suggestion: engineSug.suggestion ? {
+          title: engineSug.suggestion.title,
+          body: engineSug.suggestion.body,
+          evidencePreview: engineSug.suggestion.evidencePreview,
+          sourceSectionId: engineSug.suggestion.sourceSectionId,
+          sourceHeading: engineSug.suggestion.sourceHeading,
+        } : undefined,
+        // Clarification support based on engine flags
+        clarificationState: engineSug.needs_clarification ? "suggested" as const : "none" as const,
+        clarificationPrompt: engineSug.needs_clarification
+          ? `This suggestion has a confidence score of ${engineSug.scores.overall.toFixed(2)}. Consider reviewing the evidence carefully.`
+          : undefined,
+      };
+    });
+
+    return {
+      note,
+      suggestions: uiSuggestions,
     };
   },
 });

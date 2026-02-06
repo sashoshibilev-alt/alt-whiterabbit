@@ -26,7 +26,7 @@ export default function NoteDetailPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
   
-  const noteData = useQuery(api.notes.getWithSuggestions, id ? { id: id as Id<"notes"> } : "skip");
+  const noteData = useQuery(api.notes.getWithComputedSuggestions, id ? { id: id as Id<"notes"> } : "skip");
   const activeInitiatives = useQuery(api.v0Initiatives.listActive);
   
   const recordShown = useMutation(api.suggestions.recordShown);
