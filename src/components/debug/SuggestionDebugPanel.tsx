@@ -510,6 +510,24 @@ function CandidateCard({ candidate }: { candidate: CandidateSuggestionDebug }) {
         </div>
       )}
 
+      {candidate.suggestion && (
+        <div className="text-[10px] space-y-0.5 mt-1.5 border-t pt-1.5">
+          <div className="font-medium text-foreground">
+            {candidate.suggestion.title}
+          </div>
+          <div className="text-muted-foreground">
+            {candidate.suggestion.body}
+          </div>
+          {candidate.suggestion.evidencePreview && candidate.suggestion.evidencePreview.length > 0 && (
+            <div className="text-[9px] italic text-muted-foreground space-y-0.5">
+              {candidate.suggestion.evidencePreview.map((preview, i) => (
+                <div key={i}>"{preview}"</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {candidate.evidence && candidate.evidence.spans.length > 0 && (
         <div className="text-[10px] text-muted-foreground">
           Evidence lines: {candidate.evidence.lineIds.join(", ")}

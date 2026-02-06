@@ -493,11 +493,28 @@ export default function NoteDetailPage() {
                       const needsClarification = suggestion.clarificationState === "suggested";
                       const clarificationRequested = suggestion.clarificationState === "requested";
                       const clarified = suggestion.clarificationState === "answered";
-                      
+
+                      // Use suggestion context if available, otherwise fall back to legacy content
+                      const displayTitle = suggestion.suggestion?.title || suggestion.content;
+                      const displayBody = suggestion.suggestion?.body;
+                      const evidencePreview = suggestion.suggestion?.evidencePreview;
+
                       return (
                         <Card key={suggestion._id} className={needsClarification ? "border-orange-300" : ""}>
                           <CardContent className="p-4">
-                            <p className="text-sm mb-3">{suggestion.content}</p>
+                            <p className="text-sm font-medium mb-2">{displayTitle}</p>
+                            {displayBody && (
+                              <p className="text-xs text-muted-foreground mb-3 line-clamp-3">{displayBody}</p>
+                            )}
+                            {evidencePreview && evidencePreview.length > 0 && (
+                              <div className="pl-3 border-l-2 border-muted mb-3 space-y-1">
+                                {evidencePreview.slice(0, 2).map((line, idx) => (
+                                  <p key={idx} className="text-xs italic text-muted-foreground">
+                                    "{line}"
+                                  </p>
+                                ))}
+                              </div>
+                            )}
                             {suggestion.clarificationPrompt && needsClarification && (
                               <div className="mb-3 p-2 bg-orange-50 dark:bg-orange-950/20 rounded text-xs">
                                 <Info className="h-3 w-3 inline mr-1" />
@@ -581,10 +598,17 @@ export default function NoteDetailPage() {
                     <h3 className="text-sm font-medium text-muted-foreground">
                       Applied ({appliedSuggestions.length})
                     </h3>
-                    {appliedSuggestions.map((suggestion) => (
-                      <Card key={suggestion._id} className="bg-green-50 dark:bg-green-950/20">
-                        <CardContent className="p-4">
-                          <p className="text-sm mb-2">{suggestion.content}</p>
+                    {appliedSuggestions.map((suggestion) => {
+                      const displayTitle = suggestion.suggestion?.title || suggestion.content;
+                      const displayBody = suggestion.suggestion?.body;
+
+                      return (
+                        <Card key={suggestion._id} className="bg-green-50 dark:bg-green-950/20">
+                          <CardContent className="p-4">
+                            <p className="text-sm font-medium mb-1">{displayTitle}</p>
+                            {displayBody && (
+                              <p className="text-xs text-muted-foreground mb-2 line-clamp-3">{displayBody}</p>
+                            )}
                           <div className="flex items-center gap-2 flex-wrap">
                             <Badge className="bg-green-600">
                               <CheckCircle2 className="h-3 w-3 mr-1" />
@@ -602,7 +626,8 @@ export default function NoteDetailPage() {
                           </div>
                         </CardContent>
                       </Card>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
 
@@ -613,17 +638,25 @@ export default function NoteDetailPage() {
                     <h3 className="text-sm font-medium text-muted-foreground">
                       Dismissed ({dismissedSuggestions.length})
                     </h3>
-                    {dismissedSuggestions.map((suggestion) => (
-                      <Card key={suggestion._id} className="bg-muted/50 opacity-75">
-                        <CardContent className="p-4">
-                          <p className="text-sm mb-2">{suggestion.content}</p>
+                    {dismissedSuggestions.map((suggestion) => {
+                      const displayTitle = suggestion.suggestion?.title || suggestion.content;
+                      const displayBody = suggestion.suggestion?.body;
+
+                      return (
+                        <Card key={suggestion._id} className="bg-muted/50 opacity-75">
+                          <CardContent className="p-4">
+                            <p className="text-sm font-medium mb-1">{displayTitle}</p>
+                            {displayBody && (
+                              <p className="text-xs text-muted-foreground mb-2 line-clamp-3">{displayBody}</p>
+                            )}
                           <Badge variant="outline" className="text-orange-600">
                             <XCircle className="h-3 w-3 mr-1" />
                             Dismissed: {suggestion.dismissReason && V0_DISMISS_REASON_LABELS[suggestion.dismissReason]}
                           </Badge>
                         </CardContent>
                       </Card>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

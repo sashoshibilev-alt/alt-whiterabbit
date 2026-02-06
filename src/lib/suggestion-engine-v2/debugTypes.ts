@@ -202,6 +202,15 @@ export interface CandidateSuggestionDebug {
   suggestionPreview: TextPreview | null;
   rawSuggestionText?: string; // FULL_TEXT only
 
+  // Structured suggestion context (for UI consumption)
+  suggestion?: {
+    title: string;
+    body: string;
+    evidencePreview?: string[];
+    sourceSectionId: string;
+    sourceHeading: string;
+  };
+
   // Model I/O (summarized)
   synthesisInputPreview?: TextPreview | null;
   synthesisRawOutput?: unknown;
