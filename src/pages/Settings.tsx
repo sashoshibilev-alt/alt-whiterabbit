@@ -1,4 +1,3 @@
-import { useShipItStore } from '@/hooks/useShipItStore';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -9,7 +8,8 @@ import { Video, FileText, GitBranch, Shield, Check, X, Info } from 'lucide-react
 import { ConvexExample } from '@/components/examples/ConvexExample';
 
 export default function SettingsPage() {
-  const { connections, toggleConnection } = useShipItStore();
+  // Connections will be loaded from Convex in the future
+  const connections: any[] = [];
 
   const meetingSources = connections.filter(c => c.type === 'meeting_source');
   const roadmapSystems = connections.filter(c => c.type === 'roadmap_system');
@@ -33,6 +33,15 @@ export default function SettingsPage() {
       {/* Connections */}
       <section className="mb-8">
         <h2 className="text-lg font-semibold mb-4">Meeting Notes Sources</h2>
+        {meetingSources.length === 0 ? (
+          <Alert>
+            <Info className="h-4 w-4" />
+            <AlertTitle>No Connections</AlertTitle>
+            <AlertDescription>
+              Connection management will be available in a future update.
+            </AlertDescription>
+          </Alert>
+        ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {meetingSources.map(connection => (
             <Card key={connection.id}>
@@ -59,10 +68,10 @@ export default function SettingsPage() {
                       </div>
                     </div>
                   </div>
-                  <Button 
+                  <Button
                     variant={connection.isConnected ? "outline" : "default"}
                     size="sm"
-                    onClick={() => toggleConnection(connection.id)}
+                    disabled
                   >
                     {connection.isConnected ? 'Disconnect' : 'Connect'}
                   </Button>
@@ -71,10 +80,20 @@ export default function SettingsPage() {
             </Card>
           ))}
         </div>
+        )}
       </section>
 
       <section className="mb-8">
         <h2 className="text-lg font-semibold mb-4">Roadmap Systems</h2>
+        {roadmapSystems.length === 0 ? (
+          <Alert>
+            <Info className="h-4 w-4" />
+            <AlertTitle>No Connections</AlertTitle>
+            <AlertDescription>
+              Connection management will be available in a future update.
+            </AlertDescription>
+          </Alert>
+        ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {roadmapSystems.map(connection => (
             <Card key={connection.id}>
@@ -101,10 +120,10 @@ export default function SettingsPage() {
                       </div>
                     </div>
                   </div>
-                  <Button 
+                  <Button
                     variant={connection.isConnected ? "outline" : "default"}
                     size="sm"
-                    onClick={() => toggleConnection(connection.id)}
+                    disabled
                   >
                     {connection.isConnected ? 'Disconnect' : 'Connect'}
                   </Button>
@@ -113,6 +132,7 @@ export default function SettingsPage() {
             </Card>
           ))}
         </div>
+        )}
       </section>
 
       <Separator className="my-8" />
