@@ -96,6 +96,9 @@ export default function NoteDetailPage() {
   const [clarifyingSuggestionId, setClarifyingSuggestionId] = useState<Id<"suggestions"> | null>(null);
   const [clarificationText, setClarificationText] = useState("");
 
+  // Track suggestionKey for apply flow (must be before early returns)
+  const [applyingSuggestionKey, setApplyingSuggestionKey] = useState<string | null>(null);
+
   // Record shown events for new suggestions
   useEffect(() => {
     if (!noteData?.suggestions) return;
@@ -141,9 +144,6 @@ export default function NoteDetailPage() {
   const newSuggestions = suggestions.filter((s) => s.status === "new");
   const appliedSuggestions = suggestions.filter((s) => s.status === "applied");
   const dismissedSuggestions = suggestions.filter((s) => s.status === "dismissed");
-
-  // Track suggestionKey for apply flow
-  const [applyingSuggestionKey, setApplyingSuggestionKey] = useState<string | null>(null);
 
   // Opens the initiative selection modal for adding to existing initiative
   const handleAddToExistingClick = (suggestionId: Id<"suggestions">, suggestionKey: string, content: string) => {
