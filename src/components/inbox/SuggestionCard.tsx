@@ -1,10 +1,13 @@
+import { useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { ConfidenceBadge, ChangeTypeBadge, StatusBadge } from '@/components/badges/StatusBadges';
 import { Suggestion, Initiative } from '@/types';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { AlertTriangle, ChevronRight, Link2Off, XCircle } from 'lucide-react';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { AlertTriangle, ChevronRight, Link2Off, XCircle, ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge';
 
 interface SuggestionCardProps {
   suggestion: Suggestion;
@@ -12,22 +15,43 @@ interface SuggestionCardProps {
   onSelect: () => void;
   onQuickDismiss: () => void;
   isSelected?: boolean;
+  onNavigateToSource?: (sectionId: string) => void;
 }
 
-export function SuggestionCard({ 
-  suggestion, 
-  initiative, 
-  onSelect, 
+export function SuggestionCard({
+  suggestion,
+  initiative,
+  onSelect,
   onQuickDismiss,
-  isSelected 
+  isSelected,
+  onNavigateToSource
 }: SuggestionCardProps) {
-  const changePreview = suggestion.proposedChange.commentText?.slice(0, 80) ||
-    (suggestion.proposedChange.before && suggestion.proposedChange.after 
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
+
+  // Use suggestion context if available, otherwise fall back to legacy fields
+  const displayTitle = suggestion.suggestion?.title || suggestion.title;
+  const displayBody = suggestion.suggestion?.body;
+  const evidencePreview = suggestion.suggestion?.evidencePreview;
+  const sourceSectionId = suggestion.suggestion?.sourceSectionId;
+
+  // Legacy change preview for backward compatibility
+  const changePreview = !suggestion.suggestion ? (
+    suggestion.proposedChange.commentText?.slice(0, 80) ||
+    (suggestion.proposedChange.before && suggestion.proposedChange.after
       ? `${suggestion.proposedChange.before} → ${suggestion.proposedChange.after}`
-      : suggestion.proposedChange.backlogTitle);
+      : suggestion.proposedChange.backlogTitle)
+  ) : null;
+
+  const handleCardClick = () => {
+    if (sourceSectionId && onNavigateToSource) {
+      onNavigateToSource(sourceSectionId);
+    } else {
+      onSelect();
+    }
+  };
 
   return (
-    <Card 
+    <Card
       className={cn(
         "cursor-pointer transition-colors hover:bg-muted/50",
         isSelected && "ring-2 ring-primary bg-muted/30",
@@ -36,7 +60,7 @@ export function SuggestionCard({
     >
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-3">
-          <div className="flex-1 min-w-0" onClick={onSelect}>
+          <div className="flex-1 min-w-0" onClick={handleCardClick}>
             <div className="flex items-center gap-2 mb-1">
               <ChangeTypeBadge type={suggestion.changeType} />
               <ConfidenceBadge level={suggestion.confidence} />
@@ -45,9 +69,9 @@ export function SuggestionCard({
                 <Badge variant="outline" className="text-xs">Edited</Badge>
               )}
             </div>
-            
-            <h4 className="font-medium text-sm mb-1 truncate">{suggestion.title}</h4>
-            
+
+            <h4 className="font-medium text-sm mb-1 truncate">{displayTitle}</h4>
+
             <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
               {initiative ? (
                 <span className="truncate">→ {initiative.name}</span>
@@ -59,15 +83,44 @@ export function SuggestionCard({
               )}
             </div>
 
+            {displayBody && (
+              <p className="text-xs text-muted-foreground mb-2 line-clamp-3">
+                {displayBody}
+              </p>
+            )}
+
             {changePreview && (
               <p className="text-xs text-muted-foreground mb-2 line-clamp-1">
                 {changePreview}
               </p>
             )}
 
-            <p className="text-xs italic text-muted-foreground line-clamp-1">
-              "{suggestion.evidenceQuote}"
-            </p>
+            {evidencePreview && evidencePreview.length > 0 && (
+              <Collapsible open={evidenceOpen} onOpenChange={setEvidenceOpen}>
+                <CollapsibleTrigger
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors mb-1"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <ChevronDown className={cn("h-3 w-3 transition-transform", evidenceOpen && "rotate-180")} />
+                  Evidence
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <div className="pl-4 space-y-1 mb-2">
+                    {evidencePreview.slice(0, 2).map((line, idx) => (
+                      <p key={idx} className="text-xs italic text-muted-foreground">
+                        "{line}"
+                      </p>
+                    ))}
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+            )}
+
+            {!suggestion.suggestion && (
+              <p className="text-xs italic text-muted-foreground line-clamp-1">
+                "{suggestion.evidenceQuote}"
+              </p>
+            )}
 
             {/* Warnings */}
             <div className="flex items-center gap-2 mt-2">
@@ -98,8 +151,8 @@ export function SuggestionCard({
           </div>
 
           <div className="flex flex-col gap-1">
-            <Button 
-              variant="ghost" 
+            <Button
+              variant="ghost"
               size="sm"
               onClick={onSelect}
             >
@@ -109,8 +162,8 @@ export function SuggestionCard({
             {suggestion.status === 'pending' && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button 
-                    variant="ghost" 
+                  <Button
+                    variant="ghost"
                     size="sm"
                     onClick={(e) => {
                       e.stopPropagation();
@@ -130,6 +183,3 @@ export function SuggestionCard({
     </Card>
   );
 }
-
-// Need to import Badge
-import { Badge } from '@/components/ui/badge';

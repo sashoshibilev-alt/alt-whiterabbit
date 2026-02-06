@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
+import { scrollToSection } from '@/lib/navigation';
 
 export default function InboxPage() {
   const { suggestions, initiatives, meetings, dismissSuggestion } = useShipItStore();
@@ -106,6 +107,10 @@ export default function InboxPage() {
     }
   };
 
+  const handleNavigateToSource = (sectionId: string) => {
+    scrollToSection(sectionId);
+  };
+
   return (
     <div className="h-full flex flex-col">
       {/* Health Widget */}
@@ -189,6 +194,7 @@ export default function InboxPage() {
                   isSelected={selectedSuggestionId === suggestion.id}
                   onSelect={() => setSelectedSuggestionId(suggestion.id)}
                   onQuickDismiss={() => setQuickDismissSuggestionId(suggestion.id)}
+                  onNavigateToSource={handleNavigateToSource}
                 />
               ))}
               {displayedSuggestions.length === 0 && (
