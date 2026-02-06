@@ -340,6 +340,24 @@ function generateDraftInitiative(
 // ============================================
 
 /**
+ * Imperative verbs that mark action-oriented sentences
+ */
+const IMPERATIVE_VERBS = [
+  'add', 'remove', 'update', 'change', 'introduce', 'show', 'hide', 'rename',
+  'move', 'split', 'merge', 'track', 'instrument', 'alert', 'surface',
+  'display', 'log', 'notify', 'create', 'implement', 'fix',
+];
+
+/**
+ * Check if a sentence starts with an imperative verb
+ */
+function isImperativeSentence(sentence: string): boolean {
+  const trimmed = sentence.trim();
+  const firstWord = trimmed.split(/\s+/)[0]?.toLowerCase().replace(/[^a-z]/g, '');
+  return IMPERATIVE_VERBS.includes(firstWord);
+}
+
+/**
  * Generate standalone body for idea suggestions
  * Format: problem → proposed change → purpose (if present)
  */
@@ -362,16 +380,23 @@ function generateIdeaBody(section: ClassifiedSection): string {
   }
 
   // Extract proposed change/solution
+  // Include common imperative verbs that introduce actions
   const solutionPatterns = [
-    /\b(launch|build|create|implement|develop)\s+(?:a\s+|an\s+|the\s+)?([^.!?\n]{10,150})/i,
+    /\b(add|remove|update|change|introduce|show|hide|rename|move|split|merge|track|instrument|alert|surface|display|log|notify|create|implement|fix|launch|build|develop)\s+(?:a\s+|an\s+|the\s+)?([^.!?\n]{10,150})/i,
     /\b(solution|approach|idea)\s*(?::|is|would\s+be)\s*([^.!?\n]{10,150})/i,
   ];
 
   for (const pattern of solutionPatterns) {
     const match = bodyText.match(pattern);
     if (match && match[2]) {
+      const verb = match[1].toLowerCase();
       const solution = match[2].trim();
-      parts.push(capitalizeFirst(solution));
+      // For imperative verbs (launch, build, create, etc.), include the verb
+      if (IMPERATIVE_VERBS.includes(verb)) {
+        parts.push(capitalizeFirst(verb + ' ' + solution));
+      } else {
+        parts.push(capitalizeFirst(solution));
+      }
       break;
     }
   }
@@ -390,13 +415,42 @@ function generateIdeaBody(section: ClassifiedSection): string {
     }
   }
 
-  // Fallback: extract first meaningful sentences
+  // Fallback: extract meaningful sentences, prioritizing imperatives
   if (parts.length === 0) {
     const sentences = bodyText
       .split(/[.!?]+/)
       .map(s => s.trim())
       .filter(s => s.length > 20 && s.length < 200);
-    parts.push(...sentences.slice(0, 2));
+
+    // Separate imperative and non-imperative sentences
+    const imperatives = sentences.filter(isImperativeSentence);
+    const nonImperatives = sentences.filter(s => !isImperativeSentence(s));
+
+    // Prioritize including at least one imperative if present
+    if (imperatives.length > 0) {
+      // If we have imperatives, include first non-imperative + imperative
+      if (nonImperatives.length > 0) {
+        parts.push(nonImperatives[0]);
+        parts.push(imperatives[0]);
+      } else {
+        // Only imperatives available
+        parts.push(...imperatives.slice(0, 2));
+      }
+    } else {
+      // No imperatives, use first sentences
+      parts.push(...sentences.slice(0, 2));
+    }
+  } else if (parts.length === 1) {
+    // If we only extracted one part (e.g., problem), check for imperative
+    const sentences = bodyText
+      .split(/[.!?]+/)
+      .map(s => s.trim())
+      .filter(s => s.length > 20 && s.length < 200);
+
+    const imperatives = sentences.filter(isImperativeSentence);
+    if (imperatives.length > 0) {
+      parts.push(imperatives[0]);
+    }
   }
 
   // Build body with max 300 characters
@@ -490,6 +544,7 @@ function generateProjectUpdateBody(section: ClassifiedSection): string {
 /**
  * Extract evidence previews from evidence spans
  * Returns 1-2 short quotes (max 150 chars each)
+ * Prioritizes imperative sentences when present
  */
 function extractEvidencePreviews(evidenceSpans: EvidenceSpan[]): string[] | undefined {
   if (!evidenceSpans || evidenceSpans.length === 0) {
@@ -500,12 +555,25 @@ function extractEvidencePreviews(evidenceSpans: EvidenceSpan[]): string[] | unde
 
   for (const span of evidenceSpans.slice(0, 2)) {
     if (span.text) {
-      let preview = span.text.trim();
+      const text = span.text.trim();
+      const sentences = text.split(/[.!?\n]/).map(s => s.trim()).filter(s => s.length > 20);
 
-      // Take first meaningful sentence or line
-      const firstSentence = preview.split(/[.!?\n]/)[0].trim();
-      if (firstSentence.length > 20) {
-        preview = firstSentence;
+      // Check for imperative sentences in this span
+      const imperatives = sentences.filter(isImperativeSentence);
+
+      let preview: string;
+      if (imperatives.length > 0) {
+        // Include both problem context and action if possible
+        if (sentences.length > 1 && imperatives[0] !== sentences[0]) {
+          // First sentence is non-imperative, combine with imperative
+          preview = sentences[0] + '. ' + imperatives[0];
+        } else {
+          // Just use the imperative
+          preview = imperatives[0];
+        }
+      } else {
+        // No imperatives, use first sentence
+        preview = sentences[0] || text;
       }
 
       // Truncate to 150 characters

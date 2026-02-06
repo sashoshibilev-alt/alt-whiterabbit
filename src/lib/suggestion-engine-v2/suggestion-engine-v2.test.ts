@@ -3677,4 +3677,104 @@ Shift the beta milestone from April to June.
       expect(types).toContain('project_update');
     });
   });
+
+  describe('imperative clause preservation (regression)', () => {
+    beforeEach(() => {
+      resetSectionCounter();
+      resetSuggestionCounter();
+    });
+
+    it('suggestion.body must include imperative action clause', () => {
+      // Exact repro from bug report - bullet list with problem + action
+      const note: NoteInput = {
+        note_id: 'test-imperative-regression',
+        raw_markdown: `## Error alerting
+
+- Add inline alert banners to notify users of critical errors
+- Set up error threshold monitoring for production systems
+- Configure alert routing policies for on-call teams
+`,
+      };
+
+      const result = generateSuggestions(note);
+
+      // Assert a suggestion is emitted
+      expect(result.suggestions.length).toBeGreaterThanOrEqual(1);
+      const suggestion = result.suggestions[0];
+
+      // Assert suggestion.body contains the action clause
+      expect(suggestion.suggestion?.body).toBeDefined();
+      expect(suggestion.suggestion!.body).toContain('Add inline alert');
+
+      // Assert evidencePreview contains the action clause
+      expect(suggestion.suggestion?.evidencePreview).toBeDefined();
+      const allPreviews = suggestion.suggestion!.evidencePreview!.join(' ');
+      expect(allPreviews).toContain('Add inline alert');
+    });
+
+    it('preserves imperative when problem + action are in same section', () => {
+      const note: NoteInput = {
+        note_id: 'test-imperative-multi',
+        raw_markdown: `## Error handling
+
+- Current approach loses context across service boundaries
+- Implement structured logging with correlation IDs for tracking
+- Create centralized error reporting dashboard
+`,
+      };
+
+      const result = generateSuggestions(note);
+
+      expect(result.suggestions.length).toBeGreaterThanOrEqual(1);
+      const suggestion = result.suggestions[0];
+
+      // Body should include both problem and action
+      expect(suggestion.suggestion?.body).toBeDefined();
+      expect(suggestion.suggestion!.body).toContain('Implement structured logging');
+    });
+
+    it('prioritizes imperative even when problem is longer', () => {
+      const note: NoteInput = {
+        note_id: 'test-imperative-priority',
+        raw_markdown: `## Database performance optimization
+
+- Create indexes on foreign key columns for query speedup
+- Add query result caching for frequently accessed data
+- Monitor query execution times with performance logging
+`,
+      };
+
+      const result = generateSuggestions(note);
+
+      expect(result.suggestions.length).toBeGreaterThanOrEqual(1);
+      const suggestion = result.suggestions[0];
+
+      // Action clause must be included despite longer problem statement
+      expect(suggestion.suggestion?.body).toBeDefined();
+      expect(suggestion.suggestion!.body).toContain('Create indexes');
+    });
+
+    it('handles multiple imperative sentences correctly', () => {
+      const note: NoteInput = {
+        note_id: 'test-multiple-imperatives',
+        raw_markdown: `## Security improvements
+
+- Add rate limiting to prevent API abuse and protect infrastructure
+- Implement request signing for authentication verification
+- Log all security events for audit trail
+`,
+      };
+
+      const result = generateSuggestions(note);
+
+      expect(result.suggestions.length).toBeGreaterThanOrEqual(1);
+      const suggestion = result.suggestions[0];
+
+      // Should include at least one imperative
+      expect(suggestion.suggestion?.body).toBeDefined();
+      const body = suggestion.suggestion!.body;
+      const hasImperative = body.includes('Add rate limiting') || body.includes('Implement request signing') || body.includes('Log all security');
+      expect(hasImperative).toBe(true);
+    });
+  });
 });
