@@ -144,11 +144,31 @@ export default function NoteDetailPage() {
   const appliedSuggestions = suggestions.filter((s) => s.status === "applied");
   const dismissedSuggestions = suggestions.filter((s) => s.status === "dismissed");
 
-  // Opens the initiative selection modal
-  const handleApplyClick = (suggestionId: Id<"suggestions">, content: string) => {
+  // Opens the initiative selection modal for adding to existing initiative
+  const handleAddToExistingClick = (suggestionId: Id<"suggestions">, content: string) => {
+    setApplyingSuggestionId(suggestionId);
+    setApplyingSuggestionContent(content);
+    setInitiativeTab("existing");
+    setSelectedInitiativeId("");
+    setInitiativeModalOpen(true);
+  };
+
+  // Opens the initiative creation modal
+  const handleCreateNewClick = (suggestionId: Id<"suggestions">, content: string) => {
     setApplyingSuggestionId(suggestionId);
     setApplyingSuggestionContent(content);
     // Pre-populate new initiative fields from suggestion content
+    const suggestedTitle = content.length > 60 ? content.slice(0, 60) + "..." : content;
+    setNewInitiativeTitle(suggestedTitle);
+    setNewInitiativeDescription(content);
+    setInitiativeTab("new");
+    setInitiativeModalOpen(true);
+  };
+
+  // Legacy handler for backwards compatibility (Apply anyway button)
+  const handleApplyClick = (suggestionId: Id<"suggestions">, content: string) => {
+    setApplyingSuggestionId(suggestionId);
+    setApplyingSuggestionContent(content);
     const suggestedTitle = content.length > 60 ? content.slice(0, 60) + "..." : content;
     setNewInitiativeTitle(suggestedTitle);
     setNewInitiativeDescription(content);
@@ -562,14 +582,23 @@ export default function NoteDetailPage() {
                                   Dismiss
                                 </Button>
                                 {!needsClarification && (
-                                  <Button
-                                    size="sm"
-                                    onClick={() => handleApplyClick(suggestion._id, suggestion.content)}
-                                    disabled={isProcessing}
-                                  >
-                                    <CheckCircle2 className="h-4 w-4 mr-1" />
-                                    Apply
-                                  </Button>
+                                  <>
+                                    <Button
+                                      size="sm"
+                                      onClick={() => handleAddToExistingClick(suggestion._id, suggestion.content)}
+                                      disabled={isProcessing}
+                                    >
+                                      Add to existing initiative
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="secondary"
+                                      onClick={() => handleCreateNewClick(suggestion._id, suggestion.content)}
+                                      disabled={isProcessing}
+                                    >
+                                      Create new initiative
+                                    </Button>
+                                  </>
                                 )}
                                 {(needsClarification || clarificationRequested) && (
                                   <Button
