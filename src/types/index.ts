@@ -185,7 +185,7 @@ export interface Suggestion {
   confidence: ConfidenceLevel;
   status: SuggestionStatus;
   targetInitiativeId: string | null;
-  
+
   // Proposed change details
   proposedChange: {
     field?: string;
@@ -195,13 +195,13 @@ export interface Suggestion {
     backlogTitle?: string;
     backlogDescription?: string;
   };
-  
+
   // Evidence
   evidenceQuote: string;
   speaker: Speaker;
   speakerAttributionConfidence: ConfidenceLevel;
   matchingHint?: string;
-  
+
   // Metadata
   createdAt: Date;
   appliedAt?: Date;
@@ -210,15 +210,24 @@ export interface Suggestion {
   dismissedBy?: string;
   dismissReason?: DismissReason;
   dismissReasonText?: string;
-  
+
   // Editing
   isEdited?: boolean;
   originalChange?: Suggestion['proposedChange'];
   editedChange?: Suggestion['proposedChange'];
-  
+
   // Warnings
   isNonOwnerUpdate?: boolean;
   hasConflict?: boolean;
+
+  // Suggestion context (v2 engine)
+  suggestion?: {
+    title: string;
+    body: string;
+    evidencePreview?: string[];
+    sourceSectionId: string;
+    sourceHeading: string;
+  };
 }
 
 export interface Connection {

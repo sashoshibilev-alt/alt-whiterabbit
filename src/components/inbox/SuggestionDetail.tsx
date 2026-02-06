@@ -52,6 +52,11 @@ export function SuggestionDetail({
   const currentChange = suggestion.editedChange || suggestion.proposedChange;
   const canApply = suggestion.status === 'pending' && suggestion.targetInitiativeId;
 
+  // Use suggestion context if available
+  const displayTitle = suggestion.suggestion?.title || suggestion.title;
+  const displayBody = suggestion.suggestion?.body;
+  const evidencePreview = suggestion.suggestion?.evidencePreview;
+
   const handleApply = () => {
     applySuggestion(suggestion.id, 'Current User');
     onClose();
@@ -117,7 +122,7 @@ export function SuggestionDetail({
               <StatusBadge status={suggestion.status} />
               {suggestion.isEdited && <Badge variant="outline">Edited</Badge>}
             </div>
-            <SheetTitle className="text-lg">{suggestion.title}</SheetTitle>
+            <SheetTitle className="text-lg">{displayTitle}</SheetTitle>
           </SheetHeader>
 
           {/* Warnings */}
@@ -147,36 +152,44 @@ export function SuggestionDetail({
             <CardHeader className="pb-2">
               <CardTitle className="text-sm flex items-center gap-2">
                 <FileText className="h-4 w-4" />
-                Proposed Change
+                {displayBody ? 'Description' : 'Proposed Change'}
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {suggestion.changeType === 'timeline_change' && (
-                <div className="space-y-2">
-                  <p className="text-sm text-muted-foreground">Field: {currentChange.field}</p>
-                  <div className="flex items-center gap-2 text-sm">
-                    <span className="line-through text-muted-foreground">{currentChange.before}</span>
-                    <span>→</span>
-                    <span className="font-medium text-primary">{currentChange.after}</span>
-                  </div>
-                </div>
-              )}
-              {suggestion.changeType === 'progress_update' && (
+              {displayBody ? (
                 <div className="p-3 bg-muted rounded-md">
-                  <p className="text-sm">{currentChange.commentText}</p>
+                  <p className="text-sm whitespace-pre-wrap">{displayBody}</p>
                 </div>
-              )}
-              {suggestion.changeType === 'new_idea' && (
-                <div className="space-y-2">
-                  <p className="font-medium text-sm">{currentChange.backlogTitle}</p>
-                  <p className="text-sm text-muted-foreground">{currentChange.backlogDescription}</p>
-                </div>
+              ) : (
+                <>
+                  {suggestion.changeType === 'timeline_change' && (
+                    <div className="space-y-2">
+                      <p className="text-sm text-muted-foreground">Field: {currentChange.field}</p>
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="line-through text-muted-foreground">{currentChange.before}</span>
+                        <span>→</span>
+                        <span className="font-medium text-primary">{currentChange.after}</span>
+                      </div>
+                    </div>
+                  )}
+                  {suggestion.changeType === 'progress_update' && (
+                    <div className="p-3 bg-muted rounded-md">
+                      <p className="text-sm">{currentChange.commentText}</p>
+                    </div>
+                  )}
+                  {suggestion.changeType === 'new_idea' && (
+                    <div className="space-y-2">
+                      <p className="font-medium text-sm">{currentChange.backlogTitle}</p>
+                      <p className="text-sm text-muted-foreground">{currentChange.backlogDescription}</p>
+                    </div>
+                  )}
+                </>
               )}
               {suggestion.isEdited && suggestion.originalChange && (
                 <div className="mt-3 pt-3 border-t">
                   <p className="text-xs text-muted-foreground mb-1">Original:</p>
                   <p className="text-xs text-muted-foreground line-through">
-                    {suggestion.originalChange.commentText || 
+                    {suggestion.originalChange.commentText ||
                      `${suggestion.originalChange.before} → ${suggestion.originalChange.after}` ||
                      suggestion.originalChange.backlogTitle}
                   </p>
@@ -194,9 +207,19 @@ export function SuggestionDetail({
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="p-3 bg-muted rounded-md border-l-4 border-primary">
-                <p className="text-sm italic">"{suggestion.evidenceQuote}"</p>
-              </div>
+              {evidencePreview && evidencePreview.length > 0 ? (
+                <div className="space-y-2">
+                  {evidencePreview.map((line, idx) => (
+                    <div key={idx} className="p-3 bg-muted rounded-md border-l-4 border-primary">
+                      <p className="text-sm italic">"{line}"</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-3 bg-muted rounded-md border-l-4 border-primary">
+                  <p className="text-sm italic">"{suggestion.evidenceQuote}"</p>
+                </div>
+              )}
               
               <div className="flex items-center gap-4 text-sm">
                 <div className="flex items-center gap-2">
