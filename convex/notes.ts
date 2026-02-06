@@ -102,6 +102,10 @@ export const getWithComputedSuggestions = action({
     // Run suggestion engine v2
     const result = generateSuggestionsImport(engineNote);
 
+    // Load existing decisions for this note
+    const decisions = await ctx.runQuery(api.suggestionDecisions.getByNote, { noteId: args.id });
+    const decisionMap = new Map(decisions.map(d => [d.suggestionKey, d]));
+
     // Transform engine suggestions to UI-ready format
     const uiSuggestions = result.suggestions.map((engineSug) => {
       // Map to V0Suggestion-like structure for UI compatibility
@@ -132,9 +136,16 @@ export const getWithComputedSuggestions = action({
       };
     });
 
+    // Filter out dismissed and applied suggestions based on decisions
+    const filteredSuggestions = uiSuggestions.filter((sug) => {
+      const decision = decisionMap.get(sug.suggestionKey);
+      // Only show suggestions that haven't been dismissed or applied
+      return !decision || (decision.status !== "dismissed" && decision.status !== "applied");
+    });
+
     return {
       note,
-      suggestions: uiSuggestions,
+      suggestions: filteredSuggestions,
     };
   },
 });

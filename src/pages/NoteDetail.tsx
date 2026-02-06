@@ -8,18 +8,16 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { ArrowLeft, Calendar, Clock, FileText, CheckCircle2, XCircle, Sparkles, Loader2, Target, Plus, ExternalLink, RotateCw, Trash2, Bug, Info } from "lucide-react";
+import { ArrowLeft, Calendar, Clock, FileText, CheckCircle2, XCircle, Sparkles, Loader2, Target, Plus, ExternalLink, RotateCw, Trash2, Info } from "lucide-react";
 import { SuggestionDebugPanel } from "@/components/debug/SuggestionDebugPanel";
 import { format, formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
-import { V0_DISMISS_REASON_LABELS, TIME_SAVED_OPTIONS, V0DismissReason } from "@/types";
 
 export default function NoteDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -62,6 +60,11 @@ export default function NoteDetailPage() {
   const deleteNote = useMutation(api.notes.remove);
   const requestClarification = useMutation(api.suggestions.requestClarification);
   const answerClarification = useMutation(api.suggestions.answerClarification);
+
+  // New decision-based mutations for stable persistence
+  const dismissSuggestionDecision = useMutation(api.suggestionDecisions.dismissSuggestion);
+  const applySuggestionToExisting = useMutation(api.suggestionDecisions.applySuggestionToExisting);
+  const applySuggestionCreateNew = useMutation(api.suggestionDecisions.applySuggestionCreateNew);
   
   // Track which suggestions have been marked as shown in this session
   const [shownSuggestions, setShownSuggestions] = useState<Set<string>>(new Set());
@@ -75,17 +78,12 @@ export default function NoteDetailPage() {
   const [newInitiativeTitle, setNewInitiativeTitle] = useState("");
   const [newInitiativeDescription, setNewInitiativeDescription] = useState("");
   
-  // Time saved modal state
-  const [timeSavedModalOpen, setTimeSavedModalOpen] = useState(false);
-  const [applyingEventId, setApplyingEventId] = useState<Id<"suggestionEvents"> | null>(null);
-  const [selectedTimeSaved, setSelectedTimeSaved] = useState<number | "skip">("skip");
+  // Track applied initiative for display
   const [appliedInitiativeId, setAppliedInitiativeId] = useState<Id<"v0Initiatives"> | null>(null);
   
   // Dismiss modal state
   const [dismissModalOpen, setDismissModalOpen] = useState(false);
-  const [dismissingSuggestionId, setDismissingSuggestionId] = useState<Id<"suggestions"> | null>(null);
-  const [selectedDismissReason, setSelectedDismissReason] = useState<V0DismissReason | "">("");
-  const [dismissReasonOther, setDismissReasonOther] = useState("");
+  const [dismissingSuggestionKey, setDismissingSuggestionKey] = useState<string | null>(null);
   
   const [isProcessing, setIsProcessing] = useState(false);
   const [isRegenerating, setIsRegenerating] = useState(false);
@@ -144,9 +142,13 @@ export default function NoteDetailPage() {
   const appliedSuggestions = suggestions.filter((s) => s.status === "applied");
   const dismissedSuggestions = suggestions.filter((s) => s.status === "dismissed");
 
+  // Track suggestionKey for apply flow
+  const [applyingSuggestionKey, setApplyingSuggestionKey] = useState<string | null>(null);
+
   // Opens the initiative selection modal for adding to existing initiative
-  const handleAddToExistingClick = (suggestionId: Id<"suggestions">, content: string) => {
+  const handleAddToExistingClick = (suggestionId: Id<"suggestions">, suggestionKey: string, content: string) => {
     setApplyingSuggestionId(suggestionId);
+    setApplyingSuggestionKey(suggestionKey);
     setApplyingSuggestionContent(content);
     setInitiativeTab("existing");
     setSelectedInitiativeId("");
@@ -154,8 +156,9 @@ export default function NoteDetailPage() {
   };
 
   // Opens the initiative creation modal
-  const handleCreateNewClick = (suggestionId: Id<"suggestions">, content: string) => {
+  const handleCreateNewClick = (suggestionId: Id<"suggestions">, suggestionKey: string, content: string) => {
     setApplyingSuggestionId(suggestionId);
+    setApplyingSuggestionKey(suggestionKey);
     setApplyingSuggestionContent(content);
     // Pre-populate new initiative fields from suggestion content
     const suggestedTitle = content.length > 60 ? content.slice(0, 60) + "..." : content;
@@ -166,8 +169,9 @@ export default function NoteDetailPage() {
   };
 
   // Legacy handler for backwards compatibility (Apply anyway button)
-  const handleApplyClick = (suggestionId: Id<"suggestions">, content: string) => {
+  const handleApplyClick = (suggestionId: Id<"suggestions">, suggestionKey: string, content: string) => {
     setApplyingSuggestionId(suggestionId);
+    setApplyingSuggestionKey(suggestionKey);
     setApplyingSuggestionContent(content);
     const suggestedTitle = content.length > 60 ? content.slice(0, 60) + "..." : content;
     setNewInitiativeTitle(suggestedTitle);
@@ -179,51 +183,56 @@ export default function NoteDetailPage() {
 
   // Handles the actual apply after initiative selection
   const handleInitiativeSubmit = async () => {
-    if (!applyingSuggestionId) return;
-    
+    if (!applyingSuggestionId || !applyingSuggestionKey || !id) return;
+
     setIsProcessing(true);
     try {
       if (initiativeTab === "existing" && selectedInitiativeId) {
-        // Apply to existing initiative
-        const result = await applyToInitiative({
-          id: applyingSuggestionId,
+        // Apply to existing initiative using decision persistence
+        const result = await applySuggestionToExisting({
+          noteId: id as Id<"notes">,
+          suggestionKey: applyingSuggestionKey,
           initiativeId: selectedInitiativeId as Id<"v0Initiatives">,
         });
-        setApplyingEventId(result.eventId);
         setAppliedInitiativeId(result.initiative._id);
         toast({
           title: "Suggestion applied",
           description: `Linked to initiative: ${result.initiative.title}`,
         });
       } else if (initiativeTab === "new" && newInitiativeTitle.trim()) {
-        // Create new initiative and apply
-        const result = await applyToInitiative({
-          id: applyingSuggestionId,
-          newInitiative: {
-            title: newInitiativeTitle.trim(),
-            description: newInitiativeDescription.trim(),
-          },
+        // Create new initiative and apply using decision persistence
+        const result = await applySuggestionCreateNew({
+          noteId: id as Id<"notes">,
+          suggestionKey: applyingSuggestionKey,
+          title: newInitiativeTitle.trim(),
+          description: newInitiativeDescription.trim(),
         });
-        setApplyingEventId(result.eventId);
         setAppliedInitiativeId(result.initiative._id);
         toast({
           title: "Initiative created",
           description: `New initiative "${result.initiative.title}" created and linked`,
         });
       } else {
-        // Apply without initiative (simple apply)
-        const eventId = await applySuggestion({ id: applyingSuggestionId });
-        setApplyingEventId(eventId);
-        setAppliedInitiativeId(null);
         toast({
-          title: "Suggestion applied",
-          description: "Applied without linking to an initiative",
+          title: "Error",
+          description: "Please select an initiative or provide a title for a new one",
+          variant: "destructive",
         });
+        setIsProcessing(false);
+        return;
       }
-      
-      // Close initiative modal and open time saved modal
+
+      // Close initiative modal and refetch to see updated suggestions
       setInitiativeModalOpen(false);
-      setTimeSavedModalOpen(true);
+      refetchNoteData();
+
+      // Clean up state
+      setApplyingSuggestionId(null);
+      setApplyingSuggestionKey(null);
+      setApplyingSuggestionContent("");
+      setNewInitiativeTitle("");
+      setNewInitiativeDescription("");
+      setSelectedInitiativeId("");
     } catch (error) {
       toast({
         title: "Error",
@@ -235,68 +244,28 @@ export default function NoteDetailPage() {
     }
   };
 
-  // Handle simple apply without initiative
-  const handleApplyWithoutInitiative = async () => {
-    if (!applyingSuggestionId) return;
-    
-    setIsProcessing(true);
-    try {
-      const eventId = await applySuggestion({ id: applyingSuggestionId });
-      setApplyingEventId(eventId);
-      setAppliedInitiativeId(null);
-      setInitiativeModalOpen(false);
-      setTimeSavedModalOpen(true);
-      toast({
-        title: "Suggestion applied",
-        description: "Applied without linking to an initiative",
-      });
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to apply suggestion",
-        variant: "destructive",
-      });
-    } finally {
-      setIsProcessing(false);
-    }
-  };
 
-  const handleTimeSavedSubmit = async () => {
-    if (applyingEventId && selectedTimeSaved !== "skip") {
-      await updateTimeSaved({
-        eventId: applyingEventId,
-        timeSavedMinutes: selectedTimeSaved,
-      });
-    }
-    setTimeSavedModalOpen(false);
-    setApplyingEventId(null);
-    setAppliedInitiativeId(null);
-    setSelectedTimeSaved("skip");
-    setApplyingSuggestionId(null);
-    setApplyingSuggestionContent("");
-    setNewInitiativeTitle("");
-    setNewInitiativeDescription("");
-  };
-
-  const handleDismissClick = (suggestionId: Id<"suggestions">) => {
-    setDismissingSuggestionId(suggestionId);
+  const handleDismissClick = (suggestionKey: string) => {
+    setDismissingSuggestionKey(suggestionKey);
     setDismissModalOpen(true);
   };
 
   const handleDismissSubmit = async () => {
-    if (!dismissingSuggestionId || !selectedDismissReason) return;
-    
+    if (!dismissingSuggestionKey || !id) return;
+
     setIsProcessing(true);
     try {
-      await dismissSuggestion({
-        id: dismissingSuggestionId,
-        dismissReason: selectedDismissReason,
-        dismissReasonOther: selectedDismissReason === "other" ? dismissReasonOther : undefined,
+      await dismissSuggestionDecision({
+        noteId: id as Id<"notes">,
+        suggestionKey: dismissingSuggestionKey,
       });
       toast({
         title: "Suggestion dismissed",
-        description: "Your feedback has been recorded",
+        description: "This suggestion will not appear again",
       });
+
+      // Refetch to update the UI
+      refetchNoteData();
     } catch (error) {
       toast({
         title: "Error",
@@ -305,9 +274,7 @@ export default function NoteDetailPage() {
       });
     } finally {
       setDismissModalOpen(false);
-      setDismissingSuggestionId(null);
-      setSelectedDismissReason("");
-      setDismissReasonOther("");
+      setDismissingSuggestionKey(null);
       setIsProcessing(false);
     }
   };
@@ -575,8 +542,8 @@ export default function NoteDetailPage() {
                                 <Button
                                   size="sm"
                                   variant="outline"
-                                  onClick={() => handleDismissClick(suggestion._id)}
-                                  disabled={isProcessing}
+                                  onClick={() => handleDismissClick(suggestion.suggestionKey || "")}
+                                  disabled={isProcessing || !suggestion.suggestionKey}
                                 >
                                   <XCircle className="h-4 w-4 mr-1" />
                                   Dismiss
@@ -585,16 +552,16 @@ export default function NoteDetailPage() {
                                   <>
                                     <Button
                                       size="sm"
-                                      onClick={() => handleAddToExistingClick(suggestion._id, suggestion.content)}
-                                      disabled={isProcessing}
+                                      onClick={() => handleAddToExistingClick(suggestion._id, suggestion.suggestionKey || "", suggestion.content)}
+                                      disabled={isProcessing || !suggestion.suggestionKey}
                                     >
                                       Add to existing initiative
                                     </Button>
                                     <Button
                                       size="sm"
                                       variant="secondary"
-                                      onClick={() => handleCreateNewClick(suggestion._id, suggestion.content)}
-                                      disabled={isProcessing}
+                                      onClick={() => handleCreateNewClick(suggestion._id, suggestion.suggestionKey || "", suggestion.content)}
+                                      disabled={isProcessing || !suggestion.suggestionKey}
                                     >
                                       Create new initiative
                                     </Button>
@@ -604,8 +571,8 @@ export default function NoteDetailPage() {
                                   <Button
                                     size="sm"
                                     variant="secondary"
-                                    onClick={() => handleApplyClick(suggestion._id, suggestion.content)}
-                                    disabled={isProcessing}
+                                    onClick={() => handleApplyClick(suggestion._id, suggestion.suggestionKey || "", suggestion.content)}
+                                    disabled={isProcessing || !suggestion.suggestionKey}
                                   >
                                     <CheckCircle2 className="h-4 w-4 mr-1" />
                                     Apply anyway
@@ -773,114 +740,36 @@ export default function NoteDetailPage() {
             </TabsContent>
           </Tabs>
           
-          <DialogFooter className="flex-col sm:flex-row gap-2">
-            <Button
-              variant="ghost"
-              onClick={handleApplyWithoutInitiative}
-              disabled={isProcessing}
-            >
-              Apply without initiative
-            </Button>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setInitiativeModalOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                onClick={handleInitiativeSubmit}
-                disabled={
-                  isProcessing ||
-                  (initiativeTab === "existing" && !selectedInitiativeId) ||
-                  (initiativeTab === "new" && !newInitiativeTitle.trim())
-                }
-              >
-                {isProcessing ? (
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                ) : null}
-                {initiativeTab === "new" ? "Create & Apply" : "Apply"}
-              </Button>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Time Saved Modal */}
-      <Dialog open={timeSavedModalOpen} onOpenChange={setTimeSavedModalOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>How much time did this save?</DialogTitle>
-            <DialogDescription>
-              Your feedback helps us improve suggestion quality
-            </DialogDescription>
-          </DialogHeader>
-          <div className="py-4">
-            <RadioGroup
-              value={String(selectedTimeSaved)}
-              onValueChange={(v) => setSelectedTimeSaved(v === "skip" ? "skip" : Number(v))}
-            >
-              {TIME_SAVED_OPTIONS.map((option) => (
-                <div key={option.value} className="flex items-center space-x-2">
-                  <RadioGroupItem value={String(option.value)} id={`time-${option.value}`} />
-                  <Label htmlFor={`time-${option.value}`}>{option.label}</Label>
-                </div>
-              ))}
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem value="skip" id="time-skip" />
-                <Label htmlFor="time-skip">Skip</Label>
-              </div>
-            </RadioGroup>
-          </div>
-          {appliedInitiativeId && (
-            <div className="py-2 px-4 bg-muted rounded-md mb-4">
-              <p className="text-sm text-muted-foreground">
-                Linked to initiative.{" "}
-                <Link to={`/initiatives/${appliedInitiativeId}`} className="text-primary hover:underline">
-                  View initiative →
-                </Link>
-              </p>
-            </div>
-          )}
           <DialogFooter>
-            <Button onClick={handleTimeSavedSubmit}>
-              {selectedTimeSaved === "skip" ? "Skip" : "Submit"}
+            <Button variant="outline" onClick={() => setInitiativeModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleInitiativeSubmit}
+              disabled={
+                isProcessing ||
+                (initiativeTab === "existing" && !selectedInitiativeId) ||
+                (initiativeTab === "new" && !newInitiativeTitle.trim())
+              }
+            >
+              {isProcessing ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : null}
+              {initiativeTab === "new" ? "Create & Apply" : "Apply"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Dismiss Reason Modal */}
+      {/* Dismiss Confirmation Modal */}
       <Dialog open={dismissModalOpen} onOpenChange={setDismissModalOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Why are you dismissing this?</DialogTitle>
+            <DialogTitle>Dismiss this suggestion?</DialogTitle>
             <DialogDescription>
-              Your feedback helps us improve suggestion relevance
+              This suggestion will not appear again, even if you regenerate suggestions.
             </DialogDescription>
           </DialogHeader>
-          <div className="py-4 space-y-4">
-            <RadioGroup
-              value={selectedDismissReason}
-              onValueChange={(v) => setSelectedDismissReason(v as V0DismissReason)}
-            >
-              {Object.entries(V0_DISMISS_REASON_LABELS).map(([value, label]) => (
-                <div key={value} className="flex items-center space-x-2">
-                  <RadioGroupItem value={value} id={`dismiss-${value}`} />
-                  <Label htmlFor={`dismiss-${value}`}>{label}</Label>
-                </div>
-              ))}
-            </RadioGroup>
-            
-            {selectedDismissReason === "other" && (
-              <div className="space-y-2">
-                <Label htmlFor="other-reason">Please explain</Label>
-                <Textarea
-                  id="other-reason"
-                  value={dismissReasonOther}
-                  onChange={(e) => setDismissReasonOther(e.target.value)}
-                  placeholder="Tell us more..."
-                />
-              </div>
-            )}
-          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDismissModalOpen(false)}>
               Cancel
@@ -888,12 +777,12 @@ export default function NoteDetailPage() {
             <Button
               variant="destructive"
               onClick={handleDismissSubmit}
-              disabled={!selectedDismissReason || isProcessing}
+              disabled={isProcessing}
             >
               {isProcessing ? (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               ) : null}
-              Dismiss
+              Confirm Dismiss
             </Button>
           </DialogFooter>
         </DialogContent>
