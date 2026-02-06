@@ -40,7 +40,6 @@ export enum DropReason {
   TYPE_LOW_CONFIDENCE = "TYPE_LOW_CONFIDENCE",
   SYNTHESIS_FAILED = "SYNTHESIS_FAILED",
   EVIDENCE_NOT_LOCATABLE = "EVIDENCE_NOT_LOCATABLE",
-  VALIDATION_V1_CHANGE_TEST_FAILED = "VALIDATION_V1_CHANGE_TEST_FAILED",
   VALIDATION_V2_TOO_GENERIC = "VALIDATION_V2_TOO_GENERIC",
   VALIDATION_V3_EVIDENCE_TOO_WEAK = "VALIDATION_V3_EVIDENCE_TOO_WEAK",
   SCORE_BELOW_THRESHOLD = "SCORE_BELOW_THRESHOLD",
@@ -51,10 +50,9 @@ export enum DropReason {
 /**
  * Non-blocking drop reasons: these are informational only and should NOT
  * appear in "Top reasons" or cause suggestions to be marked as dropped.
- * V1 Change-Test is non-blocking in the v2 pipeline (see decision-log.md).
+ * Kept as empty set for extensibility.
  */
 export const NON_BLOCKING_DROP_REASONS: ReadonlySet<DropReason> = new Set([
-  DropReason.VALIDATION_V1_CHANGE_TEST_FAILED,
 ]);
 
 /**
@@ -66,7 +64,6 @@ export const DROP_REASON_STAGE: Record<DropReason, DropStage> = {
   [DropReason.TYPE_LOW_CONFIDENCE]: DropStage.TYPE,
   [DropReason.SYNTHESIS_FAILED]: DropStage.SYNTHESIS,
   [DropReason.EVIDENCE_NOT_LOCATABLE]: DropStage.EVIDENCE,
-  [DropReason.VALIDATION_V1_CHANGE_TEST_FAILED]: DropStage.VALIDATION,
   [DropReason.VALIDATION_V2_TOO_GENERIC]: DropStage.VALIDATION,
   [DropReason.VALIDATION_V3_EVIDENCE_TOO_WEAK]: DropStage.VALIDATION,
   [DropReason.SCORE_BELOW_THRESHOLD]: DropStage.THRESHOLD,
@@ -94,7 +91,6 @@ export interface ThresholdsUsed {
  * Validation model configuration
  */
 export interface ValidationModelsConfig {
-  v1: string;
   v2: string;
   v3: string;
 }
@@ -140,10 +136,10 @@ export interface StructuralFeaturesSummary {
 }
 
 /**
- * Result from a single validator (V1/V2/V3)
+ * Result from a single validator (V2/V3)
  */
 export interface ValidatorResult {
-  name: "V1_CHANGE_TEST" | "V2_GENERICITY" | "V3_EVIDENCE" | string;
+  name: "V2_GENERICITY" | "V3_EVIDENCE" | string;
   passed: boolean;
   score?: number;
   reason?: string;
@@ -266,7 +262,6 @@ export interface SectionDebug {
   evidenceSummary?: EvidenceDebug;
 
   validatorSummary?: {
-    v1?: ValidatorResult;
     v2?: ValidatorResult;
     v3?: ValidatorResult;
   };

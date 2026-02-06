@@ -117,7 +117,7 @@ export interface IntentClassification {
 /**
  * Section type classification
  */
-export type SectionType = 'plan_mutation' | 'execution_artifact' | 'feature_request' | 'non_actionable';
+export type SectionType = 'idea' | 'project_update' | 'non_actionable';
 
 /**
  * Classified section with actionability determination
@@ -132,8 +132,8 @@ export interface ClassifiedSection extends Section {
   out_of_scope_signal?: number;
   suggested_type?: SectionType;
   type_confidence?: number;
-  /** Type label for validator behavior: feature_request | execution_artifact | plan_mutation */
-  typeLabel?: 'feature_request' | 'execution_artifact' | 'plan_mutation';
+  /** Type label for validator behavior: idea | project_update */
+  typeLabel?: 'idea' | 'project_update';
 }
 
 // ============================================
@@ -156,7 +156,7 @@ export interface EvidenceSpan {
 /**
  * Suggestion type enum
  */
-export type SuggestionType = 'plan_mutation' | 'execution_artifact' | 'feature_request';
+export type SuggestionType = 'idea' | 'project_update';
 
 /**
  * Plan mutation payload
@@ -212,7 +212,7 @@ export interface SuggestionRouting {
  */
 export interface ValidationResult {
   passed: boolean;
-  validator: 'V1_change_test' | 'V2_anti_vacuity' | 'V3_evidence_sanity';
+  validator: 'V2_anti_vacuity' | 'V3_evidence_sanity';
   reason?: string;
 }
 
@@ -239,8 +239,8 @@ export interface Suggestion {
   evidence_spans: EvidenceSpan[];
   scores: SuggestionScores;
   routing: SuggestionRouting;
-  // Structural hint distinguishing prose feature requests from task-based artifacts
-  structural_hint?: 'feature_request' | 'execution_artifact' | 'plan_mutation';
+  // Structural hint: idea (new work) or project_update (plan change)
+  structural_hint?: 'idea' | 'project_update';
   // Clarification flags (per suggestion-suppression-fix plan)
   needs_clarification?: boolean;
   clarification_reasons?: ClarificationReason[];
@@ -315,7 +315,6 @@ export interface GeneratorDebugInfo {
   sections_count: number;
   actionable_sections_count: number;
   suggestions_before_validation: number;
-  v1_drops: number;
   v2_drops: number;
   v3_drops: number;
   suggestions_after_validation: number;

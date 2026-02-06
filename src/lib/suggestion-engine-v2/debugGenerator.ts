@@ -196,7 +196,7 @@ export function generateSuggestionsWithDebug(
           suggestion_id: `fallback_${section.section_id}_${Date.now()}`,
           note_id: section.note_id,
           section_id: section.section_id,
-          type: 'plan_mutation',
+          type: 'project_update',
           title: section.heading_text 
             ? `Review: ${section.heading_text}` 
             : 'Review plan change',
@@ -344,14 +344,14 @@ export function generateSuggestionsWithDebug(
       }
 
       // Record dropped suggestions
-      // PLAN_CHANGE PROTECTION: Never drop plan_mutation at THRESHOLD
+      // PLAN_CHANGE PROTECTION: Never drop project_update at THRESHOLD
       for (const dropped of scoringResult.dropped) {
         const { suggestion } = dropped;
         
-        // Never treat plan_change / plan_mutation as score-based drops
-        if (suggestion.type === 'plan_mutation') {
+        // Never treat plan_change / project_update as score-based drops
+        if (suggestion.type === 'project_update') {
           // Log an invariant violation, since scoring.ts should already
-          // prevent plan_mutation from entering `dropped`.
+          // prevent project_update from entering `dropped`.
           console.error('[PLAN_CHANGE_THRESHOLD_INVARIANT_VIOLATION]', {
             noteId: note.note_id,
             suggestionId: suggestion.suggestion_id,
@@ -427,8 +427,8 @@ export function generateSuggestionsWithDebug(
       // Check plan_change invariant
       const planChangeCandidates = debugRun.sections
         .flatMap(sec => sec.candidates)
-        .filter(c => c.metadata?.type === 'plan_mutation');
-      const planChangeSuggestions = finalSuggestions.filter(s => s.type === 'plan_mutation');
+        .filter(c => c.metadata?.type === 'project_update');
+      const planChangeSuggestions = finalSuggestions.filter(s => s.type === 'project_update');
       
       if (planChangeCandidates.length > 0 && planChangeSuggestions.length === 0) {
         console.error('[PLAN_CHANGE_INVARIANT_VIOLATION]', {
@@ -477,8 +477,6 @@ function buildResult(
  */
 function mapValidatorToDropReason(validator?: string): DropReason {
   switch (validator) {
-    case "V1_change_test":
-      return DropReason.VALIDATION_V1_CHANGE_TEST_FAILED;
     case "V2_anti_vacuity":
       return DropReason.VALIDATION_V2_TOO_GENERIC;
     case "V3_evidence_sanity":

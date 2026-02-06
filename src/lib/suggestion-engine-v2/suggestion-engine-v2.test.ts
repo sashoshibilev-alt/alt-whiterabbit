@@ -214,9 +214,9 @@ describe('Classification', () => {
 
     expect(actionable.length).toBeGreaterThan(0);
 
-    // At least one section should be classified as execution_artifact
+    // At least one section should be classified as idea
     const artifactSections = actionable.filter(
-      (s) => s.suggested_type === 'execution_artifact'
+      (s) => s.suggested_type === 'idea'
     );
     expect(artifactSections.length).toBeGreaterThan(0);
 
@@ -272,7 +272,7 @@ describe('Synthesis', () => {
     const actionable = filterActionableSections(classified);
     const suggestions = synthesizeSuggestions(actionable);
 
-    const planSuggestions = suggestions.filter((s) => s.type === 'plan_mutation');
+    const planSuggestions = suggestions.filter((s) => s.type === 'project_update');
 
     for (const suggestion of planSuggestions) {
       expect(suggestion.title).toMatch(/adjust|change|update|plan/i);
@@ -286,7 +286,7 @@ describe('Synthesis', () => {
     const suggestions = synthesizeSuggestions(actionable);
 
     const artifactSuggestions = suggestions.filter(
-      (s) => s.type === 'execution_artifact'
+      (s) => s.type === 'idea'
     );
 
     for (const suggestion of artifactSuggestions) {
@@ -884,7 +884,7 @@ describe('Actionability Gate v3 - Required Test Cases', () => {
 describe('Suggestion Suppression Fix', () => {
   // Helper to create test suggestions
   const createTestSuggestion = (
-    type: 'plan_mutation' | 'execution_artifact',
+    type: 'project_update' | 'idea',
     sectionActionability: number,
     overall: number
   ): Suggestion => ({
@@ -905,73 +905,73 @@ describe('Suggestion Suppression Fix', () => {
   });
 
   describe('isPlanChangeSuggestion', () => {
-    it('should identify plan_mutation as plan change', () => {
-      const suggestion = createTestSuggestion('plan_mutation', 0.7, 0.7);
+    it('should identify project_update as plan change', () => {
+      const suggestion = createTestSuggestion('project_update', 0.7, 0.7);
       expect(isPlanChangeSuggestion(suggestion)).toBe(true);
     });
 
-    it('should NOT identify execution_artifact as plan change', () => {
-      const suggestion = createTestSuggestion('execution_artifact', 0.7, 0.7);
+    it('should NOT identify idea as plan change', () => {
+      const suggestion = createTestSuggestion('idea', 0.7, 0.7);
       expect(isPlanChangeSuggestion(suggestion)).toBe(false);
     });
   });
 
   describe('isHighConfidence', () => {
     it('should return true when both scores pass thresholds', () => {
-      const suggestion = createTestSuggestion('plan_mutation', 0.7, 0.7);
+      const suggestion = createTestSuggestion('project_update', 0.7, 0.7);
       expect(isHighConfidence(suggestion, DEFAULT_THRESHOLDS)).toBe(true);
     });
 
     it('should return false when actionability is below threshold', () => {
-      const suggestion = createTestSuggestion('plan_mutation', 0.4, 0.7);
+      const suggestion = createTestSuggestion('project_update', 0.4, 0.7);
       expect(isHighConfidence(suggestion, DEFAULT_THRESHOLDS)).toBe(false);
     });
 
     it('should return false when overall is below threshold', () => {
-      const suggestion = createTestSuggestion('plan_mutation', 0.7, 0.5);
+      const suggestion = createTestSuggestion('project_update', 0.7, 0.5);
       expect(isHighConfidence(suggestion, DEFAULT_THRESHOLDS)).toBe(false);
     });
 
     it('should return false when both scores are below thresholds', () => {
-      const suggestion = createTestSuggestion('plan_mutation', 0.4, 0.5);
+      const suggestion = createTestSuggestion('project_update', 0.4, 0.5);
       expect(isHighConfidence(suggestion, DEFAULT_THRESHOLDS)).toBe(false);
     });
   });
 
   describe('computeClarificationReasons', () => {
     it('should return low_actionability_score when section_actionability is below threshold', () => {
-      const suggestion = createTestSuggestion('plan_mutation', 0.4, 0.7);
+      const suggestion = createTestSuggestion('project_update', 0.4, 0.7);
       const reasons = computeClarificationReasons(suggestion, DEFAULT_THRESHOLDS);
       expect(reasons).toContain('low_actionability_score');
       expect(reasons).not.toContain('low_overall_score');
     });
 
     it('should return low_overall_score when overall is below threshold', () => {
-      const suggestion = createTestSuggestion('plan_mutation', 0.7, 0.5);
+      const suggestion = createTestSuggestion('project_update', 0.7, 0.5);
       const reasons = computeClarificationReasons(suggestion, DEFAULT_THRESHOLDS);
       expect(reasons).not.toContain('low_actionability_score');
       expect(reasons).toContain('low_overall_score');
     });
 
     it('should return both reasons when both scores are below thresholds', () => {
-      const suggestion = createTestSuggestion('plan_mutation', 0.4, 0.5);
+      const suggestion = createTestSuggestion('project_update', 0.4, 0.5);
       const reasons = computeClarificationReasons(suggestion, DEFAULT_THRESHOLDS);
       expect(reasons).toContain('low_actionability_score');
       expect(reasons).toContain('low_overall_score');
     });
 
     it('should return empty array when both scores pass', () => {
-      const suggestion = createTestSuggestion('plan_mutation', 0.7, 0.7);
+      const suggestion = createTestSuggestion('project_update', 0.7, 0.7);
       const reasons = computeClarificationReasons(suggestion, DEFAULT_THRESHOLDS);
       expect(reasons).toHaveLength(0);
     });
   });
 
   describe('applyConfidenceBasedProcessing', () => {
-    describe('Case A: execution_artifact suggestions', () => {
-      it('should DROP execution_artifact with low scores', () => {
+    describe('Case A: idea suggestions', () => {
+      it('should DROP idea with low scores', () => {
         const suggestions = [
-          createTestSuggestion('execution_artifact', 0.4, 0.5),
+          createTestSuggestion('idea', 0.4, 0.5),
         ];
 
         const result = applyConfidenceBasedProcessing(suggestions, DEFAULT_THRESHOLDS);
@@ -981,9 +981,9 @@ describe('Suggestion Suppression Fix', () => {
         expect(result.dropped[0].reason).toContain('score');
       });
 
-      it('should KEEP execution_artifact with high scores', () => {
+      it('should KEEP idea with high scores', () => {
         const suggestions = [
-          createTestSuggestion('execution_artifact', 0.7, 0.7),
+          createTestSuggestion('idea', 0.7, 0.7),
         ];
 
         const result = applyConfidenceBasedProcessing(suggestions, DEFAULT_THRESHOLDS);
@@ -994,10 +994,10 @@ describe('Suggestion Suppression Fix', () => {
       });
     });
 
-    describe('Case B: high confidence plan_mutation', () => {
-      it('should KEEP plan_mutation with high scores and NOT require clarification', () => {
+    describe('Case B: high confidence project_update', () => {
+      it('should KEEP project_update with high scores and NOT require clarification', () => {
         const suggestions = [
-          createTestSuggestion('plan_mutation', 0.7, 0.7),
+          createTestSuggestion('project_update', 0.7, 0.7),
         ];
 
         const result = applyConfidenceBasedProcessing(suggestions, DEFAULT_THRESHOLDS);
@@ -1010,10 +1010,10 @@ describe('Suggestion Suppression Fix', () => {
       });
     });
 
-    describe('Case C: low confidence plan_mutation', () => {
-      it('should KEEP plan_mutation with low actionability and require clarification', () => {
+    describe('Case C: low confidence project_update', () => {
+      it('should KEEP project_update with low actionability and require clarification', () => {
         const suggestions = [
-          createTestSuggestion('plan_mutation', 0.4, 0.7),
+          createTestSuggestion('project_update', 0.4, 0.7),
         ];
 
         const result = applyConfidenceBasedProcessing(suggestions, DEFAULT_THRESHOLDS);
@@ -1026,9 +1026,9 @@ describe('Suggestion Suppression Fix', () => {
         expect(result.downgraded).toBe(1);
       });
 
-      it('should KEEP plan_mutation with low overall and require clarification', () => {
+      it('should KEEP project_update with low overall and require clarification', () => {
         const suggestions = [
-          createTestSuggestion('plan_mutation', 0.7, 0.5),
+          createTestSuggestion('project_update', 0.7, 0.5),
         ];
 
         const result = applyConfidenceBasedProcessing(suggestions, DEFAULT_THRESHOLDS);
@@ -1041,9 +1041,9 @@ describe('Suggestion Suppression Fix', () => {
         expect(result.downgraded).toBe(1);
       });
 
-      it('should KEEP plan_mutation with both scores low and require clarification with both reasons', () => {
+      it('should KEEP project_update with both scores low and require clarification with both reasons', () => {
         const suggestions = [
-          createTestSuggestion('plan_mutation', 0.3, 0.3),
+          createTestSuggestion('project_update', 0.3, 0.3),
         ];
 
         const result = applyConfidenceBasedProcessing(suggestions, DEFAULT_THRESHOLDS);
@@ -1058,18 +1058,18 @@ describe('Suggestion Suppression Fix', () => {
       });
     });
 
-    describe('INVARIANT: plan_mutation suggestions are NEVER dropped', () => {
-      it('should NEVER drop plan_mutation regardless of scores', () => {
+    describe('INVARIANT: project_update suggestions are NEVER dropped', () => {
+      it('should NEVER drop project_update regardless of scores', () => {
         const suggestions = [
-          createTestSuggestion('plan_mutation', 0.1, 0.1),
-          createTestSuggestion('plan_mutation', 0.2, 0.2),
-          createTestSuggestion('plan_mutation', 0.3, 0.3),
-          createTestSuggestion('plan_mutation', 0.0, 0.0),
+          createTestSuggestion('project_update', 0.1, 0.1),
+          createTestSuggestion('project_update', 0.2, 0.2),
+          createTestSuggestion('project_update', 0.3, 0.3),
+          createTestSuggestion('project_update', 0.0, 0.0),
         ];
 
         const result = applyConfidenceBasedProcessing(suggestions, DEFAULT_THRESHOLDS);
 
-        // ALL plan_mutation suggestions must be kept
+        // ALL project_update suggestions must be kept
         expect(result.passed).toHaveLength(4);
         expect(result.dropped).toHaveLength(0);
         
@@ -1080,9 +1080,9 @@ describe('Suggestion Suppression Fix', () => {
         }
       });
 
-      it('should vary threshold and verify plan_mutation count never changes', () => {
+      it('should vary threshold and verify project_update count never changes', () => {
         const suggestions = [
-          createTestSuggestion('plan_mutation', 0.5, 0.5),
+          createTestSuggestion('project_update', 0.5, 0.5),
         ];
 
         // Low thresholds - should pass
@@ -1108,24 +1108,24 @@ describe('Suggestion Suppression Fix', () => {
     });
 
     describe('Mixed suggestions', () => {
-      it('should handle mixed plan_mutation and execution_artifact correctly', () => {
+      it('should handle mixed project_update and idea correctly', () => {
         const suggestions = [
-          createTestSuggestion('plan_mutation', 0.7, 0.7),     // High conf plan - keep
-          createTestSuggestion('plan_mutation', 0.3, 0.3),     // Low conf plan - keep with clarification
-          createTestSuggestion('execution_artifact', 0.7, 0.7), // High conf artifact - keep
-          createTestSuggestion('execution_artifact', 0.3, 0.3), // Low conf artifact - drop
+          createTestSuggestion('project_update', 0.7, 0.7),     // High conf plan - keep
+          createTestSuggestion('project_update', 0.3, 0.3),     // Low conf plan - keep with clarification
+          createTestSuggestion('idea', 0.7, 0.7), // High conf artifact - keep
+          createTestSuggestion('idea', 0.3, 0.3), // Low conf artifact - drop
         ];
 
         const result = applyConfidenceBasedProcessing(suggestions, DEFAULT_THRESHOLDS);
 
-        // 3 passed (2 plan_mutation + 1 execution_artifact)
+        // 3 passed (2 project_update + 1 idea)
         expect(result.passed).toHaveLength(3);
         
-        // 1 dropped (low conf execution_artifact)
+        // 1 dropped (low conf idea)
         expect(result.dropped).toHaveLength(1);
-        expect(result.dropped[0].suggestion.type).toBe('execution_artifact');
+        expect(result.dropped[0].suggestion.type).toBe('idea');
         
-        // 1 downgraded (low conf plan_mutation)
+        // 1 downgraded (low conf project_update)
         expect(result.downgraded).toBe(1);
       });
     });
@@ -1153,7 +1153,7 @@ describe('Suggestion Suppression Fix', () => {
       expect(result.debug!.invariant_plan_change_always_emitted).toBe(true);
     });
 
-    it('should set needs_clarification and clarification_reasons on low-confidence plan_mutation suggestions', () => {
+    it('should set needs_clarification and clarification_reasons on low-confidence project_update suggestions', () => {
       // Use low thresholds to make suggestions pass, then high thresholds to trigger clarification
       const highThresholdConfig: Partial<GeneratorConfig> = {
         enable_debug: true,
@@ -1166,8 +1166,8 @@ describe('Suggestion Suppression Fix', () => {
 
       const result = generateSuggestions(PLAN_MUTATION_NOTE, {}, highThresholdConfig);
 
-      // If there are plan_mutation suggestions, they should have clarification set
-      const planMutationSuggestions = result.suggestions.filter(s => s.type === 'plan_mutation');
+      // If there are project_update suggestions, they should have clarification set
+      const planMutationSuggestions = result.suggestions.filter(s => s.type === 'project_update');
       
       for (const suggestion of planMutationSuggestions) {
         // With high thresholds, most should need clarification
@@ -1839,10 +1839,10 @@ Narrow the scope of the onboarding initiative to focus on self-serve users only.
         enable_debug: true,
       });
 
-      // Should have at least one suggestion for plan_mutation
+      // Should have at least one suggestion for project_update
       expect(result.suggestions.length).toBeGreaterThan(0);
       
-      const planMutationSuggestions = result.suggestions.filter(s => s.type === 'plan_mutation');
+      const planMutationSuggestions = result.suggestions.filter(s => s.type === 'project_update');
       expect(planMutationSuggestions.length).toBeGreaterThan(0);
 
       // Check debug invariant
@@ -1914,7 +1914,7 @@ Not entirely sure yet but worth discussing.
       });
 
       // Should still have suggestions (not dropped)
-      const planMutationSuggestions = result.suggestions.filter(s => s.type === 'plan_mutation');
+      const planMutationSuggestions = result.suggestions.filter(s => s.type === 'project_update');
       
       if (planMutationSuggestions.length > 0) {
         // If low confidence, should have needs_clarification flag
@@ -1959,7 +1959,7 @@ Shift priorities.
         planChangeSections.forEach(sec => {
           const hasProtection = sec.is_actionable || 
                                 sec.actionability_reason?.includes('plan_change') ||
-                                sec.suggested_type === 'plan_mutation';
+                                sec.suggested_type === 'project_update';
           expect(hasProtection).toBeTruthy();
         });
       }
@@ -1993,7 +1993,7 @@ Need to think more about this.
       });
 
       const lowConfPlanSuggestions = result.suggestions.filter(
-        s => s.type === 'plan_mutation' && !s.is_high_confidence
+        s => s.type === 'project_update' && !s.is_high_confidence
       );
 
       if (lowConfPlanSuggestions.length > 0) {
@@ -2057,7 +2057,7 @@ Timeline:
       // INVARIANT 2: If plan_change candidates exist, at least one suggestion must be emitted
       if (result.debug && result.debug.plan_change_count > 0) {
         expect(result.debug.plan_change_emitted_count).toBeGreaterThan(0);
-        expect(result.suggestions.filter(s => s.type === 'plan_mutation').length).toBeGreaterThan(0);
+        expect(result.suggestions.filter(s => s.type === 'project_update').length).toBeGreaterThan(0);
       }
 
       // This note should definitely produce suggestions (plan_change content)
@@ -2101,8 +2101,8 @@ Shift priorities for Q2.
         expect(sec.actionability_reason).not.toContain('Action signal too low');
         expect(sec.actionability_reason).not.toContain('Type classification: non-actionable');
         
-        // INVARIANT: must have a suggested_type (forced to plan_mutation)
-        expect(sec.suggested_type).toBe('plan_mutation');
+        // INVARIANT: must have a suggested_type (forced to project_update)
+        expect(sec.suggested_type).toBe('project_update');
       }
     });
 
@@ -2136,9 +2136,9 @@ Narrow our focus from three workstreams to one priority: self-serve onboarding.
         // INVARIANT: at least one suggestion must be generated
         expect(result.suggestions.length).toBeGreaterThanOrEqual(1);
         
-        // INVARIANT: at least one plan_mutation suggestion must be present
+        // INVARIANT: at least one project_update suggestion must be present
         const planMutationSuggestions = result.suggestions.filter(s => 
-          s.type === 'plan_mutation'
+          s.type === 'project_update'
         );
         expect(planMutationSuggestions.length).toBeGreaterThanOrEqual(1);
       }
@@ -2151,7 +2151,7 @@ Narrow our focus from three workstreams to one priority: self-serve onboarding.
       const testSuggestions: any[] = [
         {
           suggestion_id: 'test-plan-1',
-          type: 'plan_mutation',
+          type: 'project_update',
           section_id: 'sec-1',
           scores: {
             section_actionability: 0.2,
@@ -2162,7 +2162,7 @@ Narrow our focus from three workstreams to one priority: self-serve onboarding.
         },
         {
           suggestion_id: 'test-plan-2',
-          type: 'plan_mutation',
+          type: 'project_update',
           section_id: 'sec-2',
           scores: {
             section_actionability: 0.1,
@@ -2178,7 +2178,7 @@ Narrow our focus from three workstreams to one priority: self-serve onboarding.
         DEFAULT_THRESHOLDS
       );
 
-      // INVARIANT: All plan_mutation suggestions must pass (none dropped)
+      // INVARIANT: All project_update suggestions must pass (none dropped)
       expect(passed.length).toBe(testSuggestions.length);
       expect(dropped.length).toBe(0);
 
@@ -2193,12 +2193,12 @@ Narrow our focus from three workstreams to one priority: self-serve onboarding.
       });
     });
 
-    it('allows execution_artifact to be dropped at THRESHOLD', () => {
+    it('allows idea to be dropped at THRESHOLD', () => {
       // Verify that non-plan_change suggestions can still be dropped
       const testSuggestions: any[] = [
         {
           suggestion_id: 'test-artifact-1',
-          type: 'execution_artifact',
+          type: 'idea',
           section_id: 'sec-1',
           scores: {
             section_actionability: 0.1,
@@ -2320,9 +2320,9 @@ This will reduce time-to-value from 2 weeks to 2 days.
           expect(sec.dropReason).toBeNull();
         });
 
-        // INVARIANT: Final suggestions must include plan_mutation types
+        // INVARIANT: Final suggestions must include project_update types
         const planMutationSuggestions = result.suggestions.filter(s =>
-          s.type === 'plan_mutation'
+          s.type === 'project_update'
         );
         expect(planMutationSuggestions.length).toBeGreaterThan(0);
       }
@@ -2365,8 +2365,8 @@ I would really like you to add boundary detection in onboarding
       // Verify intentLabel is new_workstream
       expect(section.intent.new_workstream).toBeGreaterThan(section.intent.plan_change);
 
-      // Verify typeLabel is feature_request
-      expect(section.typeLabel).toBe('feature_request');
+      // Verify typeLabel is idea
+      expect(section.typeLabel).toBe('idea');
 
       // Verify V3 passes (no V3 drops)
       expect(result.debugRun).toBeDefined();
@@ -2384,7 +2384,7 @@ I would really like you to add boundary detection in onboarding
         note_id: 'test-thin-initiative',
         raw_markdown: `# Ideas
 
-New initiative: Improve onboarding
+New idea: Improve onboarding
 `,
       };
 
@@ -2395,7 +2395,7 @@ New initiative: Improve onboarding
         { verbosity: 'REDACTED' }
       );
 
-      // Should classify as execution_artifact (not feature_request)
+      // Should classify as idea (not idea)
       const { sections } = preprocessNote(note);
       const classifiedSections = classifySections(sections, DEFAULT_THRESHOLDS);
       const actionableSections = filterActionableSections(classifiedSections);
@@ -2403,8 +2403,8 @@ New initiative: Improve onboarding
       if (actionableSections.length > 0) {
         const section = actionableSections[0];
 
-        // Should be execution_artifact, not feature_request
-        expect(section.typeLabel).toBe('execution_artifact');
+        // Should be idea, not idea
+        expect(section.typeLabel).toBe('idea');
       }
 
       // Thin initiative without structure should fail V3 or produce low-quality suggestion
@@ -2461,7 +2461,7 @@ Move launch to next week
 
       // Plan change behavior unchanged: should always emit
       expect(result.suggestions.length).toBeGreaterThan(0);
-      expect(result.suggestions[0].type).toBe('plan_mutation');
+      expect(result.suggestions[0].type).toBe('project_update');
     });
   });
 
@@ -2516,7 +2516,7 @@ The analytics dashboard is now P0 instead of P1.
 
       expect(isPlanChangeIntentLabel(timelineSection!.intent)).toBe(true);
 
-      // Onboarding feedback should be actionable (new_workstream or feature_request)
+      // Onboarding feedback should be actionable (new_workstream or idea)
       const onboardingSection = classified.find((s) =>
         s.heading_text?.includes('Onboarding feedback')
       );
@@ -2532,8 +2532,8 @@ The analytics dashboard is now P0 instead of P1.
       // Should produce multiple suggestions (not just 1)
       expect(suggestions.length).toBeGreaterThan(1);
 
-      // Timeline change should produce plan_mutation
-      const planMutations = suggestions.filter((s) => s.type === 'plan_mutation');
+      // Timeline change should produce project_update
+      const planMutations = suggestions.filter((s) => s.type === 'project_update');
       expect(planMutations.length).toBeGreaterThan(0);
     });
 
@@ -2701,24 +2701,24 @@ Execution follow-up
     expect(execution!.is_actionable).toBe(true);
   });
 
-  it('plan_mutation only for plan_change sections', () => {
+  it('project_update only for plan_change sections', () => {
     const { sections } = preprocessNote(FP3_NOTE);
     const classified = classifySections(sections, DEFAULT_THRESHOLDS);
 
     for (const section of classified) {
-      if (section.suggested_type === 'plan_mutation') {
+      if (section.suggested_type === 'project_update') {
         expect(isPlanChangeIntentLabel(section.intent)).toBe(true);
       }
     }
 
-    // Dashboard and Execution follow-up should NOT be plan_mutation
+    // Dashboard and Execution follow-up should NOT be project_update
     const dashboard = classified.find(s => s.heading_text === 'Dashboard improvements');
     const execution = classified.find(s => s.heading_text === 'Execution follow-up');
     if (dashboard?.suggested_type) {
-      expect(dashboard.suggested_type).not.toBe('plan_mutation');
+      expect(dashboard.suggested_type).not.toBe('project_update');
     }
     if (execution?.suggested_type) {
-      expect(execution.suggested_type).not.toBe('plan_mutation');
+      expect(execution.suggested_type).not.toBe('project_update');
     }
   });
 });
@@ -2800,7 +2800,7 @@ We need to shift the launch from March to April due to resourcing.
     expect(timeline).toBeDefined();
     expect(timeline!.is_actionable).toBe(true);
     expect(isPlanChangeIntentLabel(timeline!.intent)).toBe(true);
-    expect(timeline!.suggested_type).toBe('plan_mutation');
+    expect(timeline!.suggested_type).toBe('project_update');
   });
 
   it('status_informational retro section stays non-actionable', () => {
@@ -2813,7 +2813,7 @@ We need to shift the launch from March to April due to resourcing.
   });
 });
 
-describe('Feature request vs execution_artifact typing', () => {
+describe('Feature request vs idea typing', () => {
   beforeEach(() => {
     resetSectionCounter();
     resetSuggestionCounter();
@@ -2839,34 +2839,34 @@ Right now everything is on by default and the feedback is consistently negative.
 `,
   };
 
-  it('prose request without bullets becomes feature_request', () => {
+  it('prose request without bullets becomes idea', () => {
     const { sections } = preprocessNote(FEATURE_REQUEST_NOTE);
     const classified = classifySections(sections, DEFAULT_THRESHOLDS);
 
     const boundary = classified.find(s => s.heading_text === 'Boundary detection');
     expect(boundary).toBeDefined();
     expect(boundary!.is_actionable).toBe(true);
-    expect(boundary!.typeLabel).toBe('feature_request');
+    expect(boundary!.typeLabel).toBe('idea');
   });
 
-  it('multi-line prose request with hedged directive becomes feature_request', () => {
+  it('multi-line prose request with hedged directive becomes idea', () => {
     const { sections } = preprocessNote(FEATURE_REQUEST_NOTE);
     const classified = classifySections(sections, DEFAULT_THRESHOLDS);
 
     const notifications = classified.find(s => s.heading_text === 'Notification preferences');
     expect(notifications).toBeDefined();
     expect(notifications!.is_actionable).toBe(true);
-    expect(notifications!.typeLabel).toBe('feature_request');
+    expect(notifications!.typeLabel).toBe('idea');
   });
 
-  it('bullet-based task list remains execution_artifact', () => {
+  it('bullet-based task list remains idea', () => {
     const { sections } = preprocessNote(FEATURE_REQUEST_NOTE);
     const classified = classifySections(sections, DEFAULT_THRESHOLDS);
 
     const monitoring = classified.find(s => s.heading_text === 'Monitoring setup');
     expect(monitoring).toBeDefined();
     if (monitoring!.typeLabel) {
-      expect(monitoring!.typeLabel).toBe('execution_artifact');
+      expect(monitoring!.typeLabel).toBe('idea');
     }
   });
 });
@@ -3064,7 +3064,7 @@ We should send the invoice by Friday and schedule the meeting for next week.
   });
 
   describe('Feature request typing from section body', () => {
-    it('body-based request with bulletCount=0 is typed as feature_request', () => {
+    it('body-based request with bulletCount=0 is typed as idea', () => {
       const note: NoteInput = {
         note_id: 'test-body-feature-request',
         raw_markdown: `## Onboarding feedback
@@ -3087,11 +3087,11 @@ We need to add boundary detection in the onboarding flow. Users are confused abo
       // Bullet count should be 0 (no bullets)
       expect(section.structural_features.num_list_items).toBe(0);
 
-      // Should be typed as feature_request (not execution_artifact)
-      expect(section.typeLabel).toBe('feature_request');
+      // Should be typed as idea (not idea)
+      expect(section.typeLabel).toBe('idea');
     });
 
-    it('bullet-based sections remain execution_artifact', () => {
+    it('bullet-based sections remain idea', () => {
       const note: NoteInput = {
         note_id: 'test-bullet-execution',
         raw_markdown: `## Implementation plan
@@ -3112,11 +3112,11 @@ We need to add boundary detection in the onboarding flow. Users are confused abo
       // Should have bullets
       expect(section.structural_features.num_list_items).toBeGreaterThan(0);
 
-      // Should be typed as execution_artifact (not feature_request)
-      expect(section.typeLabel).toBe('execution_artifact');
+      // Should be typed as idea (not idea)
+      expect(section.typeLabel).toBe('idea');
     });
 
-    it('request in body with action verb is typed as feature_request', () => {
+    it('request in body with action verb is typed as idea', () => {
       const note: NoteInput = {
         note_id: 'test-body-action-verb',
         raw_markdown: `## User request
@@ -3134,7 +3134,7 @@ Please improve the search functionality to support fuzzy matching.
 
       expect(section.is_actionable).toBe(true);
       expect(section.structural_features.num_list_items).toBe(0);
-      expect(section.typeLabel).toBe('feature_request');
+      expect(section.typeLabel).toBe('idea');
     });
   });
 
@@ -3160,14 +3160,14 @@ We should add a dark mode toggle to the settings page to improve accessibility a
       expect(result.suggestions).toHaveLength(1);
       const suggestion = result.suggestions[0];
 
-      // Should be marked as feature_request structurally
-      expect(suggestion.structural_hint).toBe('feature_request');
+      // Should be marked as idea structurally
+      expect(suggestion.structural_hint).toBe('idea');
 
       // Should be routed as create_new
       expect(suggestion.routing.create_new).toBe(true);
 
-      // Should have feature_request type (not plan_mutation or execution_artifact)
-      expect(suggestion.type).toBe('feature_request');
+      // Should have idea type (not project_update or idea)
+      expect(suggestion.type).toBe('idea');
     });
 
     it('should propagate structural_hint for bullet-based initiatives', () => {
@@ -3198,11 +3198,11 @@ Approach:
       expect(result.suggestions).toHaveLength(1);
       const suggestion = result.suggestions[0];
 
-      // Should be marked as execution_artifact structurally (has bullets)
-      expect(suggestion.structural_hint).toBe('execution_artifact');
+      // Should be marked as idea structurally (has bullets)
+      expect(suggestion.structural_hint).toBe('idea');
 
-      // Should be execution_artifact type
-      expect(suggestion.type).toBe('execution_artifact');
+      // Should be idea type
+      expect(suggestion.type).toBe('idea');
 
       // Verify it has structured payload
       expect(suggestion.payload).toHaveProperty('draft_initiative');
@@ -3243,19 +3243,19 @@ Plan:
       // Should emit 2 distinct suggestions
       expect(result.suggestions.length).toBeGreaterThanOrEqual(2);
 
-      // Find feature request (prose, no bullets)
+      // Find feature request (prose, no bullets) - search by content
       const featureRequest = result.suggestions.find(
-        s => s.structural_hint === 'feature_request'
+        s => s.title.match(/export|feature/i)
       );
       expect(featureRequest).toBeDefined();
-      expect(featureRequest?.title).toMatch(/feature.request/i);
+      expect(featureRequest?.structural_hint).toBe('idea');
 
       // Find execution artifact (bullet-based)
       const executionArtifact = result.suggestions.find(
-        s => s.structural_hint === 'execution_artifact'
+        s => s.title.match(/analytics/i)
       );
       expect(executionArtifact).toBeDefined();
-      expect(executionArtifact?.title).toMatch(/analytics/i);
+      expect(executionArtifact?.structural_hint).toBe('idea');
 
       // Both should be routed as create_new
       expect(featureRequest?.routing.create_new).toBe(true);
@@ -3264,15 +3264,15 @@ Plan:
   });
 
   // ==========================================================================
-  // feature_request as first-class type label
+  // idea as first-class type label
   // ==========================================================================
-  describe('feature_request first-class type', () => {
+  describe('idea first-class type', () => {
     beforeEach(() => {
       resetSectionCounter();
       resetSuggestionCounter();
     });
 
-    it('prose feature request produces typeLabel == feature_request with scoresByLabel', () => {
+    it('prose feature request produces typeLabel == idea with scoresByLabel', () => {
       const note: NoteInput = {
         note_id: 'test-fr-prose',
         raw_markdown: `## Boundary detection
@@ -3288,32 +3288,32 @@ This would help new users understand where they are in the process and reduce dr
       expect(result.suggestions).toHaveLength(1);
       const suggestion = result.suggestions[0];
 
-      // suggestion.type must be feature_request
-      expect(suggestion.type).toBe('feature_request');
+      // suggestion.type must be idea
+      expect(suggestion.type).toBe('idea');
 
       // structural_hint must match
-      expect(suggestion.structural_hint).toBe('feature_request');
+      expect(suggestion.structural_hint).toBe('idea');
 
-      // Debug: typeClassification must contain feature_request
+      // Debug: typeClassification must contain idea
       const debugSection = result.debugRun!.sections.find(
         s => s.sectionId === suggestion.section_id
       );
       expect(debugSection).toBeDefined();
-      expect(debugSection!.typeClassification?.topLabel).toBe('feature_request');
-      expect(debugSection!.typeClassification?.scoresByLabel).toHaveProperty('feature_request');
+      expect(debugSection!.typeClassification?.topLabel).toBe('idea');
+      expect(debugSection!.typeClassification?.scoresByLabel).toHaveProperty('idea');
 
-      // Debug: decisions.typeLabel must be feature_request
-      expect(debugSection!.decisions.typeLabel).toBe('feature_request');
+      // Debug: decisions.typeLabel must be idea
+      expect(debugSection!.decisions.typeLabel).toBe('idea');
 
-      // candidate.metadata.type must be feature_request
+      // candidate.metadata.type must be idea
       const candidate = debugSection!.candidates.find(
         c => c.candidateId === suggestion.suggestion_id
       );
       expect(candidate).toBeDefined();
-      expect(candidate!.metadata?.type).toBe('feature_request');
+      expect(candidate!.metadata?.type).toBe('idea');
     });
 
-    it('bullet execution list remains execution_artifact', () => {
+    it('bullet execution list remains idea', () => {
       const note: NoteInput = {
         note_id: 'test-fr-bullets',
         raw_markdown: `## Monitoring setup
@@ -3329,20 +3329,20 @@ This would help new users understand where they are in the process and reduce dr
       expect(result.suggestions).toHaveLength(1);
       const suggestion = result.suggestions[0];
 
-      // Bullet-based sections stay execution_artifact
-      expect(suggestion.type).toBe('execution_artifact');
-      expect(suggestion.structural_hint).toBe('execution_artifact');
+      // Bullet-based sections stay idea
+      expect(suggestion.type).toBe('idea');
+      expect(suggestion.structural_hint).toBe('idea');
 
       // Debug: typeClassification
       const debugSection = result.debugRun!.sections.find(
         s => s.sectionId === suggestion.section_id
       );
       expect(debugSection).toBeDefined();
-      expect(debugSection!.typeClassification?.topLabel).toBe('execution_artifact');
-      expect(debugSection!.typeClassification?.scoresByLabel).toHaveProperty('execution_artifact');
+      expect(debugSection!.typeClassification?.topLabel).toBe('idea');
+      expect(debugSection!.typeClassification?.scoresByLabel).toHaveProperty('idea');
     });
 
-    it('plan change produces typeLabel == plan_mutation (unchanged)', () => {
+    it('plan change produces typeLabel == project_update (unchanged)', () => {
       const note: NoteInput = {
         note_id: 'test-fr-planchange',
         raw_markdown: `## Timeline adjustment
@@ -3357,11 +3357,11 @@ Shift the beta milestone from April to June.
       expect(result.suggestions.length).toBeGreaterThanOrEqual(1);
       const suggestion = result.suggestions[0];
 
-      // plan_change sections must remain plan_mutation
-      expect(suggestion.type).toBe('plan_mutation');
+      // plan_change sections must remain project_update
+      expect(suggestion.type).toBe('project_update');
     });
 
-    it('mixed note emits feature_request, execution_artifact, and plan_mutation distinctly', () => {
+    it('mixed note emits idea, idea, and project_update distinctly', () => {
       const note: NoteInput = {
         note_id: 'test-fr-mixed',
         raw_markdown: `## Feature request
@@ -3389,9 +3389,9 @@ Shift the beta milestone from April to June.
 
       // Collect all types
       const types = result.suggestions.map(s => s.type);
-      expect(types).toContain('feature_request');
-      expect(types).toContain('execution_artifact');
-      expect(types).toContain('plan_mutation');
+      expect(types).toContain('idea');
+      expect(types).toContain('idea');
+      expect(types).toContain('project_update');
     });
   });
 });

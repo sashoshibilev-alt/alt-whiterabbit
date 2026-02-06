@@ -8,7 +8,7 @@
  * 1. Preprocessing: Parse markdown, annotate lines, segment into sections
  * 2. Classification: Classify section intent and determine actionability
  * 3. Synthesis: Generate suggestion titles, payloads, and evidence spans
- * 4. Validation: Run V1-V3 quality validators (hard gates)
+ * 4. Validation: Run V2-V3 quality validators (hard gates)
  * 5. Scoring: Compute confidence scores and threshold pruning
  * 6. Routing: Attach to initiatives or mark as create_new
  */
@@ -61,7 +61,6 @@ export type { LLMProvider, LLMIntentResponse, LLMTypeResponse } from './llmClass
 export { synthesizeSuggestions, synthesizeSuggestion } from './synthesis';
 export {
   runQualityValidators,
-  validateV1ChangeTest,
   validateV2AntiVacuity,
   validateV3EvidenceSanity,
 } from './validators';
@@ -121,7 +120,6 @@ export function generateSuggestions(
     sections_count: 0,
     actionable_sections_count: 0,
     suggestions_before_validation: 0,
-    v1_drops: 0,
     v2_drops: 0,
     v3_drops: 0,
     suggestions_after_validation: 0,
@@ -175,7 +173,7 @@ export function generateSuggestions(
   }
 
   // ============================================
-  // Stage 4: Validation (Hard Gates V1-V3)
+  // Stage 4: Validation (Hard Gates V2-V3)
   // ============================================
   const validatedSuggestions: Suggestion[] = [];
 
@@ -203,8 +201,7 @@ export function generateSuggestions(
     } else {
       // Track drop
       const validator = validationResult.failedValidator;
-      if (validator === 'V1_change_test') debug.v1_drops++;
-      else if (validator === 'V2_anti_vacuity') debug.v2_drops++;
+      if (validator === 'V2_anti_vacuity') debug.v2_drops++;
       else if (validator === 'V3_evidence_sanity') debug.v3_drops++;
 
       debug.dropped_suggestions.push({
@@ -234,8 +231,8 @@ export function generateSuggestions(
   debug.low_confidence_downgraded_count = scoringResult.downgraded_to_clarification || 0;
 
   // Track plan_change metrics per suggestion-suppression-fix plan
-  const planChangeBeforeScoring = validatedSuggestions.filter(s => s.type === 'plan_mutation').length;
-  const planChangeAfterScoring = scoringResult.suggestions.filter(s => s.type === 'plan_mutation').length;
+  const planChangeBeforeScoring = validatedSuggestions.filter(s => s.type === 'project_update').length;
+  const planChangeAfterScoring = scoringResult.suggestions.filter(s => s.type === 'project_update').length;
   debug.plan_change_count = planChangeBeforeScoring;
   debug.plan_change_emitted_count = planChangeAfterScoring;
   debug.high_confidence_count = scoringResult.suggestions.filter(s => s.is_high_confidence).length;
@@ -337,7 +334,7 @@ export function adaptConvexInitiative(convexInitiative: {
  * Convert engine suggestion to human-readable content string
  */
 export function suggestionToContent(suggestion: Suggestion): string {
-  if (suggestion.type === 'plan_mutation') {
+  if (suggestion.type === 'project_update') {
     const desc = suggestion.payload.after_description || '';
     return `${suggestion.title}\n\n${desc}`;
   } else {
