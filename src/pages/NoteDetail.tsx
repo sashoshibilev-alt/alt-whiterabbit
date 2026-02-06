@@ -26,8 +26,32 @@ export default function NoteDetailPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
   
-  const noteData = useQuery(api.notes.getWithComputedSuggestions, id ? { id: id as Id<"notes"> } : "skip");
+  const getWithComputedSuggestions = useAction(api.notes.getWithComputedSuggestions);
   const activeInitiatives = useQuery(api.v0Initiatives.listActive);
+
+  // State to hold the note data from the action
+  const [noteData, setNoteData] = useState<{
+    note: any;
+    suggestions: any[];
+  } | null | undefined>(undefined);
+
+  // Trigger to refetch note data
+  const [refetchTrigger, setRefetchTrigger] = useState(0);
+  const refetchNoteData = () => setRefetchTrigger(prev => prev + 1);
+
+  // Fetch note data when component mounts or id changes
+  useEffect(() => {
+    if (!id) return;
+
+    setNoteData(undefined); // Set to loading state
+    getWithComputedSuggestions({ id: id as Id<"notes"> })
+      .then(data => setNoteData(data))
+      .catch(err => {
+        console.error("Failed to load note:", err);
+        setNoteData(null);
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, refetchTrigger]); // Note: getWithComputedSuggestions is stable from useAction
   
   const recordShown = useMutation(api.suggestions.recordShown);
   const applySuggestion = useMutation(api.suggestions.apply);
@@ -270,15 +294,18 @@ export default function NoteDetailPage() {
 
   const handleRegenerateSuggestions = async () => {
     if (!id) return;
-    
+
     setIsRegenerating(true);
     try {
       const result = await regenerateSuggestions({ noteId: id as Id<"notes"> });
-      
+
+      // Refetch the note data after regeneration
+      refetchNoteData();
+
       if (result.newCount === 0) {
         toast({
           title: "No new suggestions",
-          description: result.noteChanged 
+          description: result.noteChanged
             ? "No suggestions found for the current note content"
             : "Try editing the note to generate new suggestions",
         });

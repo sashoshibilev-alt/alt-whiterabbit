@@ -72,7 +72,7 @@ export const getWithSuggestions = query({
   },
 });
 
-// Query to get note with live computed suggestions from v2 engine
+// Action to get note with live computed suggestions from v2 engine
 // Returns the note and an array of suggestions computed in real-time from the note body.
 // Each suggestion includes a structured `suggestion` context object with:
 //   - title: Suggestion title
@@ -80,17 +80,19 @@ export const getWithSuggestions = query({
 //   - evidencePreview?: Array of 1-2 short quotes from the note (max 150 chars each)
 //   - sourceSectionId: Section ID for navigation
 //   - sourceHeading: Section heading text
-export const getWithComputedSuggestions = query({
+// Note: This is an action (not a query) because it needs to import code from src/
+export const getWithComputedSuggestions = action({
   args: { id: v.id("notes") },
   handler: async (ctx, args) => {
-    const note = await ctx.db.get(args.id);
+    // Get note from database
+    const note = await ctx.runQuery(api.notes.getInternal, { id: args.id });
     if (!note) return null;
 
-    // Import suggestion engine v2
-    const { generateSuggestions, adaptConvexNote } = await import("../src/lib/suggestion-engine-v2");
+    // Dynamically import suggestion engine (only works in actions)
+    const { generateSuggestions: generateSuggestionsImport, adaptConvexNote: adaptConvexNoteImport } = await import("../src/lib/suggestion-engine-v2");
 
     // Adapt note to engine format
-    const engineNote = adaptConvexNote({
+    const engineNote = adaptConvexNoteImport({
       _id: note._id,
       body: note.body,
       createdAt: note.createdAt,
@@ -98,7 +100,7 @@ export const getWithComputedSuggestions = query({
     });
 
     // Run suggestion engine v2
-    const result = generateSuggestions(engineNote);
+    const result = generateSuggestionsImport(engineNote);
 
     // Transform engine suggestions to UI-ready format
     const uiSuggestions = result.suggestions.map((engineSug) => {
