@@ -25,6 +25,7 @@ import type * as newInitiatives from "../newInitiatives.js";
 import type * as notes from "../notes.js";
 import type * as ruleQuality from "../ruleQuality.js";
 import type * as suggestionDebug from "../suggestionDebug.js";
+import type * as suggestionDecisions from "../suggestionDecisions.js";
 import type * as suggestionEngine from "../suggestionEngine.js";
 import type * as suggestionRanking from "../suggestionRanking.js";
 import type * as suggestions from "../suggestions.js";
@@ -54,6 +55,7 @@ declare const fullApi: ApiFromModules<{
   notes: typeof notes;
   ruleQuality: typeof ruleQuality;
   suggestionDebug: typeof suggestionDebug;
+  suggestionDecisions: typeof suggestionDecisions;
   suggestionEngine: typeof suggestionEngine;
   suggestionRanking: typeof suggestionRanking;
   suggestions: typeof suggestions;
