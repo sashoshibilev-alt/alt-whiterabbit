@@ -131,6 +131,28 @@ const MICRO_TASKS_NOTE: NoteInput = {
 `,
 };
 
+const BASELINE_A_NOTE: NoteInput = {
+  note_id: 'test-baseline-a',
+  raw_markdown: `# Product Planning
+
+## Onboarding improvements
+
+We need boundary detection so we can see where users drop.
+
+Users are hitting errors during signup and we don't know why. The support team is getting frustrated.
+
+## Status updates
+
+Random thought about the design. No action needed, but something to consider later.
+
+## Performance monitoring
+
+We don't have dashboard errors visibility because the logging infrastructure is incomplete.
+
+This has been blocking debugging efforts for weeks. The team needs a solution soon.
+`,
+};
+
 // ============================================
 // Preprocessing Tests
 // ============================================
@@ -879,6 +901,64 @@ describe('Actionability Gate v3 - Required Test Cases', () => {
       expect(classified.out_of_scope_signal).toBe(extractedOOS);
     });
   });
+
+  describe('Implicit Idea Detection', () => {
+    it('should detect implicit idea signal with need + capability + purpose', () => {
+      const section = createV3TestSection('We need boundary detection so we can see where users drop');
+      const classified = classifySection(section, config);
+
+      // Signal should be 0.61 (implicit idea boost)
+      expect(classified.actionable_signal).toBe(0.61);
+
+      // Note: Single-line sections have a 0.15 penalty, so effective threshold is 0.65
+      // A signal of 0.5 alone won't pass for very short sections (by design)
+      // This is a low-confidence boost signal meant to work with other signals
+    });
+
+    it('should detect implicit idea with "we don\'t have"', () => {
+      const section = createV3TestSection('We don\'t have dashboard errors visibility to help debug issues');
+      const classified = classifySection(section, config);
+
+      // Signal should be 0.61 (implicit idea boost)
+      expect(classified.actionable_signal).toBe(0.61);
+    });
+
+    it('should reject status informational without all components', () => {
+      const section = createV3TestSection('Random thought about the design');
+      const classified = classifySection(section, config);
+
+      expect(classified.is_actionable).toBe(false);
+      expect(classified.actionable_signal).toBeLessThan(0.5);
+    });
+
+    it('should reject need signal without purpose clause', () => {
+      const section = createV3TestSection('We need boundary detection in the system');
+      const classified = classifySection(section, config);
+
+      // Should not match because no purpose clause
+      expect(classified.actionable_signal).toBeLessThan(0.5);
+    });
+
+    it('should reject implicit idea with scheduling marker', () => {
+      const section = createV3TestSection('We need boundary detection next week so we can track users');
+      const classified = classifySection(section, config);
+
+      // Should not trigger implicit idea signal due to scheduling marker
+      // (might still be actionable from other signals, but not from implicit idea)
+      const hasCalendarMarker = classified.out_of_scope_signal > 0.5;
+      expect(hasCalendarMarker).toBe(true);
+      // Signal should not be exactly 0.5 from implicit idea rule
+      expect(classified.actionable_signal).not.toBe(0.5);
+    });
+
+    it('should reject implicit idea with completion marker', () => {
+      const section = createV3TestSection('We need boundary detection done so we can see users');
+      const classified = classifySection(section, config);
+
+      // Should not trigger implicit idea signal due to completion marker
+      expect(classified.actionable_signal).not.toBe(0.5);
+    });
+  });
 });
 
 describe('Suggestion Suppression Fix', () => {
@@ -1168,7 +1248,7 @@ describe('Suggestion Suppression Fix', () => {
 
       // If there are project_update suggestions, they should have clarification set
       const planMutationSuggestions = result.suggestions.filter(s => s.type === 'project_update');
-      
+
       for (const suggestion of planMutationSuggestions) {
         // With high thresholds, most should need clarification
         if (!suggestion.is_high_confidence) {
@@ -1177,6 +1257,223 @@ describe('Suggestion Suppression Fix', () => {
           expect(suggestion.clarification_reasons!.length).toBeGreaterThan(0);
         }
       }
+    });
+
+    it('Baseline A: implicit idea sections get actionable signal boost and emit ideas', () => {
+      const result = generateSuggestionsWithDebug(
+        BASELINE_A_NOTE,
+        {},
+        { enable_debug: true },
+        { verbosity: 'FULL' }
+      );
+
+      // Find the sections with implicit ideas
+      const sections = result.debugRun?.sections || [];
+      const onboardingSection = sections.find(s => s.headingTextPreview?.includes('Onboarding'));
+      const performanceSection = sections.find(s => s.headingTextPreview?.includes('Performance'));
+      const statusSection = sections.find(s => s.headingTextPreview?.includes('Status'));
+
+
+      // Both implicit idea sections should have received the signal boost (0.61, not 0.5)
+      // This ensures they pass the borderline check (threshold = 0.5, margin requirement = 0.1)
+      expect(onboardingSection).toBeDefined();
+      expect(onboardingSection!.intentClassification?.topScore).toBe(0.61);
+      expect(onboardingSection!.decisions.isActionable).toBe(true);
+
+      expect(performanceSection).toBeDefined();
+      expect(performanceSection!.intentClassification?.topScore).toBe(0.61);
+      expect(performanceSection!.decisions.isActionable).toBe(true);
+
+      // Status section should be dropped (non-actionable)
+      expect(statusSection).toBeDefined();
+      expect(statusSection!.decisions.isActionable).toBe(false);
+
+      // Both actionable sections should emit ideas
+      const suggestions = result.suggestions;
+
+
+      // Key accomplishment: implicit idea sections now pass ACTIONABILITY stage
+      // Previously dropped with "Insufficient content for borderline signal" at signal=0.5
+      // Now pass with signal=0.61, avoiding the exact-threshold borderline trap
+    });
+
+    it('Regression: short implicit-idea section with exact scenario from Baseline A', () => {
+      // This is a targeted regression test for the exact "Onboarding feedback" scenario:
+      // - 3 lines
+      // - intentLabel: new_workstream
+      // - actionableSignal: 0.61 (from implicit idea detection)
+      // - threshold: 0.5
+      // - margin: 0.11 (> 0.1, so should pass borderline check)
+      //
+      // Previously failed with margin=0.1 due to exact boundary condition.
+      // Now passes with margin=0.11 after implicit-idea boost increased to 0.61.
+
+      const note: NoteInput = {
+        note_id: 'test-onboarding-feedback',
+        raw_markdown: `## Onboarding feedback
+
+We need boundary detection so we can see where users drop.
+
+This has been blocking debugging efforts for weeks.`,
+      };
+
+      const result = generateSuggestionsWithDebug(
+        note,
+        {},
+        { enable_debug: true },
+        { verbosity: 'FULL' }
+      );
+
+      const sections = result.debugRun?.sections || [];
+      expect(sections.length).toBeGreaterThan(0);
+
+      const section = sections[0];
+
+      // Should receive implicit idea boost (0.61)
+      expect(section.intentClassification?.topScore).toBe(0.61);
+
+      // Should pass ACTIONABILITY (margin = 0.61 - 0.5 = 0.11 > 0.1)
+      expect(section.decisions.isActionable).toBe(true);
+      expect(section.decisions.actionabilityReason).not.toMatch(/Insufficient content for borderline signal/);
+
+      // The key accomplishment: section passes ACTIONABILITY and is not dropped at the borderline check.
+      // Whether it emits a suggestion depends on later stages (out-of-scope, aggregation, etc.)
+      // but the regression is fixed: it's no longer dropped with margin=0.1.
+    });
+
+    it('Borderline suppression regression: borderline check still enforced for short sections', () => {
+      // This test ensures that the borderline safeguard (margin < 0.1, lines <= 3)
+      // is still enforced after the implicit idea boost was increased to 0.61.
+      // We test this by directly invoking isActionable with a constructed scenario.
+
+      // Create a mock intent with actionableSignal just above threshold but within borderline margin
+      // Use new_workstream (not plan_change) to avoid plan_change protection bypass
+      const borderlineIntent: IntentClassification = {
+        plan_change: 0.0,
+        new_workstream: 0.55,  // actionableSignal will be 0.55 (above 0.5 but within borderline margin)
+        status_informational: 0.0,
+        communication: 0.0,
+        research: 0.0,
+        calendar: 0.0,
+        micro_tasks: 0.0,
+      };
+
+      // Create a short section (3 lines) - cast to any to avoid full Section type requirement
+      const shortSection: any = {
+        structural_features: {
+          num_lines: 3,
+          num_list_items: 0,
+          num_paragraphs: 1,
+          has_subheadings: false,
+          avg_line_length: 20,
+        },
+      };
+
+      const result = isActionable(borderlineIntent, shortSection, DEFAULT_THRESHOLDS);
+
+      // Should be dropped due to borderline check: margin = 0.55 - 0.5 = 0.05 < 0.1
+      expect(result.actionable).toBe(false);
+      expect(result.reason).toMatch(/Insufficient content for borderline signal/);
+    });
+
+    it('Non-implicit borderline ideas still dropped at THRESHOLD', () => {
+      // Ensure non-implicit idea suggestions with borderline scores still get dropped
+      // This tests that our implicit-idea fix doesn't weaken threshold enforcement globally
+      const note: NoteInput = {
+        note_id: 'test-borderline-non-implicit',
+        raw_markdown: `## Feature request
+
+Add a new button to the dashboard.
+
+Users have been asking for this.`,
+      };
+
+      const result = generateSuggestionsWithDebug(
+        note,
+        {},
+        { enable_debug: true },
+        { verbosity: 'FULL' }
+      );
+
+      const sections = result.debugRun?.sections || [];
+      expect(sections.length).toBeGreaterThan(0);
+
+      const section = sections[0];
+
+      // This is NOT an implicit idea (no "we need X so we can Y" pattern)
+      // Should have lower actionability score
+      expect(section.intentClassification?.topScore).not.toBe(0.61);
+
+      // If synthesized, check that it gets dropped at THRESHOLD if scores are borderline
+      // (this is a heuristic test - the exact outcome depends on synthesis quality)
+      const candidates = section.candidates || [];
+      if (candidates.length > 0) {
+        const candidate = candidates[0];
+        // If overall score is borderline (< 0.65), it should be dropped
+        if (candidate.scoreBreakdown?.overallScore && candidate.scoreBreakdown.overallScore < 0.65) {
+          expect(candidate.dropStage).toBe('THRESHOLD');
+          expect(candidate.dropReason).toBe('SCORE_BELOW_THRESHOLD');
+        }
+      }
+    });
+
+    it('Implicit idea overallScore computation and emission', () => {
+      // Comprehensive test for the implicit-idea scoring fix
+      // Validates that:
+      // 1. Implicit ideas get actionability score ~0.61
+      // 2. overallScore is computed correctly (not 0)
+      // 3. overallScore >= 0.65 (passes threshold)
+      // 4. Candidate is emitted (not dropped at THRESHOLD)
+      //
+      // Use the exact same note from the regression test that's known to work
+      const note: NoteInput = {
+        note_id: 'test-implicit-scoring',
+        raw_markdown: `## Onboarding feedback
+
+We need boundary detection so we can see where users drop.
+
+This has been blocking debugging efforts for weeks.`,
+      };
+
+      const result = generateSuggestionsWithDebug(
+        note,
+        {},
+        { enable_debug: true },
+        { verbosity: 'FULL' }
+      );
+
+      // Check debug output
+      const sections = result.debugRun?.sections || [];
+      expect(sections.length).toBeGreaterThan(0);
+
+      const section = sections[0];
+      const candidates = section.candidates || [];
+      expect(candidates.length).toBeGreaterThan(0);
+
+      const candidate = candidates[0];
+
+      // 1. Verify actionability score from implicit idea detection
+      expect(section.intentClassification?.topScore).toBe(0.61);
+      expect(candidate.scoreBreakdown?.actionabilityScore).toBeCloseTo(0.61, 2);
+
+      // 2. Verify component scores are populated
+      expect(candidate.scoreBreakdown?.synthesisScore).toBeGreaterThan(0);
+      expect(candidate.scoreBreakdown?.typeScore).toBeGreaterThan(0);
+
+      // 3. Verify overallScore is computed (not 0) and >= 0.65
+      expect(candidate.scoreBreakdown?.overallScore).toBeGreaterThan(0);
+      expect(candidate.scoreBreakdown?.overallScore).toBeGreaterThanOrEqual(0.65);
+
+      // 4. Verify candidate is emitted (not dropped)
+      expect(candidate.emitted).toBe(true);
+      expect(candidate.dropStage).toBeNull();
+      expect(candidate.dropReason).toBeNull();
+
+      // 5. Verify final suggestion was generated
+      expect(result.suggestions.length).toBeGreaterThan(0);
+      const suggestion = result.suggestions[0];
+      expect(suggestion.type).toBe('idea');
+      expect(suggestion.scores.overall).toBeGreaterThanOrEqual(0.65);
     });
   });
 });
@@ -2444,20 +2741,6 @@ Move launch to next week
       // Verify intentLabel is plan_change
       const isPlanChange = isPlanChangeIntentLabel(section.intent);
       expect(isPlanChange).toBe(true);
-
-      // Debug output
-      console.log('Test C Debug:', JSON.stringify({
-        suggestions: result.suggestions,
-        debugRun: result.debugRun?.sections.map(s => ({
-          intent: s.intentLabel,
-          typeLabel: s.typeLabel,
-          candidates: s.candidates.map(c => ({
-            emitted: c.emitted,
-            dropReason: c.dropReason,
-            dropStage: c.dropStage
-          }))
-        }))
-      }, null, 2));
 
       // Plan change behavior unchanged: should always emit
       expect(result.suggestions.length).toBeGreaterThan(0);

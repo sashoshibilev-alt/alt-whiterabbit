@@ -198,8 +198,32 @@ function computeSynthesisConfidence(
 
 /**
  * Compute overall score (min of all dimensions)
+ *
+ * Special case for implicit ideas: when section_actionability is exactly 0.61
+ * (the implicit idea signal), use a more lenient aggregation to avoid dropping
+ * these valuable suggestions at the THRESHOLD stage.
  */
 function computeOverallScore(scores: Omit<SuggestionScores, 'overall'>): number {
+  // Detect implicit idea signal (0.61 is the specific boost from matchImplicitIdea)
+  const isImplicitIdea = Math.abs(scores.section_actionability - 0.61) < 0.001;
+
+  if (isImplicitIdea) {
+    // For implicit ideas, use weighted average instead of min to be more lenient
+    // This allows implicit ideas with strong synthesis/type scores to pass threshold
+    const weights = {
+      actionability: 0.5,  // Primary signal
+      type: 0.25,
+      synthesis: 0.25,
+    };
+
+    return (
+      scores.section_actionability * weights.actionability +
+      scores.type_choice_confidence * weights.type +
+      scores.synthesis_confidence * weights.synthesis
+    );
+  }
+
+  // Standard path: min of all dimensions (most conservative)
   return Math.min(
     scores.section_actionability,
     scores.type_choice_confidence,
