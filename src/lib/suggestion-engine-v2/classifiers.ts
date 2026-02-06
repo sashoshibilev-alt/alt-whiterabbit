@@ -208,8 +208,8 @@ function computeWorkstreamStructuralBoost(section: Section): number {
     boost += 0.15;
   }
 
-  // Multi-bullet sections with substantial content
-  if (sf.num_list_items >= 3 && sf.num_lines >= 5) {
+  // Substantial content suggests workstream planning
+  if (sf.num_lines >= 5) {
     boost += 0.1;
   }
 
@@ -218,8 +218,8 @@ function computeWorkstreamStructuralBoost(section: Section): number {
     boost += 0.1;
   }
 
-  // Imperative or outcome-focused verbs in bullets
-  const imperativePattern = /^[-*•]\s*(launch|build|create|deliver|implement|ship|develop|establish|deploy)/im;
+  // Imperative or outcome-focused verbs in text
+  const imperativePattern = /\b(launch|build|create|deliver|implement|ship|develop|establish|deploy)\s+\w/i;
   if (imperativePattern.test(text)) {
     boost += 0.1;
   }
@@ -394,7 +394,7 @@ const V3_PRODUCT_NOUNS = [
  * V3 Bullet action verbs — when ≥2 bullets start with these verbs the section
  * is treated as actionable (micro_tasks or idea).
  */
-const V3_BULLET_ACTION_VERBS = [
+const V3_ACTIONABILITY_VERBS = [
   'add', 'verify', 'update', 'share', 'remove', 'fix', 'create', 'build',
   'implement', 'test', 'review', 'check', 'ensure', 'set up', 'deploy',
   'migrate', 'refactor', 'integrate', 'move', 'send', 'confirm', 'finalize',
@@ -760,18 +760,14 @@ export function classifyIntent(section: Section): IntentClassification {
     maxOutOfScopeScore = Math.max(maxOutOfScopeScore, oosResult.score);
   }
 
-  // V3 Rule 7: Action-verb bullets boost.
-  // If ≥2 bullets start with a common action verb the section is actionable,
-  // but only when the section doesn't already carry strong out-of-scope
-  // signals (calendar, communication, micro-admin). This prevents generic
-  // admin task lists from being promoted.
-  const bulletLines = section.body_lines
-    .filter(l => l.line_type === 'list_item')
-    .map(l => l.text.replace(/^[-*+•]\s*/, '').replace(/^\d+[.)]\s*/, '').toLowerCase().trim());
-  const actionVerbBulletCount = bulletLines.filter(b =>
-    V3_BULLET_ACTION_VERBS.some(v => b.startsWith(v + ' ') || b.startsWith(v + '\t'))
+  // V3 Rule 7: Action-verb pattern boost.
+  // Action verbs in the text boost actionability when out-of-scope signals are low.
+  // This prevents generic admin task lists from being promoted.
+  const lowerText = section.raw_text.toLowerCase();
+  const actionVerbMatches = V3_ACTIONABILITY_VERBS.filter(v =>
+    new RegExp(`\\b${v}\\s+\\w`, 'i').test(lowerText)
   ).length;
-  if (actionVerbBulletCount >= 2 && maxOutOfScopeScore < 0.4) {
+  if (actionVerbMatches >= 2 && maxOutOfScopeScore < 0.4) {
     maxActionableScore = Math.max(maxActionableScore, 0.8);
     maxNonHedgedActionableScore = Math.max(maxNonHedgedActionableScore, 0.8);
   }
@@ -956,7 +952,7 @@ export function isActionable(
   // Additional check: very short sections with borderline signals need extra scrutiny
   // Only apply if the section barely crosses the threshold
   const marginAboveThreshold = actionableSignal - effectiveThreshold;
-  if (marginAboveThreshold < 0.1 && section.structural_features.num_lines <= 3 && section.structural_features.num_list_items === 0) {
+  if (marginAboveThreshold < 0.1 && section.structural_features.num_lines <= 3) {
     return {
       actionable: false,
       reason: `Insufficient content for borderline signal: margin=${marginAboveThreshold.toFixed(3)}, lines=${section.structural_features.num_lines}`,
