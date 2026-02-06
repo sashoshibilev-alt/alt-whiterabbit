@@ -481,6 +481,57 @@ const V3_MICRO_ADMIN_MARKERS = [
 ];
 
 /**
+ * Implicit idea need/lack signals
+ */
+const IMPLICIT_IDEA_NEED_SIGNALS = [
+  'we need',
+  "we don't have",
+  "users can't",
+  "it's hard to",
+  'missing',
+  'no way to',
+  "can't",
+  'lack of',
+  'lacking',
+];
+
+/**
+ * Implicit idea outcome/purpose signals
+ */
+const IMPLICIT_IDEA_PURPOSE_SIGNALS = [
+  'so we can',
+  'so we',
+  'so that',
+  'to help',
+  'to see',
+  'because',
+  'in order to',
+  'so users can',
+];
+
+/**
+ * Implicit idea capability/system nouns
+ */
+const IMPLICIT_IDEA_CAPABILITY_NOUNS = [
+  'boundary detection',
+  'dashboard',
+  'errors',
+  'visibility',
+  'alerts',
+  'tracking',
+  'monitoring',
+  'reporting',
+  'analytics',
+  'notifications',
+  'logging',
+  'metrics',
+  'search',
+  'filtering',
+  'sorting',
+  'pagination',
+];
+
+/**
  * Preprocess a line for v3 matching (lowercase, trim, collapse whitespace)
  */
 function preprocessLine(lineText: string): string {
@@ -643,6 +694,43 @@ function computeOutOfScopeForLine(line: string): { score: number; markers: strin
 }
 
 /**
+ * Detect implicit idea statement = +0.61
+ *
+ * An implicit idea is a problem/need statement that contains:
+ * 1. A need/lack signal (e.g., "we need", "we don't have", "missing")
+ * 2. A concrete capability noun (e.g., "boundary detection", "dashboard")
+ * 3. A purpose/outcome clause (e.g., "so we can", "to help")
+ * 4. NO explicit scheduling or completion markers
+ *
+ * Returns +0.61 if all conditions are met, 0.0 otherwise.
+ * Note: 0.6 chosen to ensure implicit ideas pass borderline check (threshold = 0.5, margin requirement >= 0.1).
+ */
+function matchImplicitIdea(line: string): number {
+  const hasNeedSignal = IMPLICIT_IDEA_NEED_SIGNALS.some(signal => line.includes(signal));
+  const hasPurposeSignal = IMPLICIT_IDEA_PURPOSE_SIGNALS.some(signal => line.includes(signal));
+
+  // Check for capability nouns - use word boundary matching for common words
+  const hasCapabilityNoun = IMPLICIT_IDEA_CAPABILITY_NOUNS.some(noun => {
+    if (noun.includes(' ')) {
+      // Multi-word phrases use includes
+      return line.includes(noun);
+    }
+    // Single words use word boundary for precision
+    const regex = new RegExp(`\\b${noun}\\b`, 'i');
+    return regex.test(line);
+  });
+
+  const hasSchedulingMarker = V3_CALENDAR_MARKERS.some(marker => markerMatchesWord(line, marker));
+  const hasCompletionMarker = ['done', 'completed', 'finished', 'shipped'].some(marker => line.includes(marker));
+
+  if (hasNeedSignal && hasPurposeSignal && hasCapabilityNoun && !hasSchedulingMarker && !hasCompletionMarker) {
+    return 0.61;
+  }
+
+  return 0.0;
+}
+
+/**
  * Classify a section's intent
  */
 export function classifyIntent(section: Section): IntentClassification {
@@ -660,6 +748,7 @@ export function classifyIntent(section: Section): IntentClassification {
   // 4. Status/progress markers (done, blocked): +0.7
   // 5. Structured task syntax (- [ ], TODO:): +0.8
   // 6. Target object bonus (if score >= 0.6): +0.2
+  // 7. Implicit idea statement (need + capability + purpose): +0.61
   //
   // NEGATIVE SIGNALS:
   // - Negation override: if line has "don't" + verb → score = 0.0
@@ -770,6 +859,15 @@ export function classifyIntent(section: Section): IntentClassification {
   if (actionVerbMatches >= 2 && maxOutOfScopeScore < 0.4) {
     maxActionableScore = Math.max(maxActionableScore, 0.8);
     maxNonHedgedActionableScore = Math.max(maxNonHedgedActionableScore, 0.8);
+  }
+
+  // Rule 8: Implicit idea statement (section-level check)
+  // Check the full section text for implicit idea patterns
+  const implicitIdeaSignal = matchImplicitIdea(lowerText);
+  if (implicitIdeaSignal > 0) {
+    maxActionableScore = Math.max(maxActionableScore, implicitIdeaSignal);
+    // Note: implicit ideas are not added to maxNonHedgedActionableScore
+    // because they're a lower-confidence signal
   }
 
   // V3 OVERRIDE: If actionableSignal >= 0.8, clamp outOfScopeSignal <= 0.3
@@ -1135,7 +1233,29 @@ export function classifySection(
           typeLabel: 'project_update',
         };
       } else {
-        // Non-plan_change can still be dropped by TYPE
+        // NEW_WORKSTREAM PROTECTION: If section passed actionability gate with new_workstream intent,
+        // force it to 'idea' type rather than dropping it. This ensures implicit ideas and other
+        // new_workstream sections are not lost due to weak pattern matching in classifyType.
+        const isNewWorkstream = intent.new_workstream > intent.plan_change;
+        if (isNewWorkstream && intent.new_workstream >= 0.5) {
+          suggestedType = 'idea';
+          typeConfidence = 0.7;
+          // Return early with forced idea to prevent drop
+          return {
+            ...section,
+            intent,
+            is_actionable: true,
+            actionability_reason:
+              `${actionabilityResult.reason} (type non_actionable overridden for new_workstream)`,
+            actionable_signal: actionabilityResult.actionableSignal,
+            out_of_scope_signal: actionabilityResult.outOfScopeSignal,
+            suggested_type: suggestedType,
+            type_confidence: typeConfidence,
+            typeLabel: 'idea',
+          };
+        }
+
+        // Non-plan_change, non-new_workstream can still be dropped by TYPE
         return {
           ...section,
           intent,
@@ -1327,7 +1447,29 @@ export async function classifySectionWithLLM(
           typeLabel: 'project_update',
         };
       } else {
-        // Non-plan_change can still be dropped by TYPE
+        // NEW_WORKSTREAM PROTECTION: If section passed actionability gate with new_workstream intent,
+        // force it to 'idea' type rather than dropping it. This ensures implicit ideas and other
+        // new_workstream sections are not lost due to weak pattern matching in classifyType.
+        const isNewWorkstream = intent.new_workstream > intent.plan_change;
+        if (isNewWorkstream && intent.new_workstream >= 0.5) {
+          suggestedType = 'idea';
+          typeConfidence = 0.7;
+          // Return early with forced idea to prevent drop
+          return {
+            ...section,
+            intent,
+            is_actionable: true,
+            actionability_reason:
+              `${actionabilityResult.reason} (type non_actionable overridden for new_workstream)`,
+            actionable_signal: actionabilityResult.actionableSignal,
+            out_of_scope_signal: actionabilityResult.outOfScopeSignal,
+            suggested_type: suggestedType,
+            type_confidence: typeConfidence,
+            typeLabel: 'idea',
+          };
+        }
+
+        // Non-plan_change, non-new_workstream can still be dropped by TYPE
         return {
           ...section,
           intent,

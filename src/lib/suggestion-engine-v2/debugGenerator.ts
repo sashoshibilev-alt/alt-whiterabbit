@@ -336,7 +336,18 @@ export function generateSuggestionsWithDebug(
 
     // Record scoring results
     if (ledger) {
+      // Record scores for ALL suggestions (passed + dropped) before marking drops
+      // This ensures debug output shows computed scores even for dropped suggestions
       for (const suggestion of scoringResult.suggestions) {
+        const sectionDebug = ledger.getSection(suggestion.section_id);
+        if (sectionDebug) {
+          ledger.afterScoring(sectionDebug, suggestion, suggestion.scores);
+        }
+      }
+
+      // Also record scores for dropped suggestions BEFORE marking them as dropped
+      for (const dropped of scoringResult.dropped) {
+        const { suggestion } = dropped;
         const sectionDebug = ledger.getSection(suggestion.section_id);
         if (sectionDebug) {
           ledger.afterScoring(sectionDebug, suggestion, suggestion.scores);
@@ -347,7 +358,7 @@ export function generateSuggestionsWithDebug(
       // PLAN_CHANGE PROTECTION: Never drop project_update at THRESHOLD
       for (const dropped of scoringResult.dropped) {
         const { suggestion } = dropped;
-        
+
         // Never treat plan_change / project_update as score-based drops
         if (suggestion.type === 'project_update') {
           // Log an invariant violation, since scoring.ts should already
