@@ -40,12 +40,15 @@ export function SuggestionDetail({
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showTranscriptDialog, setShowTranscriptDialog] = useState(false);
   const [showCreateInitiativeDialog, setShowCreateInitiativeDialog] = useState(false);
+  const [showAddToInitiativeDialog, setShowAddToInitiativeDialog] = useState(false);
   const [dismissReason, setDismissReason] = useState<DismissReason | ''>('');
   const [dismissText, setDismissText] = useState('');
   const [editedChange, setEditedChange] = useState<Suggestion['proposedChange']>({});
   const [newInitiativeName, setNewInitiativeName] = useState('');
   const [newInitiativeDescription, setNewInitiativeDescription] = useState('');
   const [newInitiativeOwner, setNewInitiativeOwner] = useState('');
+  const [selectedInitiativeId, setSelectedInitiativeId] = useState('');
+  const [initiativeSearchQuery, setInitiativeSearchQuery] = useState('');
 
   if (!suggestion || !meeting) return null;
 
@@ -86,11 +89,26 @@ export function SuggestionDetail({
     linkSuggestion(suggestion.id, initiativeId);
   };
 
+  const openAddToInitiativeDialog = () => {
+    setSelectedInitiativeId(suggestion.targetInitiativeId || '');
+    setInitiativeSearchQuery('');
+    setShowAddToInitiativeDialog(true);
+  };
+
+  const handleAddToInitiative = () => {
+    if (selectedInitiativeId) {
+      linkSuggestion(suggestion.id, selectedInitiativeId);
+      applySuggestion(suggestion.id, 'Current User');
+      setShowAddToInitiativeDialog(false);
+      setSelectedInitiativeId('');
+      setInitiativeSearchQuery('');
+      onClose();
+    }
+  };
+
   const openCreateInitiativeDialog = () => {
-    const currentChange = suggestion.editedChange || suggestion.proposedChange;
-    setNewInitiativeName(currentChange.backlogTitle || '');
-    setNewInitiativeDescription(currentChange.backlogDescription || '');
-    setNewInitiativeOwner('Current User');
+    setNewInitiativeName(displayTitle || '');
+    setNewInitiativeDescription(displayBody || '');
     setShowCreateInitiativeDialog(true);
   };
 
@@ -100,13 +118,12 @@ export function SuggestionDetail({
         suggestion.id,
         newInitiativeName.trim(),
         newInitiativeDescription.trim(),
-        newInitiativeOwner.trim() || 'Current User',
+        'Current User',
         'Current User'
       );
       setShowCreateInitiativeDialog(false);
       setNewInitiativeName('');
       setNewInitiativeDescription('');
-      setNewInitiativeOwner('');
       onClose();
     }
   };
@@ -345,29 +362,40 @@ export function SuggestionDetail({
 
           {/* Actions */}
           {suggestion.status === 'pending' && (
-            <div className="flex gap-2">
-              <Button 
-                onClick={handleApply} 
-                disabled={!canApply}
-                className="flex-1"
-              >
-                <Check className="h-4 w-4 mr-2" />
-                Apply
-              </Button>
-              <Button 
-                variant="outline" 
-                onClick={openEditDialog}
-              >
-                <Edit2 className="h-4 w-4 mr-2" />
-                Edit
-              </Button>
-              <Button 
-                variant="destructive" 
-                onClick={() => setShowDismissDialog(true)}
-              >
-                <X className="h-4 w-4 mr-2" />
-                Dismiss
-              </Button>
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <Button
+                  onClick={openAddToInitiativeDialog}
+                  className="flex-1"
+                >
+                  Add to existing initiative
+                </Button>
+                <Button
+                  onClick={openCreateInitiativeDialog}
+                  variant="secondary"
+                  className="flex-1"
+                >
+                  Create new initiative
+                </Button>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={openEditDialog}
+                  className="flex-1"
+                >
+                  <Edit2 className="h-4 w-4 mr-2" />
+                  Edit
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={() => setShowDismissDialog(true)}
+                  className="flex-1"
+                >
+                  <X className="h-4 w-4 mr-2" />
+                  Dismiss
+                </Button>
+              </div>
             </div>
           )}
 
@@ -508,6 +536,61 @@ export function SuggestionDetail({
         </DialogContent>
       </Dialog>
 
+      {/* Add to Existing Initiative Dialog */}
+      <Dialog open={showAddToInitiativeDialog} onOpenChange={setShowAddToInitiativeDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add to Existing Initiative</DialogTitle>
+            <DialogDescription>
+              Select an initiative to apply this suggestion to.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Search Initiatives</Label>
+              <Input
+                value={initiativeSearchQuery}
+                onChange={(e) => setInitiativeSearchQuery(e.target.value)}
+                placeholder="Search by name..."
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Select Initiative</Label>
+              <div className="border rounded-md max-h-64 overflow-y-auto">
+                {allInitiatives
+                  .filter(init =>
+                    init.name.toLowerCase().includes(initiativeSearchQuery.toLowerCase())
+                  )
+                  .map(init => (
+                    <div
+                      key={init.id}
+                      className={`p-3 cursor-pointer hover:bg-muted transition-colors ${
+                        selectedInitiativeId === init.id ? 'bg-muted' : ''
+                      }`}
+                      onClick={() => setSelectedInitiativeId(init.id)}
+                    >
+                      <div className="font-medium text-sm">{init.name}</div>
+                      {init.description && (
+                        <div className="text-xs text-muted-foreground mt-1">
+                          {init.description}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddToInitiativeDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleAddToInitiative} disabled={!selectedInitiativeId}>
+              Apply
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Create Initiative Dialog */}
       <Dialog open={showCreateInitiativeDialog} onOpenChange={setShowCreateInitiativeDialog}>
         <DialogContent>
@@ -528,19 +611,11 @@ export function SuggestionDetail({
             </div>
             <div className="space-y-2">
               <Label>Description</Label>
-              <Textarea 
+              <Textarea
                 value={newInitiativeDescription}
                 onChange={(e) => setNewInitiativeDescription(e.target.value)}
                 placeholder="Describe the initiative..."
                 rows={3}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Owner</Label>
-              <Input 
-                value={newInitiativeOwner}
-                onChange={(e) => setNewInitiativeOwner(e.target.value)}
-                placeholder="e.g., John Doe"
               />
             </div>
           </div>
