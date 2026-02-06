@@ -83,9 +83,9 @@ function isStopWord(word: string): boolean {
 }
 
 /**
- * Generate a title for a plan mutation suggestion
+ * Generate a title for a project update suggestion
  */
-function generatePlanMutationTitle(section: ClassifiedSection): string {
+function generateProjectUpdateTitle(section: ClassifiedSection): string {
   const headingText = section.heading_text || '';
   const bodyText = section.raw_text;
 
@@ -94,7 +94,7 @@ function generatePlanMutationTitle(section: ClassifiedSection): string {
     // Check if heading is specific enough
     const normalized = headingText.toLowerCase();
     if (!isGenericHeading(normalized)) {
-      return `Adjust ${headingText} plan`;
+      return `Update ${headingText} plan`;
     }
   }
 
@@ -110,7 +110,7 @@ function generatePlanMutationTitle(section: ClassifiedSection): string {
     if (match) {
       const change = match[2] || match[1];
       if (change && change.length < 50) {
-        return `Adjust plan: ${capitalizeFirst(change.trim())}`;
+        return `Project update: ${capitalizeFirst(change.trim())}`;
       }
     }
   }
@@ -118,17 +118,17 @@ function generatePlanMutationTitle(section: ClassifiedSection): string {
   // Fallback: use key nouns from the section
   const keyNouns = extractKeyNouns(bodyText);
   if (keyNouns.length > 0) {
-    return `Adjust ${keyNouns.slice(0, 2).join(' ')} plan`;
+    return `Update ${keyNouns.slice(0, 2).join(' ')} plan`;
   }
 
   // Last resort
-  return `Adjust initiative scope and focus`;
+  return `Update project scope and focus`;
 }
 
 /**
- * Generate a title for an execution artifact suggestion
+ * Generate a title for an idea suggestion
  */
-function generateExecutionArtifactTitle(section: ClassifiedSection): string {
+function generateIdeaTitle(section: ClassifiedSection): string {
   const headingText = section.heading_text || '';
   const bodyText = section.raw_text;
 
@@ -136,7 +136,7 @@ function generateExecutionArtifactTitle(section: ClassifiedSection): string {
   if (headingText && headingText.length > 3 && headingText.length < 60) {
     const normalized = headingText.toLowerCase();
     if (!isGenericHeading(normalized)) {
-      return `New initiative: ${headingText}`;
+      return `New idea: ${headingText}`;
     }
   }
 
@@ -151,7 +151,7 @@ function generateExecutionArtifactTitle(section: ClassifiedSection): string {
     if (match) {
       const target = match[2];
       if (target && target.length < 50 && target.length > 3) {
-        return `New initiative: ${capitalizeFirst(target.trim())}`;
+        return `New idea: ${capitalizeFirst(target.trim())}`;
       }
     }
   }
@@ -159,11 +159,11 @@ function generateExecutionArtifactTitle(section: ClassifiedSection): string {
   // Extract key nouns
   const keyNouns = extractKeyNouns(bodyText);
   if (keyNouns.length > 0) {
-    return `New ${keyNouns.slice(0, 2).join(' ')} initiative`;
+    return `New ${keyNouns.slice(0, 2).join(' ')} idea`;
   }
 
   // Last resort
-  return `New initiative from section`;
+  return `New idea from section`;
 }
 
 /**
@@ -427,15 +427,14 @@ export function synthesizeSuggestion(section: ClassifiedSection): Suggestion | n
   }
 
   // Generate title
-  // feature_request uses same title/payload generation as execution_artifact
   const title =
-    type === 'plan_mutation'
-      ? generatePlanMutationTitle(section)
-      : generateExecutionArtifactTitle(section);
+    type === 'project_update'
+      ? generateProjectUpdateTitle(section)
+      : generateIdeaTitle(section);
 
   // Generate payload
   let payload: SuggestionPayload;
-  if (type === 'plan_mutation') {
+  if (type === 'project_update') {
     payload = {
       after_description: generateAfterDescription(section),
     };

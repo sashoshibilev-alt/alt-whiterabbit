@@ -127,7 +127,7 @@ function createMockPlanChangeSection(overrides?: Partial<ClassifiedSection>): Cl
     actionability_reason: 'Actionable: signal=0.600 >= 0.500',
     actionable_signal: 0.6,
     out_of_scope_signal: 0.05,
-    suggested_type: 'plan_mutation',
+    suggested_type: 'project_update',
     type_confidence: 0.7,
     ...overrides,
   };
@@ -229,7 +229,7 @@ describe('ACTIONABILITY Invariants', () => {
 
       // Should be actionable despite low signal
       expect(classified.is_actionable).toBe(true);
-      expect(classified.suggested_type).toBe('plan_mutation');
+      expect(classified.suggested_type).toBe('project_update');
 
       // Should pass filter
       const filtered = filterActionableSections([classified]);
@@ -239,7 +239,7 @@ describe('ACTIONABILITY Invariants', () => {
   });
 
   describe('Invariant A2: type classification never drops plan_change', () => {
-    it('should force plan_mutation type for plan_change with non_actionable type (rule-based)', () => {
+    it('should force project_update type for plan_change section (rule-based)', () => {
       // Create a section with explicit plan_change keywords
       // to ensure it classifies as plan_change intent
       const mockSection: Section = {
@@ -274,11 +274,11 @@ describe('ACTIONABILITY Invariants', () => {
       // Should be actionable
       expect(classified.is_actionable).toBe(true);
 
-      // Should have plan_mutation type, not non_actionable
-      expect(classified.suggested_type).toBe('plan_mutation');
+      // Should have project_update type, not non_actionable
+      expect(classified.suggested_type).toBe('project_update');
     });
 
-    it('should force plan_mutation type for plan_change with non_actionable type (LLM)', async () => {
+    it('should force project_update type for plan_change section (LLM)', async () => {
       const mockLLMProvider = new MockLLMProvider();
       mockLLMProvider.setResponse('classify', {
         plan_change: 0.5,
@@ -322,8 +322,8 @@ describe('ACTIONABILITY Invariants', () => {
       // Should be actionable
       expect(classified.is_actionable).toBe(true);
 
-      // Should have plan_mutation type
-      expect(classified.suggested_type).toBe('plan_mutation');
+      // Should have project_update type
+      expect(classified.suggested_type).toBe('project_update');
     });
   });
 });
@@ -350,7 +350,7 @@ describe('THRESHOLD Invariants', () => {
         suggestion_id: 'mock-sug-1',
         note_id: 'mock-note',
         section_id: 'mock-section-1',
-        type: 'plan_mutation',
+        type: 'project_update',
         title: 'Adjust scope',
         payload: {
           after_description: 'Shift focus to new priorities',
@@ -417,7 +417,7 @@ describe('THRESHOLD Invariants', () => {
           suggestion_id: 'sug-1',
           note_id: 'mock-note',
           section_id: 'section-1',
-          type: 'plan_mutation',
+          type: 'project_update',
           title: 'Adjust scope A',
           payload: { after_description: 'Description A' },
           evidence_spans: [],
@@ -433,7 +433,7 @@ describe('THRESHOLD Invariants', () => {
           suggestion_id: 'sug-2',
           note_id: 'mock-note',
           section_id: 'section-2',
-          type: 'plan_mutation',
+          type: 'project_update',
           title: 'Adjust scope B',
           payload: { after_description: 'Description B' },
           evidence_spans: [],
@@ -449,7 +449,7 @@ describe('THRESHOLD Invariants', () => {
           suggestion_id: 'sug-3',
           note_id: 'mock-note',
           section_id: 'section-3',
-          type: 'plan_mutation',
+          type: 'project_update',
           title: 'Adjust scope C',
           payload: { after_description: 'Description C' },
           evidence_spans: [],
@@ -472,19 +472,19 @@ describe('THRESHOLD Invariants', () => {
 
       // All 3 plan_change suggestions should be kept despite cap=2
       expect(result.suggestions).toHaveLength(3);
-      expect(result.suggestions.every(s => s.type === 'plan_mutation')).toBe(true);
+      expect(result.suggestions.every(s => s.type === 'project_update')).toBe(true);
 
       // No plan_change suggestions should be dropped
       expect(result.dropped).toHaveLength(0);
     });
 
-    it('should only cap execution_artifact suggestions, never plan_change', () => {
+    it('should only cap idea suggestions, never plan_change', () => {
       // Test the capping logic directly with applyConfidenceBasedProcessing + manual capping
       const planSuggestion: Suggestion = {
         suggestion_id: 'plan-sug',
         note_id: 'mock-note',
         section_id: 'plan-section',
-        type: 'plan_mutation',
+        type: 'project_update',
         title: 'Plan change',
         payload: { after_description: 'Plan description' },
         evidence_spans: [{ start_line: 0, end_line: 2, text: 'Evidence' }],
@@ -501,7 +501,7 @@ describe('THRESHOLD Invariants', () => {
         suggestion_id: 'artifact-sug-1',
         note_id: 'mock-note',
         section_id: 'artifact-section-1',
-        type: 'execution_artifact',
+        type: 'idea',
         title: 'New initiative A',
         payload: { draft_initiative: { title: 'Initiative A', description: 'Desc A' } },
         evidence_spans: [{ start_line: 0, end_line: 2, text: 'Evidence A' }],
@@ -518,7 +518,7 @@ describe('THRESHOLD Invariants', () => {
         suggestion_id: 'artifact-sug-2',
         note_id: 'mock-note',
         section_id: 'artifact-section-2',
-        type: 'execution_artifact',
+        type: 'idea',
         title: 'New initiative B',
         payload: { draft_initiative: { title: 'Initiative B', description: 'Desc B' } },
         evidence_spans: [{ start_line: 0, end_line: 2, text: 'Evidence B' }],
@@ -540,25 +540,25 @@ describe('THRESHOLD Invariants', () => {
       expect(passed.length).toBe(3);
 
       // Now test the capping logic: separate by type and cap
-      const planMutations = passed.filter(s => s.type === 'plan_mutation');
-      const artifacts = passed.filter(s => s.type === 'execution_artifact');
+      const projectUpdates = passed.filter(s => s.type === 'project_update');
+      const ideas = passed.filter(s => s.type === 'idea');
 
-      expect(planMutations).toHaveLength(1);
-      expect(artifacts).toHaveLength(2);
+      expect(projectUpdates).toHaveLength(1);
+      expect(ideas).toHaveLength(2);
 
-      // With max_suggestions = 2, should keep 1 plan + 1 artifact (top-scoring)
+      // With max_suggestions = 2, should keep 1 project_update + 1 idea (top-scoring)
       const maxSuggestions = 2;
-      const remainingSlots = Math.max(0, maxSuggestions - planMutations.length);
-      const keptArtifacts = artifacts.slice(0, remainingSlots);
-      const final = [...planMutations, ...keptArtifacts];
+      const remainingSlots = Math.max(0, maxSuggestions - projectUpdates.length);
+      const keptIdeas = ideas.slice(0, remainingSlots);
+      const final = [...projectUpdates, ...keptIdeas];
 
       expect(final).toHaveLength(2);
-      expect(final.some(s => s.type === 'plan_mutation')).toBe(true);
-      expect(final.some(s => s.type === 'execution_artifact')).toBe(true);
+      expect(final.some(s => s.type === 'project_update')).toBe(true);
+      expect(final.some(s => s.type === 'idea')).toBe(true);
 
-      // One artifact should be dropped
-      const droppedArtifacts = artifacts.slice(remainingSlots);
-      expect(droppedArtifacts).toHaveLength(1);
+      // One idea should be dropped
+      const droppedIdeas = ideas.slice(remainingSlots);
+      expect(droppedIdeas).toHaveLength(1);
     });
   });
 });
@@ -617,8 +617,8 @@ describe('End-to-End Invariants (Debug JSON)', () => {
       }
     }
 
-    // Check that plan_mutation suggestions are in the result
-    const planMutationSuggestions = result.suggestions.filter(s => s.type === 'plan_mutation');
+    // Check that project_update suggestions are in the result
+    const planMutationSuggestions = result.suggestions.filter(s => s.type === 'project_update');
     expect(planMutationSuggestions.length).toBeGreaterThan(0);
 
     // Downgraded suggestions should have needs_clarification
@@ -680,7 +680,7 @@ Goal: Reduce churn by 50%.
 
       // Check all candidates
       for (const candidate of section.candidates) {
-        if (candidate.metadata?.type === 'plan_mutation') {
+        if (candidate.metadata?.type === 'project_update') {
           // Should never be dropped at ACTIONABILITY or THRESHOLD
           expect(candidate.dropStage).not.toBe(DropStage.ACTIONABILITY);
           expect(candidate.dropStage).not.toBe(DropStage.THRESHOLD);
@@ -756,7 +756,7 @@ Goal: Reduce churn by 50%.
     }
   });
 
-  it('runtime entrypoint: plan_mutation candidates are never dropped at THRESHOLD', () => {
+  it('runtime entrypoint: project_update candidates are never dropped at THRESHOLD', () => {
     // Test the exact entrypoint used by the Convex action
     const result = generateSuggestionsWithDebug(
       LOW_SIGNAL_PLAN_CHANGE_NOTE,
@@ -786,8 +786,8 @@ Goal: Reduce churn by 50%.
       if (section.decisions.intentLabel !== 'plan_change') continue;
       
       for (const candidate of section.candidates) {
-        if (candidate.metadata?.type === 'plan_mutation') {
-          // INVARIANT: plan_mutation candidates should never be dropped at THRESHOLD
+        if (candidate.metadata?.type === 'project_update') {
+          // INVARIANT: project_update candidates should never be dropped at THRESHOLD
           if (candidate.dropStage === DropStage.THRESHOLD) {
             violations.push(candidate.candidateId);
           }
@@ -940,10 +940,10 @@ Launch a customer success program to improve retention.
       expect(emittedCandidates.length).toBeGreaterThanOrEqual(1);
     }
 
-    // Task 6d: No plan_mutation candidate has dropStage="THRESHOLD"
+    // Task 6d: No project_update candidate has dropStage="THRESHOLD"
     for (const section of debugRun.sections) {
       for (const candidate of section.candidates) {
-        if (candidate.metadata?.type === 'plan_mutation') {
+        if (candidate.metadata?.type === 'project_update') {
           expect(candidate.dropStage).not.toBe(DropStage.THRESHOLD);
         }
       }

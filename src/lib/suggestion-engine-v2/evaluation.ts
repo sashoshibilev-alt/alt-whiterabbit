@@ -31,7 +31,6 @@ export interface NoteEvaluation {
   suggestions_generated: number;
   suggestions_after_validation: number;
   suggestions_final: number;
-  v1_drops: number;
   v2_drops: number;
   v3_drops: number;
   score_drops: number;
@@ -49,7 +48,6 @@ export interface EvaluationMetrics {
   total_sections: number;
   total_actionable_sections: number;
   total_suggestions_before_validation: number;
-  total_v1_drops: number;
   total_v2_drops: number;
   total_v3_drops: number;
   total_score_drops: number;
@@ -114,7 +112,6 @@ export function evaluateNote(
     suggestions_generated: debug.suggestions_before_validation,
     suggestions_after_validation: debug.suggestions_after_validation,
     suggestions_final: result.suggestions.length,
-    v1_drops: debug.v1_drops,
     v2_drops: debug.v2_drops,
     v3_drops: debug.v3_drops,
     score_drops: debug.suggestions_after_validation - debug.suggestions_after_scoring,
@@ -178,10 +175,6 @@ export function evaluateBatch(
   for (const evaluation of evaluations) {
     // Note: In a full implementation, we'd track specific drop reasons
     // For now, we aggregate by validator type
-    if (evaluation.v1_drops > 0) {
-      validatorDropReasons['V1_change_test'] =
-        (validatorDropReasons['V1_change_test'] || 0) + evaluation.v1_drops;
-    }
     if (evaluation.v2_drops > 0) {
       validatorDropReasons['V2_anti_vacuity'] =
         (validatorDropReasons['V2_anti_vacuity'] || 0) + evaluation.v2_drops;
@@ -203,7 +196,6 @@ export function evaluateBatch(
       (sum, e) => sum + e.suggestions_generated,
       0
     ),
-    total_v1_drops: evaluations.reduce((sum, e) => sum + e.v1_drops, 0),
     total_v2_drops: evaluations.reduce((sum, e) => sum + e.v2_drops, 0),
     total_v3_drops: evaluations.reduce((sum, e) => sum + e.v3_drops, 0),
     total_score_drops: evaluations.reduce((sum, e) => sum + e.score_drops, 0),
@@ -294,7 +286,6 @@ export function generateReport(metrics: EvaluationMetrics): string {
     '',
     '## Pipeline Metrics',
     `- Suggestions before validation: ${metrics.total_suggestions_before_validation}`,
-    `- V1 (change-test) drops: ${metrics.total_v1_drops}`,
     `- V2 (anti-vacuity) drops: ${metrics.total_v2_drops}`,
     `- V3 (evidence-sanity) drops: ${metrics.total_v3_drops}`,
     `- Score threshold drops: ${metrics.total_score_drops}`,
@@ -366,7 +357,6 @@ export function quickEvaluate(
     `Sections: ${result.debug?.sections_count}`,
     `Actionable: ${result.debug?.actionable_sections_count}`,
     `Before validation: ${result.debug?.suggestions_before_validation}`,
-    `V1 drops: ${result.debug?.v1_drops}`,
     `V2 drops: ${result.debug?.v2_drops}`,
     `V3 drops: ${result.debug?.v3_drops}`,
     `Final: ${result.suggestions.length}`,

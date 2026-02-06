@@ -108,9 +108,6 @@ describe("DropStage and DropReason Mapping", () => {
   });
 
   it("should map VALIDATION stage reasons correctly", () => {
-    expect(DROP_REASON_STAGE[DropReason.VALIDATION_V1_CHANGE_TEST_FAILED]).toBe(
-      DropStage.VALIDATION
-    );
     expect(DROP_REASON_STAGE[DropReason.VALIDATION_V2_TOO_GENERIC]).toBe(
       DropStage.VALIDATION
     );
@@ -435,7 +432,7 @@ describe("computeDebugRunSummary", () => {
         classificationModel: "test",
         typeModel: "test",
         synthesisModel: "test",
-        validationModels: { v1: "test", v2: "test", v3: "test" },
+        validationModels: { v2: "test", v3: "test" },
         dedupeEnabled: true,
         maxSuggestionsPerNote: 5,
       },
@@ -452,14 +449,14 @@ describe("computeDebugRunSummary", () => {
             scoresByLabel: {},
           },
           typeClassification: {
-            topLabel: "plan_mutation",
+            topLabel: "project_update",
             topScore: 0.7,
             scoresByLabel: {},
           },
           decisions: {
             isActionable: true,
             intentLabel: "plan_change",
-            typeLabel: "plan_mutation",
+            typeLabel: "project_update",
           },
           synthesisRan: true,
           candidates: [],
@@ -480,91 +477,6 @@ describe("computeDebugRunSummary", () => {
     expect(summary.dropReasonTop[0].reason).toBe(
       DropReason.SCORE_BELOW_THRESHOLD
     );
-  });
-
-  it("should exclude V1 change-test from top reasons (non-blocking)", () => {
-    const debugRun: DebugRun = {
-      meta: {
-        noteId: "test",
-        runId: "run-v1-nonblocking",
-        generatorVersion: "test",
-        createdAt: new Date().toISOString(),
-        verbosity: "REDACTED",
-      },
-      config: {
-        generatorVersion: "test",
-        thresholds: {
-          actionabilityMinScore: 0.5,
-          typeMinScore: 0.5,
-          synthesisMinScore: 0.5,
-          evidenceMinScore: 0.5,
-          validationMinScore: 0.5,
-          overallMinScore: 0.65,
-        },
-        classificationModel: "test",
-        typeModel: "test",
-        synthesisModel: "test",
-        validationModels: { v1: "test", v2: "test", v3: "test" },
-        dedupeEnabled: true,
-        maxSuggestionsPerNote: 5,
-      },
-      noteSummary: { lineCount: 10 },
-      sections: [
-        {
-          sectionId: "s1",
-          headingTextPreview: "Section with V1 failure",
-          lineRange: [0, 5],
-          structuralFeatures: { lineCount: 5, charCount: 100, bulletCount: 2 },
-          intentClassification: {
-            topLabel: "plan_change",
-            topScore: 0.8,
-            scoresByLabel: {},
-          },
-          typeClassification: {
-            topLabel: "plan_mutation",
-            topScore: 0.7,
-            scoresByLabel: {},
-          },
-          decisions: {
-            isActionable: true,
-            intentLabel: "plan_change",
-            typeLabel: "plan_mutation",
-          },
-          synthesisRan: true,
-          candidates: [
-            {
-              candidateId: "c1",
-              emitted: false,
-              dropStage: DropStage.VALIDATION,
-              dropReason: DropReason.VALIDATION_V1_CHANGE_TEST_FAILED,
-              suggestionPreview: null,
-              validatorResults: [
-                { name: "V1_CHANGE_TEST", passed: false, reason: "No delta signal" },
-                { name: "V2_GENERICITY", passed: true },
-                { name: "V3_EVIDENCE", passed: true },
-              ],
-              scoreBreakdown: { overallScore: 0.7 },
-            },
-          ],
-          scoreSummary: { overallScore: 0.7 },
-          emitted: false,
-          dropStage: DropStage.VALIDATION,
-          dropReason: DropReason.VALIDATION_V1_CHANGE_TEST_FAILED,
-        },
-      ],
-    };
-
-    const summary = computeDebugRunSummary(debugRun);
-
-    // V1 should NOT appear in top reasons
-    const v1InTopReasons = summary.dropReasonTop.some(
-      (r) => r.reason === DropReason.VALIDATION_V1_CHANGE_TEST_FAILED
-    );
-    expect(v1InTopReasons).toBe(false);
-  });
-
-  it("should include V1 in NON_BLOCKING_DROP_REASONS set", () => {
-    expect(NON_BLOCKING_DROP_REASONS.has(DropReason.VALIDATION_V1_CHANGE_TEST_FAILED)).toBe(true);
   });
 
   it("should NOT include V2 or V3 in NON_BLOCKING_DROP_REASONS", () => {
@@ -672,33 +584,6 @@ describe("generateSuggestionsWithDebug", () => {
     expect(result.suggestions).toHaveLength(0);
     expect(result.debugRun).toBeDefined();
     expect(result.debugRun!.sections).toHaveLength(0);
-  });
-
-  it("V1 failure alone should not drop suggestions or appear in top reasons", () => {
-    const result = generateSuggestionsWithDebug(
-      TEST_NOTE,
-      {},
-      { enable_debug: true },
-      { verbosity: "REDACTED" }
-    );
-
-    const debugRun = result.debugRun!;
-    const summary = computeDebugRunSummary(debugRun);
-
-    // V1 must NEVER appear in top reasons
-    const v1InTopReasons = summary.dropReasonTop.some(
-      (r) => r.reason === DropReason.VALIDATION_V1_CHANGE_TEST_FAILED
-    );
-    expect(v1InTopReasons).toBe(false);
-
-    // No candidate should be dropped due to V1
-    for (const section of debugRun.sections) {
-      for (const candidate of section.candidates) {
-        expect(candidate.dropReason).not.toBe(
-          DropReason.VALIDATION_V1_CHANGE_TEST_FAILED
-        );
-      }
-    }
   });
 
   it("should produce JSON-serializable debug runs", () => {

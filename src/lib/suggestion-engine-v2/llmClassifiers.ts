@@ -112,12 +112,12 @@ Intent signals:
 
 Classify whether this section represents:
 
-1. plan_mutation: Changes to an EXISTING initiative, project, or plan. Examples:
+1. project_update: Changes to an EXISTING initiative, project, or plan. Examples:
    - "Shift focus from X to Y"
    - "Defer feature Z to next quarter"
    - "Reduce scope to core functionality"
 
-2. execution_artifact: A NEW initiative, project, or workstream being created. Examples:
+2. idea: A NEW initiative, project, or workstream being created. Examples:
    - "Launch customer success program"
    - "Build new analytics dashboard"
    - "Create partner integration platform"
@@ -126,7 +126,7 @@ Classify whether this section represents:
 
 Return JSON with exactly these fields:
 {
-  "type": "plan_mutation" | "execution_artifact" | "non_actionable",
+  "type": "project_update" | "idea" | "non_actionable",
   "confidence": 0.0-1.0,
   "p_mutation": 0.0-1.0,
   "p_artifact": 0.0-1.0,
@@ -214,7 +214,7 @@ export async function classifyTypeWithLLM(
   const schema = {
     type: 'object',
     properties: {
-      type: { type: 'string', enum: ['plan_mutation', 'execution_artifact', 'non_actionable'] },
+      type: { type: 'string', enum: ['project_update', 'idea', 'non_actionable'] },
       confidence: { type: 'number', minimum: 0, maximum: 1 },
       p_mutation: { type: 'number', minimum: 0, maximum: 1 },
       p_artifact: { type: 'number', minimum: 0, maximum: 1 },

@@ -5,9 +5,9 @@
  * Operates only on suggestions that have passed quality validators.
  * 
  * KEY INVARIANT (per suggestion-suppression-fix plan):
- * - plan_mutation suggestions are NEVER dropped due to low scores
+ * - project_update suggestions are NEVER dropped due to low scores
  * - Low scores downgrade to needs_clarification, never to silence
- * - Only execution_artifact suggestions may be dropped by thresholds
+ * - Only idea suggestions may be dropped by thresholds
  */
 
 import type {
@@ -79,14 +79,14 @@ function computeTypeChoiceConfidence(section: ClassifiedSection): number {
   const intent = section.intent;
 
   // Get probabilities for each type
-  const pMutation = intent.plan_change;
-  const pArtifact = intent.new_workstream;
+  const pProjectUpdate = intent.plan_change;
+  const pIdea = intent.new_workstream;
 
   // Margin between the two
-  const margin = Math.abs(pMutation - pArtifact);
+  const margin = Math.abs(pProjectUpdate - pIdea);
 
   // Overall probability level
-  const maxProb = Math.max(pMutation, pArtifact);
+  const maxProb = Math.max(pProjectUpdate, pIdea);
 
   // Confidence is higher when:
   // 1. There's a clear winner (large margin)
@@ -248,13 +248,13 @@ export function refineSuggestionScores(
 
 /**
  * Check if a suggestion represents a plan change
- * 
+ *
  * Plan change suggestions should NEVER be dropped due to low scores.
  * Per the plan: "any belief with intentLabel === 'plan_change' always produces at least one suggestion"
  */
 export function isPlanChangeSuggestion(suggestion: Suggestion): boolean {
-  // plan_mutation type is the equivalent of plan_change intentLabel
-  return suggestion.type === 'plan_mutation';
+  // project_update type is the equivalent of plan_change intentLabel
+  return suggestion.type === 'project_update';
 }
 
 /**
@@ -300,9 +300,9 @@ export function computeClarificationReasons(
 /**
  * Check if a suggestion passes minimum thresholds
  * 
- * IMPORTANT: Per suggestion-suppression-fix plan, plan_mutation suggestions
+ * IMPORTANT: Per suggestion-suppression-fix plan, project_update suggestions
  * are NEVER dropped due to low scores. This function is only used for
- * execution_artifact suggestions now.
+ * idea suggestions now.
  */
 export function passesThresholds(
   suggestion: Suggestion,
@@ -331,14 +331,14 @@ export function passesThresholds(
  * Apply confidence-based processing to suggestions
  * 
  * Per the suggestion-suppression-fix plan:
- * - plan_mutation suggestions are NEVER dropped at THRESHOLD stage
+ * - project_update suggestions are NEVER dropped at THRESHOLD stage
  * - Low confidence downgrades to needs_clarification with reasons (and optionally action: 'comment')
- * - execution_artifact suggestions may still be dropped by thresholds
- * 
+ * - idea suggestions may still be dropped by thresholds
+ *
  * Decision matrix:
- * - Case A: non-plan_change → may be dropped if below threshold
- * - Case B: plan_change + high confidence → emit as-is
- * - Case C: plan_change + low confidence → emit with needs_clarification=true and action='comment'
+ * - Case A: non-plan_change (idea) → may be dropped if below threshold
+ * - Case B: plan_change (project_update) + high confidence → emit as-is
+ * - Case C: plan_change (project_update) + low confidence → emit with needs_clarification=true and action='comment'
  */
 export function applyConfidenceBasedProcessing(
   suggestions: Suggestion[],
@@ -384,7 +384,7 @@ export function applyConfidenceBasedProcessing(
       
       passed.push(processedSuggestion);
     } else {
-      // Case A: Non-plan-change (execution_artifact) suggestions may be dropped
+      // Case A: Non-plan-change (idea) suggestions may be dropped
       const result = passesThresholds(suggestion, thresholds);
       if (result.passes) {
         passed.push({
@@ -441,15 +441,15 @@ export function capSuggestions(
  * Run full scoring and pruning pipeline
  * 
  * Per suggestion-suppression-fix plan:
- * - plan_mutation suggestions are NEVER dropped due to low scores
+ * - project_update suggestions are NEVER dropped due to low scores
  * - Low confidence downgrades to needs_clarification
- * - execution_artifact suggestions may be dropped by thresholds
- * 
+ * - idea suggestions may be dropped by thresholds
+ *
  * NORMALIZATION: Ensures suggestion.type matches section intent label.
- * If a plan_change section was mis-typed as execution_artifact, we normalize
- * it to plan_mutation to ensure proper THRESHOLD handling.
- * 
- * CAPPING: plan_mutation suggestions are always kept; only execution_artifact
+ * If a plan_change section was mis-typed as idea, we normalize
+ * it to project_update to ensure proper THRESHOLD handling.
+ *
+ * CAPPING: project_update suggestions are always kept; only idea
  * suggestions can be capped if total exceeds max_suggestions.
  */
 export function runScoringPipeline(
@@ -468,9 +468,9 @@ export function runScoringPipeline(
 
     const isPlanChangeSection = isPlanChangeIntentLabel(section.intent);
 
-    if (isPlanChangeSection && s.type !== 'plan_mutation') {
+    if (isPlanChangeSection && s.type !== 'project_update') {
       // Force plan_change semantics by type
-      return { ...s, type: 'plan_mutation' };
+      return { ...s, type: 'project_update' as const };
     }
 
     return s;
@@ -488,24 +488,24 @@ export function runScoringPipeline(
   // 3) Apply confidence-based processing (respects plan_change invariants)
   const { passed, dropped, downgraded } = applyConfidenceBasedProcessing(scored, config.thresholds);
 
-  // 4) Separate plan_mutation from non-plan types for plan_change-aware capping
-  // feature_request and execution_artifact are both cappable; plan_mutation is not
-  const planMutations = passed.filter(s => s.type === 'plan_mutation');
-  const executionArtifacts = passed.filter(s => s.type !== 'plan_mutation');
+  // 4) Separate project_update from idea types for plan_change-aware capping
+  // idea suggestions are cappable; project_update is not
+  const projectUpdates = passed.filter(s => s.type === 'project_update');
+  const ideas = passed.filter(s => s.type !== 'project_update');
 
   // 5) Sort each group by score
-  const sortedPlan = sortByScore(planMutations);
-  const sortedArtifacts = sortByScore(executionArtifacts);
+  const sortedProjectUpdates = sortByScore(projectUpdates);
+  const sortedIdeas = sortByScore(ideas);
 
-  // 6) Cap suggestions: always keep ALL plan_change suggestions
-  // Only execution_artifact suggestions can be capped if total exceeds max_suggestions
-  const remainingSlots = Math.max(0, config.max_suggestions - sortedPlan.length);
-  const keptArtifacts = sortedArtifacts.slice(0, remainingSlots);
-  const capped = [...sortedPlan, ...keptArtifacts];
+  // 6) Cap suggestions: always keep ALL plan_change (project_update) suggestions
+  // Only idea suggestions can be capped if total exceeds max_suggestions
+  const remainingSlots = Math.max(0, config.max_suggestions - sortedProjectUpdates.length);
+  const keptIdeas = sortedIdeas.slice(0, remainingSlots);
+  const capped = [...sortedProjectUpdates, ...keptIdeas];
 
-  // Mark dropped execution_artifact suggestions beyond cap
-  // Plan_mutation suggestions are NEVER in cappedDropped
-  const cappedDropped = sortedArtifacts.slice(remainingSlots).map((s) => ({
+  // Mark dropped idea suggestions beyond cap
+  // project_update suggestions are NEVER in cappedDropped
+  const cappedDropped = sortedIdeas.slice(remainingSlots).map((s) => ({
     suggestion: s,
     reason: 'Exceeded max_suggestions limit',
   }));

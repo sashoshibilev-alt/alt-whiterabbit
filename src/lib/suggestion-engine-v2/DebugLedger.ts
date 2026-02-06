@@ -368,9 +368,6 @@ export class DebugLedger {
 
     // Build validator summary
     section.validatorSummary = {
-      v1: candidate.validatorResults.find((r) =>
-        r.name.includes("V1")
-      ) as ValidatorResult | undefined,
       v2: candidate.validatorResults.find((r) =>
         r.name.includes("V2")
       ) as ValidatorResult | undefined,
@@ -537,9 +534,9 @@ export class DebugLedger {
           // Was marked as emitted but not in final list
           candidate.emitted = false;
           if (!candidate.dropReason) {
-            // PLAN_CHANGE PROTECTION: If this was a plan_mutation candidate,
+            // PLAN_CHANGE PROTECTION: If this was a project_update candidate,
             // treat as internal invariant issue rather than score-based drop
-            const isPlanMutation = candidate.metadata?.type === 'plan_mutation';
+            const isPlanMutation = candidate.metadata?.type === 'project_update';
             candidate.dropReason = isPlanMutation
               ? DropReason.INTERNAL_ERROR
               : DropReason.SCORE_BELOW_THRESHOLD;
@@ -667,7 +664,6 @@ export class DebugLedger {
       typeModel: "rule-based-v2",
       synthesisModel: "rule-based-v2",
       validationModels: {
-        v1: "V1_change_test",
         v2: "V2_anti_vacuity",
         v3: "V3_evidence_sanity",
       },

@@ -392,7 +392,7 @@ const V3_PRODUCT_NOUNS = [
 
 /**
  * V3 Bullet action verbs — when ≥2 bullets start with these verbs the section
- * is treated as actionable (micro_tasks or execution_artifact).
+ * is treated as actionable (micro_tasks or idea).
  */
 const V3_BULLET_ACTION_VERBS = [
   'add', 'verify', 'update', 'share', 'remove', 'fix', 'create', 'build',
@@ -1006,7 +1006,7 @@ const EXECUTION_ARTIFACT_PATTERNS = [
 ];
 
 /**
- * Classify section type (plan_mutation vs execution_artifact)
+ * Classify section type (project_update vs idea)
  */
 export function classifyType(section: Section, intent: IntentClassification): {
   type: SectionType;
@@ -1044,7 +1044,7 @@ export function classifyType(section: Section, intent: IntentClassification): {
   if (p_mutation > p_artifact) {
     const margin = p_mutation - p_artifact;
     return {
-      type: 'plan_mutation',
+      type: 'project_update',
       confidence: Math.min(1, 0.5 + margin),
       p_mutation,
       p_artifact,
@@ -1052,7 +1052,7 @@ export function classifyType(section: Section, intent: IntentClassification): {
   } else {
     const margin = p_artifact - p_mutation;
     return {
-      type: 'execution_artifact',
+      type: 'idea',
       confidence: Math.min(1, 0.5 + margin),
       p_mutation,
       p_artifact,
@@ -1065,62 +1065,19 @@ export function classifyType(section: Section, intent: IntentClassification): {
 // ============================================
 
 /**
- * Compute typeLabel to distinguish feature_request, execution_artifact, and plan_mutation.
+ * Compute typeLabel: idea vs project_update.
  *
- * Returns "plan_mutation" when plan_change is the dominant intent.
- *
- * Returns "feature_request" when ALL of:
- * - intentLabel is new_workstream (not plan_change)
- * - bulletCount == 0
- * - section body contains request stem OR action verb (not both required)
- * - total non-whitespace chars in section body >= 20
- *
- * execution_artifact remains the fallback for:
- * - bullet-based task lists
- * - multi-step drafts
+ * Returns "project_update" when plan_change is the dominant intent.
+ * Returns "idea" for all actionable new_workstream sections.
  */
 function computeTypeLabel(
   section: Section,
   intent: IntentClassification
-): 'feature_request' | 'execution_artifact' | 'plan_mutation' {
-  // plan_change dominant → plan_mutation label (consistent with suggested_type)
+): 'idea' | 'project_update' {
   if (isPlanChangeIntentLabel(intent)) {
-    return 'plan_mutation';
+    return 'project_update';
   }
-
-  // Check if intent is new_workstream dominant
-  const isNewWorkstream = intent.new_workstream >= intent.plan_change;
-
-  if (!isNewWorkstream) {
-    return 'execution_artifact';
-  }
-
-  // Bullet-based sections remain execution_artifact
-  const bulletCount = section.structural_features.num_list_items;
-  if (bulletCount > 0) {
-    return 'execution_artifact';
-  }
-
-  // Require minimum substance (>= 20 non-whitespace chars)
-  const nonWhitespaceCount = section.raw_text.replace(/\s/g, '').length;
-  if (nonWhitespaceCount < 20) {
-    return 'execution_artifact';
-  }
-
-  // Check for request stem OR action verb in section text
-  const normalizedText = preprocessLine(section.raw_text);
-
-  const hasRequestStem = V3_REQUEST_STEMS.some(stem => normalizedText.includes(stem));
-  const hasActionVerb = V3_ACTION_VERBS.some(verb => {
-    const regex = new RegExp(`\\b${verb}\\b`, 'i');
-    return regex.test(normalizedText);
-  });
-
-  if (hasRequestStem || hasActionVerb) {
-    return 'feature_request';
-  }
-
-  return 'execution_artifact';
+  return 'idea';
 }
 
 /**
@@ -1149,9 +1106,9 @@ export function classifySection(
       actionability_reason: `${actionabilityResult.reason} (overridden for plan_change intent)`,
       actionable_signal: actionabilityResult.actionableSignal,
       out_of_scope_signal: actionabilityResult.outOfScopeSignal,
-      suggested_type: 'plan_mutation',
+      suggested_type: 'project_update',
       type_confidence: 0.3, // explicit low confidence
-      typeLabel: 'plan_mutation',
+      typeLabel: 'project_update',
     };
   }
 
@@ -1165,10 +1122,10 @@ export function classifySection(
     if (typeResult.type === 'non_actionable') {
       if (isPlanChange) {
         // Strengthened PLAN_CHANGE PROTECTION at TYPE stage
-        // Force plan_mutation type and ensure actionability stays true
-        suggestedType = 'plan_mutation';
+        // Force project_update type and ensure actionability stays true
+        suggestedType = 'project_update';
         typeConfidence = 0.3;
-        // Return early with forced plan_mutation to prevent any drop
+        // Return early with forced project_update to prevent any drop
         return {
           ...section,
           intent,
@@ -1179,7 +1136,7 @@ export function classifySection(
           out_of_scope_signal: actionabilityResult.outOfScopeSignal,
           suggested_type: suggestedType,
           type_confidence: typeConfidence,
-          typeLabel: 'plan_mutation',
+          typeLabel: 'project_update',
         };
       } else {
         // Non-plan_change can still be dropped by TYPE
@@ -1198,34 +1155,27 @@ export function classifySection(
       suggestedType = typeResult.type;
       typeConfidence = typeResult.confidence;
 
-      // For plan_change with artifact type, force to plan_mutation
-      if (isPlanChange && suggestedType === 'execution_artifact') {
-        suggestedType = 'plan_mutation';
+      // For plan_change sections, force to project_update
+      if (isPlanChange && suggestedType !== 'project_update') {
+        suggestedType = 'project_update';
       }
 
-      // Guard: plan_mutation only for plan_change intent.
-      // Non-plan_change sections that happen to match mutation patterns
-      // should stay as execution_artifact.
-      if (!isPlanChange && suggestedType === 'plan_mutation') {
-        suggestedType = 'execution_artifact';
+      // Guard: project_update only for plan_change intent.
+      // Non-plan_change sections should be idea.
+      if (!isPlanChange && suggestedType === 'project_update') {
+        suggestedType = 'idea';
       }
     }
   }
 
-  // For plan_change sections with no suggested type, force plan_mutation
+  // For plan_change sections with no suggested type, force project_update
   if (isPlanChange && !suggestedType) {
-    suggestedType = 'plan_mutation';
+    suggestedType = 'project_update';
     typeConfidence = 0.2; // explicit "fallback" confidence
   }
 
-  // Compute typeLabel for validator behavior and type promotion
+  // Compute typeLabel for validator behavior
   const typeLabel = computeTypeLabel(section, intent);
-
-  // Promote execution_artifact → feature_request when typeLabel says so
-  // (new_workstream prose sections with request/action signals)
-  if (suggestedType === 'execution_artifact' && typeLabel === 'feature_request') {
-    suggestedType = 'feature_request';
-  }
 
   return {
     ...section,
@@ -1347,7 +1297,7 @@ export async function classifySectionWithLLM(
       actionability_reason: `${actionabilityResult.reason} (overridden for plan_change intent)`,
       actionable_signal: actionabilityResult.actionableSignal,
       out_of_scope_signal: actionabilityResult.outOfScopeSignal,
-      suggested_type: 'plan_mutation',
+      suggested_type: 'project_update',
       type_confidence: 0.3,
     };
   }
@@ -1364,10 +1314,10 @@ export async function classifySectionWithLLM(
     if (typeResult.type === 'non_actionable') {
       if (isPlanChange) {
         // Strengthened PLAN_CHANGE PROTECTION at TYPE stage
-        // Force plan_mutation type and ensure actionability stays true
-        suggestedType = 'plan_mutation';
+        // Force project_update type and ensure actionability stays true
+        suggestedType = 'project_update';
         typeConfidence = 0.3;
-        // Return early with forced plan_mutation to prevent any drop
+        // Return early with forced project_update to prevent any drop
         return {
           ...section,
           intent,
@@ -1378,7 +1328,7 @@ export async function classifySectionWithLLM(
           out_of_scope_signal: actionabilityResult.outOfScopeSignal,
           suggested_type: suggestedType,
           type_confidence: typeConfidence,
-          typeLabel: 'plan_mutation',
+          typeLabel: 'project_update',
         };
       } else {
         // Non-plan_change can still be dropped by TYPE
@@ -1397,31 +1347,26 @@ export async function classifySectionWithLLM(
       suggestedType = typeResult.type;
       typeConfidence = typeResult.confidence;
 
-      // For plan_change with artifact type, force to plan_mutation
-      if (isPlanChange && suggestedType === 'execution_artifact') {
-        suggestedType = 'plan_mutation';
+      // For plan_change sections, force to project_update
+      if (isPlanChange && suggestedType !== 'project_update') {
+        suggestedType = 'project_update';
       }
 
-      // Guard: plan_mutation only for plan_change intent.
-      if (!isPlanChange && suggestedType === 'plan_mutation') {
-        suggestedType = 'execution_artifact';
+      // Guard: project_update only for plan_change intent.
+      if (!isPlanChange && suggestedType === 'project_update') {
+        suggestedType = 'idea';
       }
     }
   }
 
-  // Fallback: plan_change with no suggested type → force plan_mutation
+  // Fallback: plan_change with no suggested type → force project_update
   if (isPlanChange && !suggestedType) {
-    suggestedType = 'plan_mutation';
+    suggestedType = 'project_update';
     typeConfidence = 0.2;
   }
 
-  // Compute typeLabel for validator behavior and type promotion
+  // Compute typeLabel for validator behavior
   const typeLabel = computeTypeLabel(section, intent);
-
-  // Promote execution_artifact → feature_request when typeLabel says so
-  if (suggestedType === 'execution_artifact' && typeLabel === 'feature_request') {
-    suggestedType = 'feature_request';
-  }
 
   return {
     ...section,
