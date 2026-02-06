@@ -7,7 +7,7 @@ interface ShipItState {
   initiatives: Initiative[];
   meetings: Meeting[];
   connections: Connection[];
-  
+
   // Actions
   applySuggestion: (suggestionId: string, userId: string) => void;
   dismissSuggestion: (suggestionId: string, userId: string, reason: DismissReason, reasonText?: string) => void;
@@ -17,8 +17,67 @@ interface ShipItState {
   createInitiativeFromSuggestion: (suggestionId: string, name: string, description: string, owner: string, userId: string) => void;
 }
 
+/**
+ * Enrich mock suggestions with computed suggestion context
+ * Mirrors the engine output format (from convex/notes.ts getWithComputedSuggestions)
+ */
+function enrichSuggestionsWithContext(suggestions: Suggestion[]): Suggestion[] {
+  const contextMap: Record<string, Suggestion['suggestion']> = {
+    'sug-1': {
+      title: 'Timeline change: Mobile App Redesign',
+      body: 'Mobile redesign release pushed to mid-March because new navigation patterns require more testing than expected.',
+      evidencePreview: [
+        'We need to push the mobile redesign release to mid-March.',
+        'The new navigation patterns require more testing than expected.'
+      ],
+      sourceSectionId: 'meet-1-section-1',
+      sourceHeading: 'Mobile App Sprint Planning'
+    },
+    'sug-2': {
+      title: 'Progress update: Mobile App Redesign',
+      body: 'Gesture system more complex than anticipated. Additional testing required for navigation patterns to ensure smooth user experience.',
+      evidencePreview: [
+        'I agree, the gesture system is more complex than we anticipated.',
+        'March 15th seems realistic.'
+      ],
+      sourceSectionId: 'meet-1-section-2',
+      sourceHeading: 'Mobile App Sprint Planning'
+    },
+    'sug-3': {
+      title: 'Progress update: Dashboard Analytics V2',
+      body: 'Beta users providing positive feedback on analytics dashboard. Custom reporting feature particularly well-received.',
+      evidencePreview: [
+        'The analytics dashboard is getting great feedback from beta users.',
+        'They love the custom reporting feature.'
+      ],
+      sourceSectionId: 'meet-2-section-1',
+      sourceHeading: 'Product Strategy Review'
+    },
+    'sug-4': {
+      title: 'Timeline change: SSO Integration',
+      body: 'SSO should be prioritized sooner because three enterprise prospects mentioned it this week, indicating strong market demand.',
+      evidencePreview: [
+        'We should consider adding SSO sooner.',
+        'Three enterprise prospects mentioned it this week.'
+      ],
+      sourceSectionId: 'meet-2-section-2',
+      sourceHeading: 'Product Strategy Review'
+    },
+  };
+
+  return suggestions.map(suggestion => {
+    if (contextMap[suggestion.id]) {
+      return {
+        ...suggestion,
+        suggestion: contextMap[suggestion.id],
+      };
+    }
+    return suggestion;
+  });
+}
+
 export const useShipItStore = create<ShipItState>((set, get) => ({
-  suggestions: mockSuggestions,
+  suggestions: enrichSuggestionsWithContext(mockSuggestions),
   initiatives: mockInitiatives,
   meetings: mockMeetings,
   connections: mockConnections,

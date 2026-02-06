@@ -75,6 +75,14 @@ export interface V0Suggestion {
   ruleOrPromptId?: string;
   suggestionFamily?: string;
   estimatedDiffSize?: string;
+  // Suggestion context (v2 engine computed suggestions)
+  suggestion?: {
+    title: string;
+    body: string;
+    evidencePreview?: string[];
+    sourceSectionId: string;
+    sourceHeading: string;
+  };
 }
 
 export interface V0Initiative {

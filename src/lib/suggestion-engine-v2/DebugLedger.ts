@@ -269,6 +269,14 @@ export class DebugLedger {
         lineRange: [0, 0],
         preview: makePreview(suggestion.title, 160),
       },
+      // Include structured suggestion context for UI consumption
+      suggestion: suggestion.suggestion ? {
+        title: suggestion.suggestion.title,
+        body: suggestion.suggestion.body,
+        evidencePreview: suggestion.suggestion.evidencePreview,
+        sourceSectionId: suggestion.suggestion.sourceSectionId,
+        sourceHeading: suggestion.suggestion.sourceHeading,
+      } : undefined,
       validatorResults: [],
       scoreBreakdown: {
         overallScore: suggestion.scores?.overall || 0,
