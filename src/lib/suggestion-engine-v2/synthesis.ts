@@ -16,6 +16,7 @@ import type {
   Line,
 } from './types';
 import { normalizeForComparison } from './preprocessing';
+import { computeSuggestionKey } from '../suggestion-keys';
 
 // ============================================
 // ID Generation
@@ -665,6 +666,14 @@ export function synthesizeSuggestion(section: ClassifiedSection): Suggestion | n
     sourceHeading: section.heading_text || '',
   };
 
+  // Compute stable suggestion key
+  const suggestionKey = computeSuggestionKey({
+    noteId: section.note_id,
+    sourceSectionId: section.section_id,
+    type,
+    title,
+  });
+
   return {
     suggestion_id: generateSuggestionId(section.note_id),
     note_id: section.note_id,
@@ -675,6 +684,7 @@ export function synthesizeSuggestion(section: ClassifiedSection): Suggestion | n
     evidence_spans: evidenceSpans,
     scores,
     routing,
+    suggestionKey,
     structural_hint: section.typeLabel,
     suggestion: suggestionContext,
   };
