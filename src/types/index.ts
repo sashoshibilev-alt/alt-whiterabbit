@@ -83,6 +83,8 @@ export interface V0Suggestion {
     sourceSectionId: string;
     sourceHeading: string;
   };
+  // Stable identifier for dedupe and persistence
+  suggestionKey?: string;
 }
 
 export interface V0Initiative {

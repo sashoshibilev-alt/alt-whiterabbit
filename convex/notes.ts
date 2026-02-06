@@ -127,6 +127,8 @@ export const getWithComputedSuggestions = action({
         clarificationPrompt: engineSug.needs_clarification
           ? `This suggestion has a confidence score of ${engineSug.scores.overall.toFixed(2)}. Consider reviewing the evidence carefully.`
           : undefined,
+        // Stable identifier for dedupe and persistence
+        suggestionKey: engineSug.suggestionKey,
       };
     });
 

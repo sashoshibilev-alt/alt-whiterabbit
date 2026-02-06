@@ -250,6 +250,8 @@ export interface Suggestion {
   evidence_spans: EvidenceSpan[];
   scores: SuggestionScores;
   routing: SuggestionRouting;
+  // Stable identifier for dedupe and persistence across regenerates
+  suggestionKey: string;
   // Structural hint: idea (new work) or project_update (plan change)
   structural_hint?: 'idea' | 'project_update';
   // Clarification flags (per suggestion-suppression-fix plan)

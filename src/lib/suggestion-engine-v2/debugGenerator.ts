@@ -497,8 +497,8 @@ function dedupeSuggestions(
   const unique: Suggestion[] = [];
 
   for (const suggestion of suggestions) {
-    // Simple fingerprint based on title
-    const fingerprint = suggestion.title.toLowerCase().trim();
+    // Use suggestionKey as stable fingerprint for dedupe
+    const fingerprint = suggestion.suggestionKey;
 
     if (seen.has(fingerprint)) {
       if (ledger) {
