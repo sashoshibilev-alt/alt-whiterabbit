@@ -348,22 +348,27 @@ export function passesThresholds(
 
 /**
  * Apply confidence-based processing to suggestions
- * 
+ *
  * Per the suggestion-suppression-fix plan:
  * - project_update suggestions are NEVER dropped at THRESHOLD stage
  * - Low confidence downgrades to needs_clarification with reasons (and optionally action: 'comment')
  * - idea suggestions may still be dropped by thresholds
  *
+ * INVARIANT: If section.is_actionable === true, suggestion MUST NOT be dropped at THRESHOLD.
+ * This ensures actionable sections always emit at least one suggestion.
+ *
  * Decision matrix:
  * - Case A: non-plan_change (idea) → may be dropped if below threshold
  * - Case B: plan_change (project_update) + high confidence → emit as-is
  * - Case C: plan_change (project_update) + low confidence → emit with needs_clarification=true and action='comment'
+ * - Case D: actionable section (is_actionable=true) → bypass THRESHOLD, downgrade if low confidence
  */
 export function applyConfidenceBasedProcessing(
   suggestions: Suggestion[],
-  thresholds: ThresholdConfig
-): { 
-  passed: Suggestion[]; 
+  thresholds: ThresholdConfig,
+  sections?: Map<string, ClassifiedSection>
+): {
+  passed: Suggestion[];
   dropped: Array<{ suggestion: Suggestion; reason: string }>;
   downgraded: number;
 } {
@@ -374,33 +379,37 @@ export function applyConfidenceBasedProcessing(
   for (const suggestion of suggestions) {
     const isPlanChange = isPlanChangeSuggestion(suggestion);
     const highConf = isHighConfidence(suggestion, thresholds);
-    
-    if (isPlanChange) {
-      // Case B & C: plan_change suggestions are NEVER dropped at THRESHOLD
+
+    // Check if source section is actionable (INVARIANT enforcement)
+    const section = sections?.get(suggestion.section_id);
+    const isActionableSection = section?.is_actionable ?? false;
+
+    if (isPlanChange || isActionableSection) {
+      // Case B, C & D: plan_change OR actionable sections are NEVER dropped at THRESHOLD
       const processedSuggestion: Suggestion = {
         ...suggestion,
         is_high_confidence: highConf,
       };
-      
+
       if (!highConf) {
-        // Case C: Low confidence → downgrade to clarification with action='comment'
+        // Case C & D: Low confidence → downgrade to clarification with action='comment'
         // Per the plan: "downgrade to action: 'comment' + needs_clarification: true"
         processedSuggestion.needs_clarification = true;
         processedSuggestion.clarification_reasons = computeClarificationReasons(suggestion, thresholds);
-        
+
         // Add legacy v0 action field for compatibility (if needed by downstream consumers)
         // Note: This is a metadata field, not part of the core suggestion type in v2
         if (processedSuggestion.payload) {
           (processedSuggestion as any).action = 'comment';
         }
-        
+
         downgraded++;
       } else {
         // Case B: High confidence → no clarification needed
         processedSuggestion.needs_clarification = false;
         processedSuggestion.clarification_reasons = [];
       }
-      
+
       passed.push(processedSuggestion);
     } else {
       // Case A: Non-plan-change (idea) suggestions may be dropped
@@ -504,8 +513,8 @@ export function runScoringPipeline(
     return refineSuggestionScores(suggestion, section);
   });
 
-  // 3) Apply confidence-based processing (respects plan_change invariants)
-  const { passed, dropped, downgraded } = applyConfidenceBasedProcessing(scored, config.thresholds);
+  // 3) Apply confidence-based processing (respects plan_change + actionable invariants)
+  const { passed, dropped, downgraded } = applyConfidenceBasedProcessing(scored, config.thresholds, sections);
 
   // 4) Separate project_update from idea types for plan_change-aware capping
   // idea suggestions are cappable; project_update is not

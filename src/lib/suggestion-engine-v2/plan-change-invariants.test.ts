@@ -30,6 +30,7 @@ import {
   DropStage,
   DropReason,
   computeDebugRunSummary,
+  IntentClassification,
 } from './index';
 import { resetSectionCounter } from './preprocessing';
 import { resetSuggestionCounter } from './synthesis';
@@ -478,7 +479,91 @@ describe('THRESHOLD Invariants', () => {
       expect(result.dropped).toHaveLength(0);
     });
 
-    it('should only cap idea suggestions, never plan_change', () => {
+    it('should never drop actionable sections at THRESHOLD (INVARIANT)', () => {
+    // This is the core invariant: if is_actionable === true, emitted must be true
+    const actionableSection: ClassifiedSection = {
+      section_id: 'actionable-section',
+      note_id: 'test-note',
+      heading_text: 'Important Task',
+      heading_level: 2,
+      start_line: 0,
+      end_line: 3,
+      body_lines: [
+        { index: 0, text: 'Add boundary detection', line_type: 'paragraph' },
+      ],
+      structural_features: {
+        num_lines: 1,
+        num_list_items: 0,
+        has_dates: false,
+        has_metrics: false,
+        has_quarter_refs: false,
+        has_version_refs: false,
+        has_launch_keywords: false,
+        initiative_phrase_density: 0,
+      },
+      raw_text: 'Add boundary detection',
+      intent: {
+        plan_change: 0.3,
+        new_workstream: 0.6, // Highest, but not plan_change
+        status_informational: 0.05,
+        communication: 0.02,
+        research: 0.01,
+        calendar: 0.01,
+        micro_tasks: 0.01,
+      },
+      is_actionable: true, // PASSED ACTIONABILITY
+      actionability_reason: 'Actionable: imperative verb detected',
+      actionable_signal: 0.9,
+      out_of_scope_signal: 0.02,
+      suggested_type: 'idea',
+      type_confidence: 0.7,
+    };
+
+    const sections = new Map<string, ClassifiedSection>();
+    sections.set('actionable-section', actionableSection);
+
+    const suggestion: Suggestion = {
+      suggestion_id: 'sug-actionable',
+      note_id: 'test-note',
+      section_id: 'actionable-section',
+      type: 'idea', // NOT plan_change
+      title: 'Add boundary detection',
+      payload: { draft_initiative: { title: 'Boundary detection', description: 'Add detection' } },
+      evidence_spans: [{ start_line: 0, end_line: 1, text: 'Add boundary detection' }],
+      scores: {
+        section_actionability: 0.4, // Below T_section_min
+        type_choice_confidence: 0.5,
+        synthesis_confidence: 0.5,
+        overall: 0.4, // Below T_overall_min
+      },
+      routing: { create_new: true },
+    };
+
+    const thresholds: ThresholdConfig = {
+      ...DEFAULT_THRESHOLDS,
+      T_section_min: 0.6,
+      T_overall_min: 0.65,
+    };
+
+    // Without sections map, would be dropped
+    const resultWithoutSections = applyConfidenceBasedProcessing([suggestion], thresholds);
+    expect(resultWithoutSections.dropped.length).toBeGreaterThan(0);
+
+    // With sections map showing is_actionable=true, must NOT be dropped
+    const resultWithSections = applyConfidenceBasedProcessing([suggestion], thresholds, sections);
+
+    // INVARIANT: is_actionable === true implies emitted === true
+    expect(resultWithSections.dropped).toHaveLength(0);
+    expect(resultWithSections.passed).toHaveLength(1);
+
+    // Should be downgraded to clarification (low confidence)
+    const processed = resultWithSections.passed[0];
+    expect(processed.is_high_confidence).toBe(false);
+    expect(processed.needs_clarification).toBe(true);
+    expect(processed.clarification_reasons!.length).toBeGreaterThan(0);
+  });
+
+  it('should only cap idea suggestions, never plan_change', () => {
       // Test the capping logic directly with applyConfidenceBasedProcessing + manual capping
       const planSuggestion: Suggestion = {
         suggestion_id: 'plan-sug',

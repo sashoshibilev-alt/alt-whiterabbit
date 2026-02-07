@@ -40,6 +40,8 @@ export const dismissSuggestion = mutation({
       // Update existing decision
       await ctx.db.patch(existing._id, {
         status: "dismissed",
+        dismissedAt: now,
+        appliedAt: undefined,
         initiativeId: undefined,
         appliedMode: undefined,
         updatedAt: now,
@@ -51,6 +53,7 @@ export const dismissSuggestion = mutation({
         noteId: args.noteId,
         suggestionKey: args.suggestionKey,
         status: "dismissed",
+        dismissedAt: now,
         updatedAt: now,
       });
     }
@@ -85,8 +88,12 @@ export const applySuggestionToExisting = mutation({
       // Update existing decision
       await ctx.db.patch(existing._id, {
         status: "applied",
+        appliedAt: now,
+        dismissedAt: undefined,
         initiativeId: args.initiativeId,
         appliedMode: "existing",
+        appliedToInitiativeId: args.initiativeId,
+        appliedToType: "existing",
         updatedAt: now,
       });
       return { decisionId: existing._id, initiative };
@@ -96,8 +103,11 @@ export const applySuggestionToExisting = mutation({
         noteId: args.noteId,
         suggestionKey: args.suggestionKey,
         status: "applied",
+        appliedAt: now,
         initiativeId: args.initiativeId,
         appliedMode: "existing",
+        appliedToInitiativeId: args.initiativeId,
+        appliedToType: "existing",
         updatedAt: now,
       });
       return { decisionId, initiative };
@@ -142,8 +152,12 @@ export const applySuggestionCreateNew = mutation({
       // Update existing decision
       await ctx.db.patch(existing._id, {
         status: "applied",
+        appliedAt: now,
+        dismissedAt: undefined,
         initiativeId,
         appliedMode: "created",
+        appliedToInitiativeId: initiativeId,
+        appliedToType: "new",
         updatedAt: now,
       });
       return { decisionId: existing._id, initiative };
@@ -153,8 +167,11 @@ export const applySuggestionCreateNew = mutation({
         noteId: args.noteId,
         suggestionKey: args.suggestionKey,
         status: "applied",
+        appliedAt: now,
         initiativeId,
         appliedMode: "created",
+        appliedToInitiativeId: initiativeId,
+        appliedToType: "new",
         updatedAt: now,
       });
       return { decisionId, initiative };
