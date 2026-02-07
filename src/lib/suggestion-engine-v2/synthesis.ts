@@ -91,6 +91,11 @@ function generateProjectUpdateTitle(section: ClassifiedSection): string {
   const headingText = section.heading_text || '';
   const bodyText = section.raw_text;
 
+  // Special case: role assignment sections
+  if (section.intent.flags?.forceRoleAssignment && headingText) {
+    return `Action items: ${headingText}`;
+  }
+
   // Try to use heading if it names a workstream
   if (headingText && headingText.length > 3 && headingText.length < 60) {
     // Check if heading is specific enough

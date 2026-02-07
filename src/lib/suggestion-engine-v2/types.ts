@@ -95,6 +95,7 @@ export interface Section {
   body_lines: Line[];
   structural_features: StructuralFeatures;
   raw_text: string; // concatenated body text
+  _debug_segmentation_version?: string; // Debug marker to trace runtime code path
 }
 
 // ============================================
@@ -112,6 +113,11 @@ export interface IntentClassification {
   research: number;
   calendar: number;
   micro_tasks: number;
+  // Forced routing overrides (stored separately to avoid contaminating scoresByLabel)
+  flags?: {
+    forceRoleAssignment?: boolean;
+    forceDecisionMarker?: boolean;
+  };
 }
 
 /**

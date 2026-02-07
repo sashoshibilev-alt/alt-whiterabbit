@@ -532,6 +532,37 @@ const IMPLICIT_IDEA_CAPABILITY_NOUNS = [
 ];
 
 /**
+ * V3 Role assignment patterns for "ROLE to VERB" micro-tasks
+ * Detects task assignments like "PM to document", "CS to manage", "Eng to implement"
+ */
+const V3_ROLE_ASSIGNMENT_PATTERNS = [
+  'pm to',
+  'cs to',
+  'eng to',
+  'design to',
+  'designer to',
+  'project manager to',
+  'product manager to',
+  'engineering to',
+  'customer success to',
+];
+
+/**
+ * V3 Decision markers for project update detection
+ * Detects decision language like "will be logged", "no near-term", "revisit in Q2"
+ */
+const V3_DECISION_MARKERS = [
+  'will be logged',
+  'will be',
+  'no near-term',
+  'near-term',
+  'revisit',
+  'decided',
+  'agreed',
+  'approved',
+];
+
+/**
  * Normalize smart quotes to ASCII equivalents
  * Ensures "don't" and "don't" behave identically in negation/imperative detection
  */
@@ -643,6 +674,32 @@ function matchStructuredTask(line: string): number {
  */
 function matchHedgedDirective(line: string): number {
   return V3_HEDGED_DIRECTIVES.some(phrase => line.includes(phrase)) ? 0.9 : 0.0;
+}
+
+/**
+ * V3 Rule 9: Role assignment pattern = +0.85
+ *
+ * Maps to actionableSignal. Detects micro-task assignments like:
+ * "PM to document the feature request"
+ * "CS to manage the customer escalation"
+ * "Eng to implement the fix"
+ */
+function matchRoleAssignment(line: string): number {
+  return V3_ROLE_ASSIGNMENT_PATTERNS.some(pattern => line.includes(pattern)) ? 0.85 : 0.0;
+}
+
+/**
+ * V3 Rule 10: Decision marker = +0.70
+ *
+ * Maps to actionableSignal. Detects decision language like:
+ * "Feature request will be logged"
+ * "No near-term resourcing available"
+ * "Revisit during next planning cycle"
+ *
+ * Score of 0.70 ensures passing T_action (0.5) even with short-section penalty (0.15)
+ */
+function matchDecisionMarker(line: string): number {
+  return V3_DECISION_MARKERS.some(marker => line.includes(marker)) ? 0.70 : 0.0;
 }
 
 /**
@@ -775,6 +832,8 @@ export function classifyIntent(section: Section): IntentClassification {
   // 5. Structured task syntax (- [ ], TODO:): +0.8
   // 6. Target object bonus (if score >= 0.6): +0.2
   // 7. Implicit idea statement (need + capability + purpose): +0.61
+  // 9. Role assignment pattern (ROLE to VERB): +0.85
+  // 10. Decision marker (will be logged, no near-term): +0.70
   //
   // NEGATIVE SIGNALS:
   // - Negation override: if line has "don't" + verb → score = 0.0
@@ -811,6 +870,9 @@ export function classifyIntent(section: Section): IntentClassification {
   let hasCalendarMarkers = false;
   let hasCommunicationMarkers = false;
   let hasMicroAdminMarkers = false;
+  // Track forced routing overrides
+  let hasRoleAssignment = false;
+  let hasDecisionMarker = false;
 
   // Process each line
   for (const line of lines) {
@@ -853,6 +915,16 @@ export function classifyIntent(section: Section): IntentClassification {
       const structuredTaskScore = matchStructuredTask(sentence);
       if (structuredTaskScore > 0) hasStructuredTasks = true;
       sentenceScore = Math.max(sentenceScore, structuredTaskScore);
+
+      // Rule 9: Role assignment pattern (ROLE to VERB)
+      const roleAssignmentScore = matchRoleAssignment(sentence);
+      if (roleAssignmentScore > 0) hasRoleAssignment = true;
+      sentenceScore = Math.max(sentenceScore, roleAssignmentScore);
+
+      // Rule 10: Decision marker
+      const decisionMarkerScore = matchDecisionMarker(sentence);
+      if (decisionMarkerScore > 0) hasDecisionMarker = true;
+      sentenceScore = Math.max(sentenceScore, decisionMarkerScore);
 
       // Snapshot non-hedged score before applying hedged directive rule
       const nonHedgedSentenceScore = sentenceScore;
@@ -992,7 +1064,7 @@ export function classifyIntent(section: Section): IntentClassification {
   // Research is not used in v3 gate logic (set to 0)
   const research = 0;
 
-  return {
+  const result: IntentClassification = {
     plan_change,
     new_workstream,
     status_informational,
@@ -1001,6 +1073,15 @@ export function classifyIntent(section: Section): IntentClassification {
     calendar,
     micro_tasks,
   };
+
+  // Store flags separately to avoid contaminating scoresByLabel in debug JSON
+  if (hasRoleAssignment || hasDecisionMarker) {
+    result.flags = {};
+    if (hasRoleAssignment) result.flags.forceRoleAssignment = true;
+    if (hasDecisionMarker) result.flags.forceDecisionMarker = true;
+  }
+
+  return result;
 }
 
 // ============================================
@@ -1130,13 +1211,24 @@ export function isActionable(
 
   // Existing non-plan_change gates remain as-is
 
-  // Check out-of-scope FIRST: outOfScopeSignal < T_out_of_scope
-  // Using >= here means that if outOfScopeSignal == T_out_of_scope, section is NOT actionable
-  // This check happens before imperative floor so that out-of-scope imperatives are correctly rejected
-  if (outOfScopeSignal >= thresholds.T_out_of_scope) {
+  // Dominance-based out-of-scope gate:
+  // Compute oosTop = max(calendar, communication)
+  // Compute inTop = max(plan_change, micro_tasks, new_workstream, status_informational, research)
+  // Only drop if: oosTop >= 0.75 AND (oosTop - inTop) >= 0.20
+  const oosTop = Math.max(intent.calendar, intent.communication);
+  const inTop = Math.max(
+    intent.plan_change,
+    intent.micro_tasks,
+    intent.new_workstream,
+    intent.status_informational,
+    intent.research
+  );
+  const dominanceGap = oosTop - inTop;
+
+  if (oosTop >= 0.75 && dominanceGap >= 0.20) {
     return {
       actionable: false,
-      reason: `Out-of-scope signal too high: ${outOfScopeSignal.toFixed(3)} >= ${thresholds.T_out_of_scope} (cal=${intent.calendar.toFixed(2)}, comm=${intent.communication.toFixed(2)}, micro=${intent.micro_tasks.toFixed(2)}) [research=${intent.research.toFixed(2)} excluded from gate]`,
+      reason: `Out-of-scope dominance: oosTop=${oosTop.toFixed(3)} >= 0.75, gap=${dominanceGap.toFixed(3)} >= 0.20 (cal=${intent.calendar.toFixed(2)}, comm=${intent.communication.toFixed(2)} vs inTop=${inTop.toFixed(3)})`,
       actionableSignal,
       outOfScopeSignal,
     };
@@ -1219,6 +1311,7 @@ const EXECUTION_ARTIFACT_PATTERNS = [
 
 /**
  * Classify section type (project_update vs idea)
+ * OVERRIDE: Decision markers and role assignments force project_update type.
  */
 export function classifyType(section: Section, intent: IntentClassification): {
   type: SectionType;
@@ -1239,12 +1332,17 @@ export function classifyType(section: Section, intent: IntentClassification): {
   p_mutation += intent.plan_change * 0.3;
   p_artifact += intent.new_workstream * 0.3;
 
+  // OVERRIDE: Decision markers and role assignments force project_update
+  if (intent.flags?.forceDecisionMarker || intent.flags?.forceRoleAssignment) {
+    p_mutation = Math.max(p_mutation, 0.8);
+  }
+
   // Cap at 1
   p_mutation = Math.min(1, p_mutation);
   p_artifact = Math.min(1, p_artifact);
 
   // Determine type based on higher probability
-  if (p_mutation < 0.2 && p_artifact < 0.2) {
+  if (p_mutation < 0.2 && p_artifact < 0.2 && !intent.flags?.forceDecisionMarker) {
     return {
       type: 'non_actionable',
       confidence: 1 - Math.max(p_mutation, p_artifact),
@@ -1281,11 +1379,20 @@ export function classifyType(section: Section, intent: IntentClassification): {
  *
  * Returns "project_update" when plan_change is the dominant intent.
  * Returns "idea" for all actionable new_workstream sections.
+ * OVERRIDE: Decision markers and role assignments force project_update type.
  */
 function computeTypeLabel(
   section: Section,
   intent: IntentClassification
 ): 'idea' | 'project_update' {
+  // Force project_update for decision markers
+  if (intent.flags?.forceDecisionMarker) {
+    return 'project_update';
+  }
+  // Force project_update for role assignments (to avoid "New idea:" titles)
+  if (intent.flags?.forceRoleAssignment) {
+    return 'project_update';
+  }
   if (isPlanChangeIntentLabel(intent)) {
     return 'project_update';
   }
@@ -1394,9 +1501,14 @@ export function classifySection(
         suggestedType = 'project_update';
       }
 
-      // Guard: project_update only for plan_change intent.
-      // Non-plan_change sections should be idea.
-      if (!isPlanChange && suggestedType === 'project_update') {
+      // OVERRIDE: Force project_update for decision markers and role assignments
+      if ((intent.flags?.forceDecisionMarker || intent.flags?.forceRoleAssignment) && suggestedType !== 'project_update') {
+        suggestedType = 'project_update';
+      }
+
+      // Guard: project_update only for plan_change intent OR forced overrides.
+      // Non-plan_change sections without overrides should be idea.
+      if (!isPlanChange && !intent.flags?.forceDecisionMarker && !intent.flags?.forceRoleAssignment && suggestedType === 'project_update') {
         suggestedType = 'idea';
       }
     }

@@ -66,8 +66,15 @@ function getLineType(text: string, trimmed: string): LineType {
     return 'blank';
   }
 
-  // Heading
+  // Heading (markdown # syntax)
   if (/^#{1,6}\s/.test(trimmed)) {
+    return 'heading';
+  }
+
+  // Numbered heading (e.g., "1. Customer Feedback")
+  // Must check BEFORE list item pattern to take precedence
+  // Allow minimal indentation (0-2 spaces) to distinguish from nested list items
+  if (/^\s{0,2}\d+\.\s+\S/.test(text)) {
     return 'heading';
   }
 
@@ -89,10 +96,19 @@ function getLineType(text: string, trimmed: string): LineType {
  * Get heading level from a heading line
  */
 function getHeadingLevel(text: string): number | undefined {
-  const match = text.match(/^(#{1,6})\s/);
-  if (match) {
-    return match[1].length;
+  const trimmed = text.trim();
+
+  // Markdown # syntax
+  const hashMatch = trimmed.match(/^(#{1,6})\s/);
+  if (hashMatch) {
+    return hashMatch[1].length;
   }
+
+  // Numbered heading format (e.g., "1. Title")
+  if (/^\s{0,2}\d+\.\s+\S/.test(text)) {
+    return 2; // treat as level 2
+  }
+
   return undefined;
 }
 
@@ -112,10 +128,18 @@ function getIndentLevel(text: string): number | undefined {
 }
 
 /**
- * Get heading text (without # markers)
+ * Get heading text (without # markers or number prefix)
  */
 function getHeadingText(text: string): string {
-  return text.replace(/^#{1,6}\s+/, '').trim();
+  const trimmed = text.trim();
+
+  // Strip markdown # syntax
+  const withoutHash = trimmed.replace(/^#{1,6}\s+/, '');
+
+  // Strip numbered heading format (e.g., "1. " → "")
+  const withoutNumber = withoutHash.replace(/^\d+\.\s+/, '');
+
+  return withoutNumber.trim();
 }
 
 /**
@@ -393,6 +417,9 @@ export function segmentIntoSections(noteId: string, lines: Line[]): Section[] {
       // Finalize previous section
       finalizeSection();
 
+      // Detect if this is a numbered heading for debug tracing
+      const isNumberedHeading = /^\s{0,2}\d+\.\s+\S/.test(line.text);
+
       // Start new section
       currentSection = {
         section_id: generateSectionId(noteId),
@@ -404,6 +431,8 @@ export function segmentIntoSections(noteId: string, lines: Line[]): Section[] {
         body_lines: [],
         structural_features: {} as StructuralFeatures,
         raw_text: '',
+        // Debug marker to confirm numbered heading detection is running
+        _debug_segmentation_version: isNumberedHeading ? 'v2-numbered-headings' : undefined,
       };
       continue;
     }

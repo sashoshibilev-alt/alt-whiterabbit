@@ -76,16 +76,134 @@ User onboarding is now our top priority. It was previously P1, now it's P0.
     it('should preserve character offsets', () => {
       const normalized = stages.normalizeMeetingNote(sampleNote);
       const stage1 = stages.segmentMeetingNote(normalized);
-      
+
       for (const section of stage1.sections) {
         const extractedContent = normalized.raw_markdown.substring(
           section.start_char,
           section.end_char
         );
-        
+
         // The extracted content should match or be very close to section.content
         expect(extractedContent.trim()).toContain(section.content.trim().substring(0, 20));
       }
+    });
+
+    it('should segment numbered section headings correctly', () => {
+      const numberedNote: MeetingNote = {
+        id: 'numbered-sections',
+        occurred_at: '2026-02-07T10:00:00Z',
+        raw_markdown: `
+1. Customer Feedback
+• Users are requesting dark mode
+• Performance concerns raised
+
+2. Options Discussed
+• Option A: Full redesign
+• Option B: Incremental updates
+
+3. Leadership Alignment
+• CEO approved option B
+• CTO has concerns about timeline
+
+4. Decision
+We will proceed with option B starting next quarter.
+
+5. Next Steps
+• Sarah to draft implementation plan
+• Mike to review technical requirements
+        `.trim(),
+      };
+
+      const normalized = stages.normalizeMeetingNote(numberedNote);
+      const stage1 = stages.segmentMeetingNote(normalized);
+
+      // Should create 5 heading sections
+      const headings = stage1.sections.filter(s => s.type === 'heading');
+      expect(headings.length).toBe(5);
+
+      // Check heading titles
+      expect(headings[0].title).toBe('Customer Feedback');
+      expect(headings[1].title).toBe('Options Discussed');
+      expect(headings[2].title).toBe('Leadership Alignment');
+      expect(headings[3].title).toBe('Decision');
+      expect(headings[4].title).toBe('Next Steps');
+
+      // Verify body/list sections are correctly scoped under headings
+      // Each heading should be followed by content sections
+      const contentSections = stage1.sections.filter(s => s.type === 'list' || s.type === 'body');
+      expect(contentSections.length).toBeGreaterThan(0);
+
+      // Check that body lines reference the correct heading
+      const customerFeedbackSections = stage1.sections.filter(s => s.title === 'Customer Feedback');
+      expect(customerFeedbackSections.length).toBeGreaterThan(1); // heading + content
+
+      const decisionSections = stage1.sections.filter(s => s.title === 'Decision');
+      expect(decisionSections.length).toBeGreaterThan(1); // heading + content
+    });
+
+    it('should segment lowercase numbered section headings', () => {
+      const lowercaseNote: MeetingNote = {
+        id: 'lowercase-sections',
+        occurred_at: '2026-02-07T10:00:00Z',
+        raw_markdown: `
+1. next steps
+• Draft implementation plan
+• Review with team
+
+2. MVP scope
+The initial release will focus on core features only.
+
+3. timeline considerations
+We need to account for holiday breaks.
+        `.trim(),
+      };
+
+      const normalized = stages.normalizeMeetingNote(lowercaseNote);
+      const stage1 = stages.segmentMeetingNote(normalized);
+
+      // Should create 3 heading sections (lowercase headings now supported)
+      const headings = stage1.sections.filter(s => s.type === 'heading');
+      expect(headings.length).toBe(3);
+
+      // Check heading titles
+      expect(headings[0].title).toBe('next steps');
+      expect(headings[1].title).toBe('MVP scope');
+      expect(headings[2].title).toBe('timeline considerations');
+
+      // Verify body/list sections are correctly scoped
+      const contentSections = stage1.sections.filter(s => s.type === 'list' || s.type === 'body');
+      expect(contentSections.length).toBeGreaterThan(0);
+    });
+
+    it('should distinguish numbered headings from indented list items', () => {
+      const mixedNote: MeetingNote = {
+        id: 'mixed-headings-lists',
+        occurred_at: '2026-02-07T10:00:00Z',
+        raw_markdown: `
+1. Action Items
+• Complete the following:
+  1. review PR
+  2. update docs
+• These are list items, not headings
+
+2. Timeline
+Start next week.
+        `.trim(),
+      };
+
+      const normalized = stages.normalizeMeetingNote(mixedNote);
+      const stage1 = stages.segmentMeetingNote(normalized);
+
+      // Should only create 2 heading sections (unindented "1." and "2.")
+      const headings = stage1.sections.filter(s => s.type === 'heading');
+      expect(headings.length).toBe(2);
+      expect(headings[0].title).toBe('Action Items');
+      expect(headings[1].title).toBe('Timeline');
+
+      // The indented "1. review PR" and "2. update docs" should be in list sections
+      const listSections = stage1.sections.filter(s => s.type === 'list');
+      expect(listSections.length).toBeGreaterThan(0);
+      expect(listSections[0].content).toContain('review PR');
     });
   });
 
