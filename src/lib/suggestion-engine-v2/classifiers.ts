@@ -532,13 +532,39 @@ const IMPLICIT_IDEA_CAPABILITY_NOUNS = [
 ];
 
 /**
- * Preprocess a line for v3 matching (lowercase, trim, collapse whitespace)
+ * Normalize smart quotes to ASCII equivalents
+ * Ensures "don't" and "don't" behave identically in negation/imperative detection
+ */
+function normalizeSmartQuotes(text: string): string {
+  return text
+    .replace(/[\u2018\u2019]/g, "'") // ' and ' → '
+    .replace(/[\u201C\u201D]/g, '"'); // " and " → "
+}
+
+/**
+ * Preprocess a line for v3 matching (lowercase, trim, collapse whitespace, normalize quotes)
  */
 function preprocessLine(lineText: string): string {
-  return lineText
+  return normalizeSmartQuotes(lineText)
     .toLowerCase()
     .trim()
     .replace(/\s+/g, ' ');
+}
+
+/**
+ * Split text into sentence fragments using deterministic boundaries
+ * Handles periods, exclamation marks, question marks, and ellipsis
+ * Returns trimmed non-empty fragments
+ */
+function splitIntoSentences(text: string): string[] {
+  // Split on sentence boundaries: . ! ? (optionally followed by space/end)
+  // Also handle ellipsis (...) as a sentence boundary
+  const fragments = text.split(/[.!?]\s+|\.\.\.+\s*/);
+
+  // Trim and filter empty fragments
+  return fragments
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
 }
 
 /**
@@ -791,52 +817,70 @@ export function classifyIntent(section: Section): IntentClassification {
     // Skip empty or very short lines (headings, fragments)
     if (line.length < 5) continue;
 
-    // Compute positive signals (all contribute to actionableSignal)
-    let lineScore = 0;
+    // Split line into sentences for sentence-level evaluation
+    // This ensures imperatives like "Add inline alert." are detected even when
+    // not at line start (e.g., "Users don't notice failures. Add inline alert.")
+    const sentences = splitIntoSentences(line);
 
-    // Rule 1: Strong request pattern
-    lineScore = Math.max(lineScore, matchStrongRequestPattern(line));
+    // Score each sentence fragment and take max score
+    let maxLineScore = 0;
+    let maxNonHedgedLineSentenceScore = 0;
 
-    // Rule 2: Imperative verb at start
-    lineScore = Math.max(lineScore, matchImperativeVerb(line));
+    for (const sentence of sentences) {
+      if (sentence.length < 5) continue;
 
-    // Rule 3: Change operator
-    const changeOpScore = matchChangeOperator(line);
-    if (changeOpScore > 0) {
-      hasChangeOperators = true;
-      maxChangeOperatorScore = Math.max(maxChangeOperatorScore, changeOpScore);
+      // Compute positive signals (all contribute to actionableSignal)
+      let sentenceScore = 0;
+
+      // Rule 1: Strong request pattern
+      sentenceScore = Math.max(sentenceScore, matchStrongRequestPattern(sentence));
+
+      // Rule 2: Imperative verb at start
+      sentenceScore = Math.max(sentenceScore, matchImperativeVerb(sentence));
+
+      // Rule 3: Change operator
+      const changeOpScore = matchChangeOperator(sentence);
+      if (changeOpScore > 0) {
+        hasChangeOperators = true;
+        maxChangeOperatorScore = Math.max(maxChangeOperatorScore, changeOpScore);
+      }
+      sentenceScore = Math.max(sentenceScore, changeOpScore);
+
+      // Rule 4: Status/progress markers (includes decisions like "done", "blocked")
+      sentenceScore = Math.max(sentenceScore, matchStatusMarkers(sentence));
+
+      // Rule 5: Structured task syntax
+      const structuredTaskScore = matchStructuredTask(sentence);
+      if (structuredTaskScore > 0) hasStructuredTasks = true;
+      sentenceScore = Math.max(sentenceScore, structuredTaskScore);
+
+      // Snapshot non-hedged score before applying hedged directive rule
+      const nonHedgedSentenceScore = sentenceScore;
+
+      // Rule 6b: Hedged directive (self-sufficient, no action verb required)
+      sentenceScore = Math.max(sentenceScore, matchHedgedDirective(sentence));
+
+      // Rule 6: Target object bonus (only if already actionable)
+      sentenceScore += matchTargetObjectBonus(sentence, sentenceScore);
+
+      // Negative rule: Negation override
+      if (hasNegationOverride(sentence)) {
+        sentenceScore = 0.0;
+      }
+
+      // Clamp sentence score to [0,1]
+      sentenceScore = Math.min(1.0, Math.max(0.0, sentenceScore));
+
+      // Track max score across sentences in this line
+      maxLineScore = Math.max(maxLineScore, sentenceScore);
+      maxNonHedgedLineSentenceScore = Math.max(maxNonHedgedLineSentenceScore, nonHedgedSentenceScore);
     }
-    lineScore = Math.max(lineScore, changeOpScore);
 
-    // Rule 4: Status/progress markers (includes decisions like "done", "blocked")
-    lineScore = Math.max(lineScore, matchStatusMarkers(line));
+    // Update global max scores with this line's max sentence score
+    maxActionableScore = Math.max(maxActionableScore, maxLineScore);
+    maxNonHedgedActionableScore = Math.max(maxNonHedgedActionableScore, maxNonHedgedLineSentenceScore);
 
-    // Rule 5: Structured task syntax
-    const structuredTaskScore = matchStructuredTask(line);
-    if (structuredTaskScore > 0) hasStructuredTasks = true;
-    lineScore = Math.max(lineScore, structuredTaskScore);
-
-    // Snapshot non-hedged score before applying hedged directive rule
-    const nonHedgedLineScore = lineScore;
-
-    // Rule 6b: Hedged directive (self-sufficient, no action verb required)
-    lineScore = Math.max(lineScore, matchHedgedDirective(line));
-
-    // Rule 6: Target object bonus (only if already actionable)
-    lineScore += matchTargetObjectBonus(line, lineScore);
-
-    // Negative rule: Negation override
-    if (hasNegationOverride(line)) {
-      lineScore = 0.0;
-    }
-
-    // Clamp line score to [0,1]
-    lineScore = Math.min(1.0, Math.max(0.0, lineScore));
-
-    maxActionableScore = Math.max(maxActionableScore, lineScore);
-    maxNonHedgedActionableScore = Math.max(maxNonHedgedActionableScore, nonHedgedLineScore);
-
-    // Compute out-of-scope signal
+    // Compute out-of-scope signal (still at line level, not sentence level)
     const oosResult = computeOutOfScopeForLine(line);
     if (oosResult.score > 0) {
       // Track which marker types fired for intent distribution
@@ -1027,17 +1071,16 @@ function hasExplicitImperativeAction(section: Section): boolean {
     // Skip very short lines
     if (line.length < 5) continue;
 
-    // Split line into sentences (split on period, exclamation, question mark followed by space or end)
-    const sentences = line.split(/[.!?]\s+/);
+    // Split line into sentences using shared sentence splitting logic
+    const sentences = splitIntoSentences(line);
 
     for (const sentence of sentences) {
-      const trimmedSentence = sentence.trim();
-      if (trimmedSentence.length < 5) continue;
+      if (sentence.length < 5) continue;
 
       // Check if sentence starts with an imperative verb
       for (const verb of V3_ACTION_VERBS) {
         const regex = new RegExp(`^${verb}\\b`, 'i');
-        if (regex.test(trimmedSentence)) {
+        if (regex.test(sentence)) {
           return true;
         }
       }

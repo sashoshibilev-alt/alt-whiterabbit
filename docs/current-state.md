@@ -1,5 +1,23 @@
 # Current State
 
+## Sentence-Level Actionability Scoring (2026-02-07)
+
+**Files**: `classifiers.ts`, `sentence-actionability.test.ts`
+
+Fixed imperative detection to work at sentence level rather than line level. Previously, imperatives mid-line (e.g., "Users don't notice failures. Add inline alert.") were missed because the imperative verb "Add" was not at line start. Now each body line is split into sentence fragments before scoring, ensuring imperatives are detected regardless of position.
+
+**Changes**:
+1. **Sentence splitting**: Added `splitIntoSentences()` helper that splits on `.`, `!`, `?`, and `...` boundaries
+2. **Smart quote normalization**: Added `normalizeSmartQuotes()` to convert `'` and `"` to ASCII before negation/imperative detection
+3. **Scoring loop**: Modified `classifyIntent()` to evaluate each sentence fragment separately and take max score across fragments
+4. **Shared logic**: Both `classifyIntent()` and `hasExplicitImperativeAction()` now use the same sentence splitting helper to prevent drift
+
+**Behavior Change**: Sections with imperatives after sentence boundaries are now correctly marked as actionable (actionableSignal >= 0.9). Example: "Users don't see errors. Add inline alert." now triggers imperative floor.
+
+**Tests**: Added 4 regression tests in `sentence-actionability.test.ts` covering mid-line imperatives, smart quotes, multiple sentences, and ellipsis boundaries.
+
+---
+
 ## feature_request as First-Class Type (2026-02-05)
 
 **Files**: `types.ts`, `classifiers.ts`, `synthesis.ts`, `scoring.ts`, `validators.ts`, `debugGenerator.ts`
