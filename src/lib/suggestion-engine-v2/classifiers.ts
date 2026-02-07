@@ -775,6 +775,9 @@ export function classifyIntent(section: Section): IntentClassification {
   // Track max score from non-hedged rules so out-of-scope override only
   // fires when a strong non-hedged signal is present.
   let maxNonHedgedActionableScore = 0;
+  // Track max score from change operators specifically, as only these
+  // should trigger out-of-scope override (not regular imperative verbs)
+  let maxChangeOperatorScore = 0;
 
   // Track which types of signals fired for intent distribution
   let hasChangeOperators = false;
@@ -799,7 +802,10 @@ export function classifyIntent(section: Section): IntentClassification {
 
     // Rule 3: Change operator
     const changeOpScore = matchChangeOperator(line);
-    if (changeOpScore > 0) hasChangeOperators = true;
+    if (changeOpScore > 0) {
+      hasChangeOperators = true;
+      maxChangeOperatorScore = Math.max(maxChangeOperatorScore, changeOpScore);
+    }
     lineScore = Math.max(lineScore, changeOpScore);
 
     // Rule 4: Status/progress markers (includes decisions like "done", "blocked")
@@ -856,7 +862,9 @@ export function classifyIntent(section: Section): IntentClassification {
   const actionVerbMatches = V3_ACTIONABILITY_VERBS.filter(v =>
     new RegExp(`\\b${v}\\s+\\w`, 'i').test(lowerText)
   ).length;
-  if (actionVerbMatches >= 2 && maxOutOfScopeScore < 0.4) {
+  // Track if we have multiple action verbs (>= 2) for V3 override logic
+  const hasMultipleActionVerbs = actionVerbMatches >= 2;
+  if (hasMultipleActionVerbs && maxOutOfScopeScore < 0.4) {
     maxActionableScore = Math.max(maxActionableScore, 0.8);
     maxNonHedgedActionableScore = Math.max(maxNonHedgedActionableScore, 0.8);
   }
@@ -870,13 +878,28 @@ export function classifyIntent(section: Section): IntentClassification {
     // because they're a lower-confidence signal
   }
 
-  // V3 OVERRIDE: If actionableSignal >= 0.8, clamp outOfScopeSignal <= 0.3
-  // This prevents high-actionability sections with calendar references
-  // (e.g., "Move launch to next week") from being filtered as out-of-scope.
-  // Only apply when the high signal comes from a non-hedged rule — hedged
-  // directives about admin tasks ("we should send an email") should still
-  // be filtered by out-of-scope logic.
-  if (maxNonHedgedActionableScore >= 0.8) {
+  // V3 OVERRIDE: If we have strong signals of substantial product work, clamp outOfScopeSignal <= 0.3
+  // This prevents high-actionability sections with incidental calendar/communication references
+  // from being filtered as out-of-scope.
+  //
+  // CRITICAL: This override applies to:
+  // 1. Change operators with score >= 0.8 (plan mutations like "Move", "Defer", "Shift")
+  //    Example: "Move launch to next week" → actionable (plan change with calendar reference)
+  // 2. Multiple action verbs (>= 2, indicating substantial product work)
+  //    Example: "Launch Partner Portal... Build backend, Create flow... Goal: Q4" → actionable
+  // 3. High non-hedged score (>= 0.8) from substantial sections (>= 5 lines)
+  //    Example: "Build a self-service customer portal... Scope: [bullets]... Target: Q2" → actionable
+  //
+  // This override does NOT apply to:
+  // - Single imperative verbs in short sections (< 5 lines)
+  //   Example: "Update doc link" → respects out-of-scope (micro-admin)
+  //   Example: "Send email to team" → respects out-of-scope (communication)
+  //
+  // The distinction ensures that substantial product work with incidental date/communication
+  // references passes through, while simple admin/communication imperatives are correctly filtered.
+  const isSubstantialSection = section.structural_features.num_lines >= 5;
+  if (maxChangeOperatorScore >= 0.8 || hasMultipleActionVerbs ||
+      (maxNonHedgedActionableScore >= 0.8 && isSubstantialSection)) {
     maxOutOfScopeScore = Math.min(0.3, maxOutOfScopeScore);
   }
 
@@ -989,14 +1012,53 @@ export function computeActionabilitySignals(intent: IntentClassification): {
 }
 
 /**
+ * Check if section contains an explicit imperative action
+ * Returns true if any sentence starts with a known imperative verb
+ */
+function hasExplicitImperativeAction(section: Section): boolean {
+  // Guard: ensure body_lines exists
+  if (!section.body_lines || section.body_lines.length === 0) {
+    return false;
+  }
+
+  const lines = section.body_lines.map(l => preprocessLine(l.text));
+
+  for (const line of lines) {
+    // Skip very short lines
+    if (line.length < 5) continue;
+
+    // Split line into sentences (split on period, exclamation, question mark followed by space or end)
+    const sentences = line.split(/[.!?]\s+/);
+
+    for (const sentence of sentences) {
+      const trimmedSentence = sentence.trim();
+      if (trimmedSentence.length < 5) continue;
+
+      // Check if sentence starts with an imperative verb
+      for (const verb of V3_ACTION_VERBS) {
+        const regex = new RegExp(`^${verb}\\b`, 'i');
+        if (regex.test(trimmedSentence)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
  * Determine if a section is actionable based on intent
- * 
+ *
  * Gating condition (per spec):
  *   isActionable = actionableSignal >= T_action && outOfScopeSignal < T_out_of_scope
- * 
+ *
  * PLAN_CHANGE PROTECTION: plan_change sections are NEVER dropped at ACTIONABILITY stage.
  * They always pass through to ensure "plan_change intent always yields at least one suggestion".
- * 
+ *
+ * IMPERATIVE FLOOR: sections containing explicit imperative verbs at sentence start
+ * are ALWAYS considered actionable, regardless of other signals.
+ *
  * Note: Uses >= for actionability threshold so equality passes.
  */
 export function isActionable(
@@ -1012,7 +1074,7 @@ export function isActionable(
 
   // PLAN_CHANGE PROTECTION: Use canonical helper to detect plan_change intent
   const isPlanChange = isPlanChangeIntentLabel(intent);
-  
+
   if (isPlanChange) {
     // PLAN_CHANGE OVERRIDE: never drop at ACTIONABILITY gate
     return {
@@ -1024,24 +1086,37 @@ export function isActionable(
   }
 
   // Existing non-plan_change gates remain as-is
-  
+
+  // Check out-of-scope FIRST: outOfScopeSignal < T_out_of_scope
+  // Using >= here means that if outOfScopeSignal == T_out_of_scope, section is NOT actionable
+  // This check happens before imperative floor so that out-of-scope imperatives are correctly rejected
+  if (outOfScopeSignal >= thresholds.T_out_of_scope) {
+    return {
+      actionable: false,
+      reason: `Out-of-scope signal too high: ${outOfScopeSignal.toFixed(3)} >= ${thresholds.T_out_of_scope} (cal=${intent.calendar.toFixed(2)}, comm=${intent.communication.toFixed(2)}, micro=${intent.micro_tasks.toFixed(2)}) [research=${intent.research.toFixed(2)} excluded from gate]`,
+      actionableSignal,
+      outOfScopeSignal,
+    };
+  }
+
+  // IMPERATIVE FLOOR: Check for explicit imperative action after out-of-scope check
+  // This ensures imperatives bypass borderline/shortness logic but still respect out-of-scope signals
+  const hasImperative = hasExplicitImperativeAction(section);
+  if (hasImperative) {
+    return {
+      actionable: true,
+      reason: `imperative floor: section contains explicit imperative action (signal=${actionableSignal.toFixed(3)}, outOfScope=${outOfScopeSignal.toFixed(3)})`,
+      actionableSignal,
+      outOfScopeSignal,
+    };
+  }
+
   // Check actionability: actionableSignal >= T_action (with penalty for short sections)
   // Using >= means that a section with actionableSignal == T_action passes
   if (actionableSignal < effectiveThreshold) {
     return {
       actionable: false,
       reason: `Action signal too low: ${actionableSignal.toFixed(3)} < ${effectiveThreshold.toFixed(3)} (T_action=${thresholds.T_action}, penalty=${shortSectionPenalty.toFixed(2)})`,
-      actionableSignal,
-      outOfScopeSignal,
-    };
-  }
-
-  // Check out-of-scope: outOfScopeSignal < T_out_of_scope
-  // Using >= here means that if outOfScopeSignal == T_out_of_scope, section is NOT actionable
-  if (outOfScopeSignal >= thresholds.T_out_of_scope) {
-    return {
-      actionable: false,
-      reason: `Out-of-scope signal too high: ${outOfScopeSignal.toFixed(3)} >= ${thresholds.T_out_of_scope} (cal=${intent.calendar.toFixed(2)}, comm=${intent.communication.toFixed(2)}, micro=${intent.micro_tasks.toFixed(2)}) [research=${intent.research.toFixed(2)} excluded from gate]`,
       actionableSignal,
       outOfScopeSignal,
     };
