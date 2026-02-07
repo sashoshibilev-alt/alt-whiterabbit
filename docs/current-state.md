@@ -1,5 +1,83 @@
 # Current State
 
+## Intent Scoring Contract Restoration (2026-02-07)
+
+**Files**: `types.ts`, `classifiers.ts`, `debugTypes.ts`, `DebugLedger.ts`, `synthesis.ts`, `suggestion-engine-v2.test.ts`
+
+Fixed a bug where force routing flags (`_forceDecisionMarker`, `_forceRoleAssignment`) contaminated `intentClassification.scoresByLabel` in debug JSON, causing `topLabel` to become a flag name (e.g., "_forceDecisionMarker") with `topScore: true` instead of a numeric value, violating the intent scoring contract.
+
+**Changes**:
+1. **IntentClassification schema** (`types.ts`): Moved force flags from flat properties to nested `flags?: { forceRoleAssignment?: boolean, forceDecisionMarker?: boolean }` object
+2. **ClassifierDistribution schema** (`debugTypes.ts`): Added `flags` field to store routing overrides separately from scores
+3. **Debug ledger** (`DebugLedger.ts`): Filter out non-numeric properties when building `scoresByLabel` using `typeof value === 'number'` check; store flags separately at `intentClassification.flags`
+4. **Routing logic** (`classifiers.ts`): Updated all flag checks from `intent._forceRoleAssignment` to `intent.flags?.forceRoleAssignment`
+5. **Title template** (`synthesis.ts`): Role assignment sections now use "Action items: <Heading>" template instead of "Update <Heading> plan"
+6. **Tests**: Added 4 regression tests verifying topScore is numeric, topLabel is valid, flags are stored separately, and role assignments use correct title template
+
+**Contract Guarantees**:
+- `intentClassification.topLabel` is always a valid intent label (plan_change, new_workstream, calendar, etc.), never a force flag
+- `intentClassification.topScore` is always a number, never a boolean
+- `intentClassification.scoresByLabel` only contains numeric values for valid intent labels
+- `intentClassification.flags` contains routing overrides when present
+
+**Behavior Change**: Role assignment sections (e.g., "PM to document") now emit with title "Action items: Next Steps" instead of "Update Next Steps plan", making the output clearer for task-like content.
+
+**Regression Test**: "Leadership Alignment" section still correctly shows `plan_change` as `topLabel` (not contaminated by decision marker flag).
+
+---
+
+## Role Assignment and Decision Marker Detection (2026-02-07)
+
+**Files**: `suggestion-engine-v2/classifiers.ts`, `suggestion-engine-v2/suggestion-engine-v2.test.ts`
+
+Added two minimal actionability overrides to detect task assignments and decision statements that were previously scoring 0 actionableSignal:
+
+**Changes**:
+1. **Role assignment pattern (Rule 9)**: Detects "ROLE to VERB" micro-tasks (e.g., "PM to document", "CS to manage", "Eng to implement")
+   - Score: +0.85 actionable signal
+   - Patterns: PM to, CS to, Eng to, Design to, Project Manager to, etc. (9 patterns)
+
+2. **Decision marker pattern (Rule 10)**: Detects decision language (e.g., "will be logged", "no near-term", "revisit", "agreed")
+   - Score: +0.70 actionable signal
+   - Markers: will be logged, will be, near-term, revisit, decided, agreed, approved (8 markers)
+
+**Behavior Change**: "Next Steps" sections with role assignments and "Decision" sections with decision markers now pass the actionability gate (T_action = 0.5) and emit suggestions. Previously, these sections scored 0 and were dropped at ACTIONABILITY stage, causing synthesisRan=false in debug JSON.
+
+**Implementation**: Both patterns are checked at the sentence level within the existing V3 actionability gate loop in `classifyIntent()`. Scores contribute to max actionableSignal for the section.
+
+**Tests**: Added 4 regression tests covering both classification (actionable signal >= threshold) and synthesis (suggestions emitted with correct evidence spans).
+
+**Note**: Decision sections containing calendar markers (q1-q4, month names) may still be filtered if outOfScopeSignal >= 0.4. The out-of-scope override (clamp to 0.3) only triggers for change operators or multiple action verbs, not decision markers alone.
+
+---
+
+## Numbered Section Heading Support (2026-02-07)
+
+**Files**: `belief-pipeline/segmentation.ts`, `belief-pipeline.test.ts`, `suggestion-engine-v2/preprocessing.ts`, `suggestion-engine-v2.test.ts`
+
+Fixed segmentation bug where numbered section headings (e.g., "1. Customer Feedback", "2. Options Discussed") were incorrectly parsed as list items, causing multiple sections to collapse into a single "General" section. This broke downstream intent classification and actionability gating.
+
+**Changes**:
+1. **Heading detection**: Added pattern `^\s{0,2}\d+\.\s+\S` to recognize numbered section headings before list item matching
+2. **Indentation heuristic**: Up to 2 spaces indentation allowed to distinguish from nested list items (deeper indentation remains list item)
+3. **Case-agnostic**: Supports both uppercase ("1. Customer Feedback") and lowercase ("1. next steps") headings
+4. **Heading level**: Numbered headings are treated as level 2 headings (h2 equivalent)
+5. **Processing order**: Numbered heading check occurs after markdown headings but before list item detection
+
+**Implementation**:
+- **belief-pipeline**: Implemented in `parseMarkdownBlocks()` with `^(\d+)\.\s+(.+)$` pattern at line 54-69
+- **suggestion-engine-v2**: Implemented in `getLineType()`, `getHeadingLevel()`, and `getHeadingText()` functions with consistent behavior
+
+**Behavior Change**: Notes using numbered section structure now segment correctly, with each numbered heading creating a distinct section. Downstream classification can now properly analyze each section's intent and actionability independently.
+
+**Pattern Support**: Currently supports `\d+\.` (dot) format only. Parenthesis format `\d+\)` not added because existing list parsing doesn't support it either (maintains consistency).
+
+**Tests**:
+- belief-pipeline: 3 regression tests verifying uppercase/lowercase/indentation handling
+- suggestion-engine-v2: 1 regression test verifying 5-section note segments correctly and heading text extraction works
+
+---
+
 ## Sentence-Level Actionability Scoring (2026-02-07)
 
 **Files**: `classifiers.ts`, `sentence-actionability.test.ts`

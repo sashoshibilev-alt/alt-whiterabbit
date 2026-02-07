@@ -122,6 +122,11 @@ export interface ClassifierDistribution {
   topScore: number;
   scoresByLabel: Record<string, number>;
   rawOutput?: unknown;
+  // Routing flags (stored separately to avoid contaminating scoresByLabel)
+  flags?: {
+    forceRoleAssignment?: boolean;
+    forceDecisionMarker?: boolean;
+  };
 }
 
 /**

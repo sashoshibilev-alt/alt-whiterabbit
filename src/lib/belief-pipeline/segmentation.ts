@@ -50,6 +50,23 @@ function parseMarkdownBlocks(markdown: string): MarkdownBlock[] {
       i++;
       continue;
     }
+
+    // Numbered section heading (e.g., "1. Customer Feedback", "1. next steps")
+    // No indentation (starts at column 0) to distinguish from list items
+    const numberedHeadingMatch = line.match(/^(\d+)\.\s+(.+)$/);
+    if (numberedHeadingMatch) {
+      blocks.push({
+        type: 'heading',
+        content: line,
+        start_char: lineStart,
+        end_char: lineEnd,
+        heading_level: 2, // treat as h2
+        heading_text: numberedHeadingMatch[2].trim(),
+      });
+      currentChar = lineEnd;
+      i++;
+      continue;
+    }
     
     // Code block (fenced)
     if (line.trim().startsWith('```')) {

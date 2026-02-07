@@ -188,8 +188,10 @@ export class DebugLedger {
   ): void {
     if (!this.isActive()) return;
 
-    // Find the top intent
-    const entries = Object.entries(intentOutput) as [string, number][];
+    // Filter out non-numeric properties (flags) to maintain intent scoring contract
+    // Only include actual intent scores in scoresByLabel
+    const entries = Object.entries(intentOutput)
+      .filter(([key, value]) => key !== 'flags' && typeof value === 'number') as [string, number][];
     const sorted = entries.sort((a, b) => b[1] - a[1]);
     const [topLabel, topScore] = sorted[0] || ["unknown", 0];
 
@@ -198,6 +200,11 @@ export class DebugLedger {
       topScore,
       scoresByLabel: Object.fromEntries(entries),
     };
+
+    // Store flags separately at top level if present
+    if (intentOutput.flags) {
+      section.intentClassification.flags = intentOutput.flags;
+    }
 
     section.decisions.isActionable = isActionable;
     section.decisions.intentLabel = topLabel;

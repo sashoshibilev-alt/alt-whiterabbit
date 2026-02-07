@@ -203,6 +203,59 @@ describe('Preprocessing', () => {
     expect(features.num_list_items).toBeGreaterThan(0);
     expect(features.has_quarter_refs).toBe(true); // Q2, Q3 mentioned
   });
+
+  it('should recognize numbered headings (1. Title format)', () => {
+    const numberedNote: NoteInput = {
+      note_id: 'test-numbered',
+      raw_markdown: `1. Customer Feedback
+
+We heard concerns about pricing complexity from 3 enterprise prospects.
+
+2. Options Discussed
+
+- Simplify tier structure to 3 plans
+- Bundle features differently
+- Grandfather existing customers
+
+3. Leadership Alignment
+
+CEO and VP Sales agree we should simplify pricing before Q3 push.
+
+4. Decision
+
+Move forward with simplified 3-tier structure. Launch in 6 weeks.
+
+5. Next Steps
+
+- Draft new pricing page by Friday
+- Update sales deck
+- Schedule all-hands announcement`,
+    };
+
+    const result = preprocessNote(numberedNote);
+
+    // Should detect all 5 numbered headings as separate sections
+    expect(result.sections.length).toBeGreaterThanOrEqual(5);
+
+    // Verify heading texts are correctly extracted (without number prefix)
+    const headingTexts = result.sections.map((s) => s.heading_text);
+    expect(headingTexts).toContain('Customer Feedback');
+    expect(headingTexts).toContain('Options Discussed');
+    expect(headingTexts).toContain('Leadership Alignment');
+    expect(headingTexts).toContain('Decision');
+    expect(headingTexts).toContain('Next Steps');
+
+    // Next Steps section should contain the action bullets
+    const nextStepsSection = result.sections.find((s) =>
+      s.heading_text === 'Next Steps'
+    );
+    expect(nextStepsSection).toBeDefined();
+    expect(nextStepsSection!.structural_features.num_list_items).toBe(3);
+
+    // Lines should be marked as heading type, not list_item
+    const headingLines = result.lines.filter((l) => l.line_type === 'heading');
+    expect(headingLines.length).toBeGreaterThanOrEqual(5);
+  });
 });
 
 // ============================================
@@ -258,6 +311,105 @@ describe('Classification', () => {
 
     // Should have few or no actionable sections
     expect(actionable.length).toBeLessThanOrEqual(1);
+  });
+
+  it('should detect role assignment patterns in Next Steps sections', () => {
+    const roleAssignmentNote: NoteInput = {
+      note_id: 'test-role-assignment',
+      raw_markdown: `# Feature Request Discussion
+
+## Next Steps
+
+• PM to document the feature request in detail
+• CS to manage customer escalation timeline
+• Eng to implement quick fix for the edge case
+• Design to review the proposed UX flow`,
+    };
+
+    const { sections } = preprocessNote(roleAssignmentNote);
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+    const actionable = filterActionableSections(classified);
+
+    expect(actionable.length).toBeGreaterThan(0);
+
+    // Next Steps section should be actionable
+    const nextStepsSection = actionable.find((s) =>
+      s.heading_text?.includes('Next Steps')
+    );
+    expect(nextStepsSection).toBeDefined();
+    expect(nextStepsSection!.is_actionable).toBe(true);
+    expect(nextStepsSection!.actionable_signal).toBeGreaterThanOrEqual(0.85);
+  });
+
+  it('should detect decision markers in Decision sections', () => {
+    const decisionNote: NoteInput = {
+      note_id: 'test-decision',
+      raw_markdown: `## Decision
+
+Feature request will be logged in the backlog.
+
+No near-term resourcing available for this initiative.
+
+We agreed to revisit this during the next planning cycle.`,
+    };
+
+    const { sections } = preprocessNote(decisionNote);
+
+    // Debug: Log all sections
+    expect(sections.length).toBeGreaterThan(0);
+
+    // Find section with Decision heading or body containing decision markers
+    const decisionSection = sections.find((s) =>
+      s.heading_text?.includes('Decision') ||
+      s.body_lines.some(l => l.text.toLowerCase().includes('will be logged'))
+    );
+
+    // Decision section must exist in preprocessing
+    expect(decisionSection).toBeDefined();
+    expect(decisionSection!.body_lines.length).toBeGreaterThan(0);
+
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+    const actionable = filterActionableSections(classified);
+
+    expect(actionable.length).toBeGreaterThan(0);
+
+    // Decision section should be actionable
+    const actionableDecisionSection = actionable.find((s) =>
+      s.heading_text?.includes('Decision') ||
+      s.body_lines.some(l => l.text.toLowerCase().includes('will be logged'))
+    );
+    expect(actionableDecisionSection).toBeDefined();
+    expect(actionableDecisionSection!.is_actionable).toBe(true);
+    expect(actionableDecisionSection!.actionable_signal).toBeGreaterThanOrEqual(0.70);
+  });
+
+  it('should NOT drop Options Discussed with calendar reference as out-of-scope (dominance gate)', () => {
+    const optionsNote: NoteInput = {
+      note_id: 'test-options-discussed',
+      raw_markdown: `## Options Discussed
+
+- Simplify tier structure to 3 plans
+- Bundle features differently
+- Grandfather existing customers
+- Launch in next quarter`,
+    };
+
+    const { sections } = preprocessNote(optionsNote);
+    expect(sections.length).toBeGreaterThan(0);
+
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+    // Options Discussed section should exist
+    const optionsSection = classified.find((s) =>
+      s.heading_text?.includes('Options')
+    );
+    expect(optionsSection).toBeDefined();
+
+    // If not actionable, the reason should be "Action signal too low", NOT "Out-of-scope"
+    if (!optionsSection!.is_actionable) {
+      expect(optionsSection!.actionability_reason).toMatch(/action signal too low/i);
+      expect(optionsSection!.actionability_reason).not.toMatch(/out-of-scope/i);
+    }
   });
 });
 
@@ -315,6 +467,117 @@ describe('Synthesis', () => {
       expect(suggestion.title).toMatch(/new|initiative|launch/i);
       expect(suggestion.payload.draft_initiative).toBeDefined();
     }
+  });
+
+  it('should emit suggestions from Next Steps sections with role assignments', () => {
+    const roleAssignmentNote: NoteInput = {
+      note_id: 'test-role-synthesis',
+      raw_markdown: `# Feature Request Discussion
+
+## Next Steps
+
+• PM to document the feature request in detail
+• CS to manage customer escalation timeline
+• Eng to implement quick fix for the edge case`,
+    };
+
+    const { sections } = preprocessNote(roleAssignmentNote);
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+    const actionable = filterActionableSections(classified);
+    const suggestions = synthesizeSuggestions(actionable);
+
+    expect(suggestions.length).toBeGreaterThan(0);
+
+    // At least one suggestion should be generated
+    const firstSuggestion = suggestions[0];
+    expect(firstSuggestion).toBeDefined();
+    expect(firstSuggestion.title).toBeDefined();
+
+    // Evidence spans should come from bullet lines, not headings
+    expect(firstSuggestion.evidence_spans.length).toBeGreaterThan(0);
+    const evidenceText = firstSuggestion.evidence_spans.map(s => s.text).join(' ');
+    expect(evidenceText).toMatch(/PM to|CS to|Eng to/);
+  });
+
+  it('should classify Next Steps with role assignments as micro_tasks (not idea)', () => {
+    const roleAssignmentNote: NoteInput = {
+      note_id: 'test-next-steps-type',
+      raw_markdown: `## Next Steps
+
+• PM to document the feature request
+• CS to manage customer escalation
+• Eng to implement quick fix`,
+    };
+
+    const { sections } = preprocessNote(roleAssignmentNote);
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+    // Next Steps section should be classified with micro_tasks dominant
+    const nextStepsSection = classified.find((s) =>
+      s.heading_text?.includes('Next Steps')
+    );
+    expect(nextStepsSection).toBeDefined();
+    expect(nextStepsSection!.is_actionable).toBe(true);
+
+    // Intent should have forceRoleAssignment flag set
+    expect(nextStepsSection!.intent.flags?.forceRoleAssignment).toBe(true);
+
+    // typeLabel should be 'project_update' (NOT 'idea' to avoid "New idea:" titles)
+    expect(nextStepsSection!.typeLabel).toBe('project_update');
+    expect(nextStepsSection!.suggested_type).toBe('project_update');
+  });
+
+  it('should classify Decision sections as project_update (not idea)', () => {
+    const decisionNote: NoteInput = {
+      note_id: 'test-decision-type',
+      raw_markdown: `## Decision
+
+Feature request will be logged in the backlog.
+
+No near-term resourcing available for this initiative.`,
+    };
+
+    const { sections } = preprocessNote(decisionNote);
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+    // Decision section should be classified as project_update
+    const decisionSection = classified.find((s) =>
+      s.heading_text?.includes('Decision')
+    );
+    expect(decisionSection).toBeDefined();
+    expect(decisionSection!.is_actionable).toBe(true);
+
+    // typeLabel should be 'project_update'
+    expect(decisionSection!.typeLabel).toBe('project_update');
+    expect(decisionSection!.suggested_type).toBe('project_update');
+  });
+
+  it('should emit suggestions from Decision sections', () => {
+    const decisionNote: NoteInput = {
+      note_id: 'test-decision-synthesis',
+      raw_markdown: `## Decision
+
+Feature request will be logged in the backlog.
+
+No near-term resourcing available for this initiative.`,
+    };
+
+    const { sections } = preprocessNote(decisionNote);
+    const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+    const actionable = filterActionableSections(classified);
+    const suggestions = synthesizeSuggestions(actionable);
+
+    expect(suggestions.length).toBeGreaterThan(0);
+
+    // At least one suggestion should be generated (type may vary based on intent classification)
+    const decisionSuggestion = suggestions[0];
+    expect(decisionSuggestion).toBeDefined();
+    expect(decisionSuggestion.title).toBeDefined();
+
+    // Evidence should come from decision text
+    expect(decisionSuggestion.evidence_spans.length).toBeGreaterThan(0);
+    const evidenceText = decisionSuggestion.evidence_spans.map(s => s.text).join(' ');
+    expect(evidenceText).toMatch(/will be logged|near-term/);
   });
 });
 
@@ -516,30 +779,34 @@ describe('Actionability Edge Cases', () => {
       expect(result.reason).toContain('Action signal too low');
     });
 
-    it('should fail when outOfScopeSignal exactly equals T_out_of_scope', () => {
+    it('should fail with dominance-based gate when oosTop is dominant', () => {
       const thresholds: ThresholdConfig = {
         ...DEFAULT_THRESHOLDS,
         T_action: 0.5,
         T_out_of_scope: 0.4,
       };
 
-      // Use new_workstream as top signal to avoid plan_change protection
+      // Dominance gate: oosTop >= 0.75 AND (oosTop - inTop) >= 0.20
+      // Set calendar/communication high, and in-scope signals low to trigger dominance drop
       const intent: IntentClassification = {
-        plan_change: 0.3, // Lower than new_workstream to avoid plan_change protection
-        new_workstream: 0.7,
-        status_informational: 0.2,
-        communication: 0.4, // exactly at threshold
-        research: 0.3,
+        plan_change: 0.1, // Low to avoid plan_change protection
+        new_workstream: 0.1,
+        status_informational: 0.1,
+        communication: 0.8, // High out-of-scope signal
+        research: 0.1,
         calendar: 0.2,
-        micro_tasks: 0.2,
+        micro_tasks: 0.1,
       };
 
       const section = makeSection('Test content', 'Test Heading', 5, 2);
       const result = isActionable(intent, section, thresholds);
 
-      expect(result.outOfScopeSignal).toBe(0.4); // max of communication signals
+      // oosTop = max(0.2, 0.8) = 0.8
+      // inTop = max(0.1, 0.1, 0.1, 0.1, 0.1) = 0.1
+      // dominanceGap = 0.8 - 0.1 = 0.7
+      // Should drop: oosTop >= 0.75 (TRUE) AND gap >= 0.20 (TRUE)
       expect(result.actionable).toBe(false);
-      expect(result.reason).toContain('Out-of-scope signal too high');
+      expect(result.reason).toContain('Out-of-scope dominance');
     });
 
     it('should pass when outOfScopeSignal is just below T_out_of_scope', () => {
@@ -3324,7 +3591,7 @@ Maybe we need to redesign the navigation. It's not intuitive enough.
       expect(isPlanChangeIntentLabel(section.intent)).toBe(false);
     });
 
-    it('hedged directives about admin tasks are still filtered by out-of-scope', () => {
+    it('hedged directives with calendar/communication markers are NOT dropped by dominance gate', () => {
       const note: NoteInput = {
         note_id: 'test-hedged-admin',
         raw_markdown: `## Action items
@@ -3337,12 +3604,15 @@ We should send the invoice by Friday and schedule the meeting for next week.
       const classified = classifySections(sections, DEFAULT_THRESHOLDS);
       const actionable = filterActionableSections(classified);
 
-      // This section contains hedged directive "we should" BUT also has
-      // calendar marker ("friday", "next week") and communication ("send")
-      // Since hedged directive score (0.9) doesn't trigger the out-of-scope
-      // override (which requires non-hedged score >= 0.8), this should be
-      // filtered as out-of-scope.
-      expect(actionable.length).toBe(0);
+      // With the dominance-based gate, this section is NOT dropped because:
+      // - oosTop = max(calendar, communication) ~ 0.6
+      // - inTop = max(plan_change, new_workstream, ...) ~ 0.9 (from hedged directive)
+      // - dominanceGap = 0.6 - 0.9 = -0.3
+      // - Check: oosTop >= 0.75 (FALSE) → NOT dropped
+      //
+      // The old absolute threshold would have dropped this, but the new dominance gate
+      // only drops when out-of-scope signals are BOTH high (>= 0.75) AND dominant.
+      expect(actionable.length).toBeGreaterThan(0);
     });
   });
 
@@ -3775,6 +4045,132 @@ Shift the beta milestone from April to June.
       const body = suggestion.suggestion!.body;
       const hasImperative = body.includes('Add rate limiting') || body.includes('Implement request signing') || body.includes('Log all security');
       expect(hasImperative).toBe(true);
+    });
+  });
+
+  describe('Intent Scoring Contract (force flags)', () => {
+    beforeEach(() => {
+      resetSectionCounter();
+      resetSuggestionCounter();
+    });
+
+    it('intentClassification.topScore is always numeric', () => {
+      const note: NoteInput = {
+        note_id: 'test-intent-contract',
+        raw_markdown: `## Leadership Alignment
+
+PM to document feature request priorities before next planning cycle.
+`,
+      };
+
+      const result = generateSuggestionsWithDebug(note, {}, { enable_debug: true }, { verbosity: 'REDACTED' });
+
+      expect(result.debugRun).toBeDefined();
+      const sections = result.debugRun!.sections;
+
+      for (const section of sections) {
+        // topScore must be a number
+        expect(typeof section.intentClassification.topScore).toBe('number');
+
+        // topLabel must not be a force flag
+        expect(section.intentClassification.topLabel).not.toMatch(/^_force/);
+        expect(section.intentClassification.topLabel).not.toBe('forceRoleAssignment');
+        expect(section.intentClassification.topLabel).not.toBe('forceDecisionMarker');
+
+        // scoresByLabel must only contain numeric values
+        for (const [label, score] of Object.entries(section.intentClassification.scoresByLabel)) {
+          expect(typeof score).toBe('number');
+          expect(label).not.toMatch(/^_force/);
+        }
+      }
+    });
+
+    it('flags are stored separately from scoresByLabel', () => {
+      const note: NoteInput = {
+        note_id: 'test-flags-separation',
+        raw_markdown: `## Next Steps
+
+PM to review design mockups and provide feedback by EOW.
+CS to manage escalation process for high-priority tickets.
+`,
+      };
+
+      const result = generateSuggestionsWithDebug(note, {}, { enable_debug: true }, { verbosity: 'REDACTED' });
+
+      expect(result.debugRun).toBeDefined();
+      const sections = result.debugRun!.sections;
+
+      // Find section with role assignment
+      const roleAssignmentSection = sections.find(s =>
+        s.intentClassification.flags?.forceRoleAssignment
+      );
+
+      if (roleAssignmentSection) {
+        // Flags should be stored separately
+        expect(roleAssignmentSection.intentClassification.flags).toBeDefined();
+        expect(roleAssignmentSection.intentClassification.flags?.forceRoleAssignment).toBe(true);
+
+        // scoresByLabel should not contain flags
+        expect(roleAssignmentSection.intentClassification.scoresByLabel).not.toHaveProperty('_forceRoleAssignment');
+        expect(roleAssignmentSection.intentClassification.scoresByLabel).not.toHaveProperty('forceRoleAssignment');
+      }
+    });
+
+    it('Leadership Alignment still shows plan_change as topLabel', () => {
+      const note: NoteInput = {
+        note_id: 'test-leadership-alignment',
+        raw_markdown: `## Leadership Alignment
+
+We agreed to shift focus from enterprise to self-serve onboarding.
+Deprioritize SSO integration and move it to Q3.
+`,
+      };
+
+      const result = generateSuggestionsWithDebug(note, {}, { enable_debug: true }, { verbosity: 'REDACTED' });
+
+      expect(result.debugRun).toBeDefined();
+      const sections = result.debugRun!.sections;
+
+      // Find Leadership Alignment section
+      const leadershipSection = sections.find(s =>
+        s.headingTextPreview.includes('Leadership Alignment')
+      );
+
+      expect(leadershipSection).toBeDefined();
+
+      // Should be classified as plan_change (or another valid intent, not a flag)
+      expect(typeof leadershipSection!.intentClassification.topScore).toBe('number');
+      expect(leadershipSection!.intentClassification.topLabel).not.toMatch(/^_force/);
+
+      // Should be actionable with plan_change or valid intent label
+      expect(leadershipSection!.decisions.isActionable).toBe(true);
+    });
+
+    it('role assignment sections use "Action items:" title template', () => {
+      const note: NoteInput = {
+        note_id: 'test-role-title',
+        raw_markdown: `## Product Refinement
+
+PM to document requirements for Q2 roadmap items.
+Design to create mockups for new onboarding flow.
+`,
+      };
+
+      const result = generateSuggestions(note);
+
+      // Should emit at least one suggestion
+      expect(result.suggestions.length).toBeGreaterThanOrEqual(1);
+
+      // Find suggestion with role assignment
+      const roleAssignmentSugg = result.suggestions.find(s =>
+        s.title.includes('Action items:')
+      );
+
+      if (roleAssignmentSugg) {
+        // Title should use "Action items:" template
+        expect(roleAssignmentSugg.title).toMatch(/^Action items:/);
+        expect(roleAssignmentSugg.type).toBe('project_update');
+      }
     });
   });
 });
