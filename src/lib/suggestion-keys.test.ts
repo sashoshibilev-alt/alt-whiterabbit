@@ -30,6 +30,11 @@ describe('normalizeTitle', () => {
     expect(normalizeTitle('Q3 2024 goals')).toBe('q3 2024 goals');
   });
 
+  it('truncates to max 120 chars', () => {
+    const longTitle = 'a'.repeat(200);
+    expect(normalizeTitle(longTitle)).toBe('a'.repeat(120));
+  });
+
   it('handles empty string', () => {
     expect(normalizeTitle('')).toBe('');
   });
@@ -49,7 +54,7 @@ describe('normalizeTitle', () => {
 });
 
 describe('computeSuggestionKey', () => {
-  it('creates stable key from components', () => {
+  it('creates stable SHA1 key from components', () => {
     const key = computeSuggestionKey({
       noteId: 'note123',
       sourceSectionId: 'sec456',
@@ -57,18 +62,30 @@ describe('computeSuggestionKey', () => {
       title: 'Build user dashboard',
     });
 
-    expect(key).toBe('note123:sec456:idea:build user dashboard');
+    // Should be a hash string, not the raw concatenation
+    expect(key).toBeTruthy();
+    expect(key.length).toBeGreaterThan(0);
+    expect(key).not.toContain('note123');
+    expect(key).not.toContain('Build user dashboard');
   });
 
   it('normalizes title in key', () => {
-    const key = computeSuggestionKey({
+    const key1 = computeSuggestionKey({
       noteId: 'note123',
       sourceSectionId: 'sec456',
       type: 'idea',
       title: 'Build User Dashboard!',
     });
 
-    expect(key).toBe('note123:sec456:idea:build user dashboard');
+    const key2 = computeSuggestionKey({
+      noteId: 'note123',
+      sourceSectionId: 'sec456',
+      type: 'idea',
+      title: 'build user dashboard',
+    });
+
+    // Same normalized title should produce same key
+    expect(key1).toBe(key2);
   });
 
   it('distinguishes between types', () => {
@@ -151,6 +168,24 @@ describe('computeSuggestionKey', () => {
       title: '',
     });
 
-    expect(key).toBe('note123:sec456:idea:');
+    // Should still produce a valid hash
+    expect(key).toBeTruthy();
+    expect(key.length).toBeGreaterThan(0);
+  });
+
+  it('produces deterministic keys', () => {
+    const params = {
+      noteId: 'note123',
+      sourceSectionId: 'sec456',
+      type: 'idea' as const,
+      title: 'Build user dashboard',
+    };
+
+    const key1 = computeSuggestionKey(params);
+    const key2 = computeSuggestionKey(params);
+    const key3 = computeSuggestionKey(params);
+
+    expect(key1).toBe(key2);
+    expect(key2).toBe(key3);
   });
 });

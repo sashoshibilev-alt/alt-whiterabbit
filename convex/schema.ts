@@ -464,9 +464,17 @@ export default defineSchema({
   suggestionDecisions: defineTable({
     noteId: v.id("notes"),
     suggestionKey: v.string(), // Stable key computed from suggestion content
-    status: v.union(v.literal("dismissed"), v.literal("applied")), // User decision
+    status: v.union(
+      v.literal("dismissed"),
+      v.literal("applied"),
+      v.literal("needs_clarification")
+    ), // User decision
     initiativeId: v.optional(v.id("v0Initiatives")), // FK when applied
     appliedMode: v.optional(v.union(v.literal("existing"), v.literal("created"))), // How it was applied
+    dismissedAt: v.optional(v.number()), // Timestamp when dismissed
+    appliedAt: v.optional(v.number()), // Timestamp when applied
+    appliedToInitiativeId: v.optional(v.id("v0Initiatives")), // Deprecated: use initiativeId
+    appliedToType: v.optional(v.union(v.literal("existing"), v.literal("new"))), // Deprecated: use appliedMode
     updatedAt: v.number(), // Timestamp of decision
   })
     .index("by_noteId", ["noteId"])

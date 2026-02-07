@@ -22,19 +22,15 @@ describe('suggestionKey integration', () => {
     expect(result.suggestions.length).toBeGreaterThan(0);
 
     for (const suggestion of result.suggestions) {
-      // Verify suggestionKey exists
+      // Verify suggestionKey exists and is a hash (SHA1-based)
       expect(suggestion.suggestionKey).toBeDefined();
       expect(typeof suggestion.suggestionKey).toBe('string');
       expect(suggestion.suggestionKey.length).toBeGreaterThan(0);
 
-      // Verify format: noteId:sectionId:type:normalizedTitle
-      const parts = suggestion.suggestionKey.split(':');
-      expect(parts.length).toBe(4);
-      expect(parts[0]).toBe(suggestion.note_id);
-      expect(parts[1]).toBe(suggestion.section_id);
-      expect(parts[2]).toBe(suggestion.type);
-      // parts[3] is normalized title - just verify it exists
-      expect(parts[3].length).toBeGreaterThan(0);
+      // New format is a hash, not colon-separated
+      // Should not contain the raw noteId or title
+      expect(suggestion.suggestionKey).not.toContain(suggestion.note_id);
+      expect(suggestion.suggestionKey).not.toContain(suggestion.title);
     }
   });
 
@@ -61,15 +57,9 @@ describe('suggestionKey integration', () => {
       const key1 = result1.suggestions[0].suggestionKey;
       const key2 = result2.suggestions[0].suggestionKey;
 
-      // Compare components
-      const parts1 = key1.split(':');
-      const parts2 = key2.split(':');
-
-      // Note and section should match (we used same note_id)
-      expect(parts1[0]).toBe(parts2[0]);
-
-      // Normalized titles should be identical despite different formatting
-      expect(parts1[3]).toBe(parts2[3]);
+      // Since the titles normalize to the same value and it's the same note/section,
+      // the SHA1 hash should be identical
+      expect(key1).toBe(key2);
     }
   });
 
