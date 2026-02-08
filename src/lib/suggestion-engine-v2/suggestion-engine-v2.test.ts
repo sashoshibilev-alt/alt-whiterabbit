@@ -3541,6 +3541,60 @@ Maybe we need to rethink the pricing model.
     });
   });
 
+  describe('Timeline vs calendar out-of-scope distinction', () => {
+    it('timeline references (Q3, quarter, sprints) should NOT trip out-of-scope', () => {
+      const note: NoteInput = {
+        note_id: 'test-timeline-reference',
+        raw_markdown: `## Roadmap Adjustments
+
+Push to early Q3. Delay by ~2 sprints to give team more runway.
+
+Reassess during next quarterly planning. Consider revisiting in Q4 if resources allow.
+`,
+      };
+
+      const { sections } = preprocessNote(note);
+      const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+      expect(classified.length).toBeGreaterThan(0);
+      const section = classified[0];
+
+      // Should have low calendar out-of-scope signal (no weekdays, no "schedule meeting")
+      // Timeline words (Q3, Q4, quarterly, sprints) are NOT calendar markers
+      expect(section.intent.calendar).toBeLessThan(0.4);
+
+      // Should remain eligible for suggestions (assuming actionable content present)
+      // The section contains change operators ("Push", "Delay", "Reassess") which should
+      // make it actionable
+      expect(section.is_actionable).toBe(true);
+      expect(section.actionable_signal).toBeGreaterThanOrEqual(0.5);
+    });
+
+    it('true calendar scheduling (meeting, weekday) should trip out-of-scope', () => {
+      const note: NoteInput = {
+        note_id: 'test-calendar-scheduling',
+        raw_markdown: `## Meeting Coordination
+
+The team sync is next Thursday. Everyone should attend. We'll discuss Q1 results.
+`,
+      };
+
+      const { sections } = preprocessNote(note);
+      const classified = classifySections(sections, DEFAULT_THRESHOLDS);
+
+      expect(classified.length).toBeGreaterThan(0);
+      const section = classified[0];
+
+      // Should have high calendar out-of-scope signal (weekday "thursday")
+      // Note: "Q1" is no longer a calendar marker (it's a timeline reference)
+      expect(section.intent.calendar).toBeGreaterThanOrEqual(0.6);
+
+      // Section lacks strong actionable signal (no imperatives, change operators, etc.)
+      // and calendar marker should keep it out-of-scope
+      expect(section.is_actionable).toBe(false);
+    });
+  });
+
   describe('Hedged directive actionability in section body', () => {
     it('detects "we should probably" in body as actionable new_workstream', () => {
       const note: NoteInput = {
@@ -4170,6 +4224,75 @@ Design to create mockups for new onboarding flow.
         // Title should use "Action items:" template
         expect(roleAssignmentSugg.title).toMatch(/^Action items:/);
         expect(roleAssignmentSugg.type).toBe('project_update');
+      }
+    });
+
+    it('meeting notes with Decision and Next Steps are classified as plan_change/project_update', () => {
+      const note: NoteInput = {
+        note_id: 'test-decision-meeting-note',
+        raw_markdown: `# Weekly Planning Meeting
+
+## Decision
+
+Feature request will be logged in the backlog. No near-term resourcing; revisit during next planning cycle.
+
+## Next Steps
+
+- PM to document backlog item with detailed requirements
+- CS to manage customer expectations and communicate timeline
+- Eng to assess technical complexity when bandwidth permits
+`,
+      };
+
+      const result = generateSuggestionsWithDebug(note, {}, { enable_debug: true }, { verbosity: 'REDACTED' });
+
+      expect(result.debugRun).toBeDefined();
+      const sections = result.debugRun!.sections;
+
+      // Find Decision section
+      const decisionSection = sections.find(s =>
+        s.headingTextPreview.includes('Decision')
+      );
+
+      expect(decisionSection).toBeDefined();
+      if (decisionSection) {
+        // Should be classified as plan_change (update/planning family)
+        expect(decisionSection.intentClassification.topLabel).toBe('plan_change');
+        expect(decisionSection.decisions.typeLabel).toBe('project_update');
+
+        // Should not be dropped at ACTIONABILITY
+        expect(decisionSection.decisions.isActionable).toBe(true);
+        expect(decisionSection.dropStage).not.toBe('ACTIONABILITY');
+
+        // Should have decision marker flag
+        expect(decisionSection.intentClassification.flags?.forceDecisionMarker).toBe(true);
+      }
+
+      // Find Next Steps section
+      const nextStepsSection = sections.find(s =>
+        s.headingTextPreview.includes('Next Steps')
+      );
+
+      expect(nextStepsSection).toBeDefined();
+      if (nextStepsSection) {
+        // Should be classified as plan_change (update/planning family)
+        expect(nextStepsSection.intentClassification.topLabel).toBe('plan_change');
+        expect(nextStepsSection.decisions.typeLabel).toBe('project_update');
+
+        // Should not be dropped at ACTIONABILITY
+        expect(nextStepsSection.decisions.isActionable).toBe(true);
+        expect(nextStepsSection.dropStage).not.toBe('ACTIONABILITY');
+
+        // Should have role assignment flag
+        expect(nextStepsSection.intentClassification.flags?.forceRoleAssignment).toBe(true);
+      }
+
+      // At least one section should emit a suggestion (either Decision or Next Steps)
+      expect(result.suggestions.length).toBeGreaterThanOrEqual(1);
+
+      // If suggestions were emitted, they should be project_update type
+      for (const suggestion of result.suggestions) {
+        expect(suggestion.type).toBe('project_update');
       }
     });
   });

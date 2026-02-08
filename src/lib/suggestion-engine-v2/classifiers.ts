@@ -428,6 +428,13 @@ const V3_NEGATION_PATTERNS = [
 
 /**
  * V3 Calendar markers for out-of-scope detection
+ *
+ * IMPORTANT: Only includes true scheduling markers (weekdays, explicit date phrases).
+ * Timeline references (q1-q4, quarter, month names) are NOT included here because
+ * they typically indicate project timelines, not calendar scheduling tasks.
+ *
+ * Example timeline (NOT calendar): "Push to Q3", "Reassess next quarter"
+ * Example calendar (IS out-of-scope): "Schedule meeting next Thursday"
  */
 const V3_CALENDAR_MARKERS = [
   'monday',
@@ -440,23 +447,6 @@ const V3_CALENDAR_MARKERS = [
   'next week',
   'this week',
   'next month',
-  'q1',
-  'q2',
-  'q3',
-  'q4',
-  'quarter',
-  'january',
-  'february',
-  'march',
-  'april',
-  'may',
-  'june',
-  'july',
-  'august',
-  'september',
-  'october',
-  'november',
-  'december',
 ];
 
 /**
@@ -1094,9 +1084,10 @@ export function classifyIntent(section: Section): IntentClassification {
   }
 
   // Map actionableSignal to plan_change/new_workstream distribution
-  // Heuristic: if section has change operators or structured tasks → plan_change dominant
+  // Heuristic: if section has change operators, structured tasks, decision markers,
+  // or role assignments → plan_change dominant (planning/update family)
   // Otherwise → new_workstream dominant
-  const isPlanChangeDominant = hasChangeOperators || hasStructuredTasks;
+  const isPlanChangeDominant = hasChangeOperators || hasStructuredTasks || hasDecisionMarker || hasRoleAssignment;
 
   let plan_change: number;
   let new_workstream: number;
