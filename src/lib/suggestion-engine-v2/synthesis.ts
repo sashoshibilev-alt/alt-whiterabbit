@@ -17,6 +17,7 @@ import type {
 } from './types';
 import { normalizeForComparison } from './preprocessing';
 import { computeSuggestionKey } from '../suggestion-keys';
+import { PROPOSAL_VERBS_IDEA_ONLY } from './classifiers';
 
 // ============================================
 // ID Generation
@@ -363,46 +364,125 @@ function isImperativeSentence(sentence: string): boolean {
 }
 
 /**
+ * Normalize text for proposal detection (lowercase, strip list markers)
+ * Uses same preprocessing as classifiers for consistency
+ */
+function normalizeForProposal(text: string): string {
+  let processed = text.toLowerCase().trim();
+
+  // Strip list markers at start of line
+  processed = processed
+    .replace(/^\s*[-*+•]\s+/, '')      // bullet markers
+    .replace(/^\s*\d+[.)]\s+/, '');    // numbered list markers
+
+  // Collapse whitespace
+  return processed.replace(/\s+/g, ' ');
+}
+
+/**
+ * Check if a line is a proposal line (for idea synthesis only)
+ * A proposal line either:
+ * 1. Starts with a proposal verb (e.g., "Reduce required steps...")
+ * 2. Contains "by <verb+ing>" pattern (e.g., "improve UX by merging screens")
+ */
+function isProposalLine(line: string): boolean {
+  const normalized = normalizeForProposal(line);
+
+  // Check if line starts with a proposal verb
+  for (const verb of PROPOSAL_VERBS_IDEA_ONLY) {
+    const regex = new RegExp(`^${verb}\\b`, 'i');
+    if (regex.test(normalized)) {
+      return true;
+    }
+  }
+
+  // Check for "by <verb+ing>" pattern
+  // Common patterns: "by merging", "by reducing", "by consolidating"
+  const byVerbIngPattern = /\bby\s+(\w+ing)\b/i;
+  const match = normalized.match(byVerbIngPattern);
+  if (match) {
+    // Extract the base verb from the gerund (e.g., "merging" -> "merge")
+    const gerund = match[1].toLowerCase();
+    for (const verb of PROPOSAL_VERBS_IDEA_ONLY) {
+      // Check if gerund starts with the verb stem (handles "reducing" -> "reduce")
+      if (gerund.startsWith(verb)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
  * Generate standalone body for idea suggestions
  * Format: problem → proposed change → purpose (if present)
+ * Prefers proposal lines (with proposal verbs or "by <verb+ing>") when available
  */
 function generateIdeaBody(section: ClassifiedSection): string {
   const bodyText = section.raw_text;
   const parts: string[] = [];
 
-  // Extract problem statement
-  const problemPatterns = [
-    /\b(problem|issue|challenge|pain\s+point)\s*(?::|is|involves?)\s*([^.!?\n]{10,150})/i,
-    /\b(currently|today|right\s+now)\s+([^.!?\n]{10,150})/i,
-  ];
+  // PROPOSAL-FIRST HEURISTIC: Check for proposal lines first
+  const lines = bodyText.split(/[.!?\n]+/).map(s => s.trim()).filter(s => s.length > 10);
+  const proposalLines = lines.filter(isProposalLine);
 
-  for (const pattern of problemPatterns) {
-    const match = bodyText.match(pattern);
-    if (match && match[2]) {
-      parts.push(capitalizeFirst(match[2].trim()));
-      break;
-    }
-  }
+  if (proposalLines.length > 0) {
+    // Found proposal line(s) - use the first one as primary
+    parts.push(capitalizeFirst(proposalLines[0]));
 
-  // Extract proposed change/solution
-  // Include common imperative verbs that introduce actions
-  const solutionPatterns = [
-    /\b(add|remove|update|change|introduce|show|hide|rename|move|split|merge|track|instrument|alert|surface|display|log|notify|create|implement|fix|launch|build|develop)\s+(?:a\s+|an\s+|the\s+)?([^.!?\n]{10,150})/i,
-    /\b(solution|approach|idea)\s*(?::|is|would\s+be)\s*([^.!?\n]{10,150})/i,
-  ];
-
-  for (const pattern of solutionPatterns) {
-    const match = bodyText.match(pattern);
-    if (match && match[2]) {
-      const verb = match[1].toLowerCase();
-      const solution = match[2].trim();
-      // For imperative verbs (launch, build, create, etc.), include the verb
-      if (IMPERATIVE_VERBS.includes(verb)) {
-        parts.push(capitalizeFirst(verb + ' ' + solution));
-      } else {
-        parts.push(capitalizeFirst(solution));
+    // If we have multiple proposal lines, include a second one if space allows
+    if (proposalLines.length > 1) {
+      parts.push(capitalizeFirst(proposalLines[1]));
+    } else {
+      // Look for problem/context statement to pair with the proposal
+      const nonProposalLines = lines.filter(l => !isProposalLine(l) && l.length > 20);
+      if (nonProposalLines.length > 0) {
+        // Add problem context if the proposal line doesn't already include it
+        const firstProposal = proposalLines[0].toLowerCase();
+        const firstContext = nonProposalLines[0].toLowerCase();
+        if (!firstProposal.includes(firstContext.substring(0, 30))) {
+          parts.push(capitalizeFirst(nonProposalLines[0]));
+        }
       }
-      break;
+    }
+  } else {
+    // No proposal lines found - fall back to existing pattern-based extraction
+
+    // Extract problem statement
+    const problemPatterns = [
+      /\b(problem|issue|challenge|pain\s+point)\s*(?::|is|involves?)\s*([^.!?\n]{10,150})/i,
+      /\b(currently|today|right\s+now)\s+([^.!?\n]{10,150})/i,
+    ];
+
+    for (const pattern of problemPatterns) {
+      const match = bodyText.match(pattern);
+      if (match && match[2]) {
+        parts.push(capitalizeFirst(match[2].trim()));
+        break;
+      }
+    }
+
+    // Extract proposed change/solution
+    // Include common imperative verbs that introduce actions
+    const solutionPatterns = [
+      /\b(add|remove|update|change|introduce|show|hide|rename|move|split|merge|track|instrument|alert|surface|display|log|notify|create|implement|fix|launch|build|develop)\s+(?:a\s+|an\s+|the\s+)?([^.!?\n]{10,150})/i,
+      /\b(solution|approach|idea)\s*(?::|is|would\s+be)\s*([^.!?\n]{10,150})/i,
+    ];
+
+    for (const pattern of solutionPatterns) {
+      const match = bodyText.match(pattern);
+      if (match && match[2]) {
+        const verb = match[1].toLowerCase();
+        const solution = match[2].trim();
+        // For imperative verbs (launch, build, create, etc.), include the verb
+        if (IMPERATIVE_VERBS.includes(verb)) {
+          parts.push(capitalizeFirst(verb + ' ' + solution));
+        } else {
+          parts.push(capitalizeFirst(solution));
+        }
+        break;
+      }
     }
   }
 
@@ -547,6 +627,72 @@ function generateProjectUpdateBody(section: ClassifiedSection): string {
 }
 
 /**
+ * Role assignment patterns for body extraction
+ * Matches "ROLE to VERB" task assignment lines
+ */
+const ROLE_ASSIGNMENT_PATTERNS = [
+  /\bpm to\b/i,
+  /\bcs to\b/i,
+  /\beng to\b/i,
+  /\bdesign(?:er)? to\b/i,
+  /\bproject manager to\b/i,
+  /\bproduct manager to\b/i,
+  /\bengineering to\b/i,
+  /\bcustomer success to\b/i,
+];
+
+/**
+ * Check if a line contains a role assignment pattern
+ */
+function isRoleAssignmentLine(text: string): boolean {
+  const normalized = normalizeForComparison(text);
+  return ROLE_ASSIGNMENT_PATTERNS.some(pattern => pattern.test(normalized));
+}
+
+/**
+ * Generate body for role assignment sections
+ * Extracts top 2-3 task assignment lines (e.g., "PM to document...", "CS to manage...")
+ */
+function generateRoleAssignmentBody(section: ClassifiedSection): string {
+  const bodyText = section.raw_text;
+  const lines = bodyText.split(/[\n]/).map(l => l.trim()).filter(l => l.length > 10);
+
+  // Find lines with role assignments
+  const roleAssignmentLines: string[] = [];
+  for (const line of lines) {
+    // Strip bullet markers if present
+    const cleanLine = line.replace(/^[-*•]\s+/, '').trim();
+    if (isRoleAssignmentLine(cleanLine)) {
+      roleAssignmentLines.push(cleanLine);
+    }
+  }
+
+  // Take top 2-3 role assignment lines
+  const selectedLines = roleAssignmentLines.slice(0, 3);
+
+  if (selectedLines.length === 0) {
+    // Fallback: shouldn't happen since flag was set, but handle gracefully
+    // Extract first meaningful sentences
+    const sentences = bodyText
+      .split(/[.!?]+/)
+      .map(s => s.trim())
+      .filter(s => s.length > 20 && s.length < 200);
+    return sentences.slice(0, 2).join('. ').trim() + '.' || 'Action items defined.';
+  }
+
+  // Build body from selected lines
+  let body = selectedLines.map(line => capitalizeFirst(line)).join('. ').trim();
+  if (!body.endsWith('.')) body += '.';
+
+  // Truncate if needed
+  if (body.length > 300) {
+    body = body.substring(0, 297) + '...';
+  }
+
+  return body;
+}
+
+/**
  * Extract evidence previews from evidence spans
  * Returns 1-2 short quotes (max 150 chars each)
  * Prioritizes imperative sentences when present
@@ -601,6 +747,7 @@ function extractEvidencePreviews(evidenceSpans: EvidenceSpan[]): string[] | unde
 
 /**
  * Extract evidence spans from section
+ * For idea type: prioritizes proposal lines over complaint/problem lines
  */
 function extractEvidenceSpans(
   section: ClassifiedSection,
@@ -612,18 +759,58 @@ function extractEvidenceSpans(
   // Find most relevant lines based on type
   const relevantLines: Line[] = [];
 
-  // Prioritize list items as they often contain key decisions
-  const listItems = bodyLines.filter((l) => l.line_type === 'list_item');
-  if (listItems.length > 0) {
-    relevantLines.push(...listItems.slice(0, 3));
-  }
-
-  // Add non-blank paragraph lines if needed
-  if (relevantLines.length < 2) {
-    const paragraphLines = bodyLines.filter(
-      (l) => l.line_type === 'paragraph' && l.text.trim().length > 20
+  // PROPOSAL-FIRST HEURISTIC: For idea type, prefer proposal lines
+  if (type === 'idea') {
+    // Find lines that are proposals
+    const proposalLineObjs = bodyLines.filter((l) =>
+      l.text.trim().length > 10 && isProposalLine(l.text)
     );
-    relevantLines.push(...paragraphLines.slice(0, 3 - relevantLines.length));
+
+    if (proposalLineObjs.length > 0) {
+      // Found proposal lines - use them as primary evidence
+      relevantLines.push(...proposalLineObjs.slice(0, 2));
+
+      // Add context lines (non-proposal) if we have room and they add value
+      if (relevantLines.length < 2) {
+        const contextLines = bodyLines.filter(
+          (l) => l.text.trim().length > 20 && !isProposalLine(l.text)
+        );
+        relevantLines.push(...contextLines.slice(0, 2 - relevantLines.length));
+      }
+
+      // Skip to span grouping
+      // (fall through to span creation logic below)
+    } else {
+      // No proposal lines found - fall back to default logic
+      // Prioritize list items as they often contain key decisions
+      const listItems = bodyLines.filter((l) => l.line_type === 'list_item');
+      if (listItems.length > 0) {
+        relevantLines.push(...listItems.slice(0, 3));
+      }
+
+      // Add non-blank paragraph lines if needed
+      if (relevantLines.length < 2) {
+        const paragraphLines = bodyLines.filter(
+          (l) => l.line_type === 'paragraph' && l.text.trim().length > 20
+        );
+        relevantLines.push(...paragraphLines.slice(0, 3 - relevantLines.length));
+      }
+    }
+  } else {
+    // Non-idea types use existing logic
+    // Prioritize list items as they often contain key decisions
+    const listItems = bodyLines.filter((l) => l.line_type === 'list_item');
+    if (listItems.length > 0) {
+      relevantLines.push(...listItems.slice(0, 3));
+    }
+
+    // Add non-blank paragraph lines if needed
+    if (relevantLines.length < 2) {
+      const paragraphLines = bodyLines.filter(
+        (l) => l.line_type === 'paragraph' && l.text.trim().length > 20
+      );
+      relevantLines.push(...paragraphLines.slice(0, 3 - relevantLines.length));
+    }
   }
 
   // Sort by line index
@@ -727,9 +914,15 @@ export function synthesizeSuggestion(section: ClassifiedSection): Suggestion | n
   };
 
   // Generate standalone context (additive)
-  const body = type === 'project_update'
-    ? generateProjectUpdateBody(section)
-    : generateIdeaBody(section);
+  let body: string;
+  if (section.intent.flags?.forceRoleAssignment) {
+    // Role assignment sections use action items style body
+    body = generateRoleAssignmentBody(section);
+  } else if (type === 'project_update') {
+    body = generateProjectUpdateBody(section);
+  } else {
+    body = generateIdeaBody(section);
+  }
 
   const suggestionContext: SuggestionContext = {
     title,

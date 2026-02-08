@@ -284,6 +284,23 @@ const V3_ACTION_VERBS = [
 ];
 
 /**
+ * Proposal verbs for idea synthesis (used only in synthesis, not for actionability)
+ * These verbs signal solution-oriented language that should be preferred when
+ * generating idea suggestion bodies and evidence spans.
+ */
+export const PROPOSAL_VERBS_IDEA_ONLY = [
+  'reduce',
+  'merge',
+  'streamline',
+  'simplify',
+  'remove',
+  'eliminate',
+  'consolidate',
+  'log',
+  'cut',
+];
+
+/**
  * V3 Change operators for plan mutation detection
  * Extended from spec to include commonly-used change language from existing patterns
  * Includes verb forms: base, gerund (-ing), past tense (-ed)
@@ -564,12 +581,25 @@ function normalizeSmartQuotes(text: string): string {
 
 /**
  * Preprocess a line for v3 matching (lowercase, trim, collapse whitespace, normalize quotes)
+ *
+ * CRITICAL: Strips list markers (bullets, numbered) BEFORE other processing to ensure
+ * imperative verbs at list start are detected correctly.
  */
 function preprocessLine(lineText: string): string {
-  return normalizeSmartQuotes(lineText)
+  let processed = normalizeSmartQuotes(lineText)
     .toLowerCase()
-    .trim()
-    .replace(/\s+/g, ' ');
+    .trim();
+
+  // Strip list markers at start of line:
+  // - Bullets: ^\s*[-*+•]\s+
+  // - Numbered: ^\s*\d+[.)]\s+
+  // This allows "• Add feature" to match imperative-at-start detection
+  processed = processed
+    .replace(/^\s*[-*+•]\s+/, '')      // bullet markers
+    .replace(/^\s*\d+[.)]\s+/, '');    // numbered list markers
+
+  // Collapse whitespace
+  return processed.replace(/\s+/g, ' ');
 }
 
 /**
