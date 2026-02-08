@@ -1,5 +1,84 @@
 # Current State
 
+## Timeline vs Calendar Out-of-Scope Distinction (2026-02-08)
+
+**Files**: `classifiers.ts`, `suggestion-engine-v2.test.ts`
+
+Removed timeline-only tokens from calendar out-of-scope markers to prevent false out-of-scope drops when PM notes reference project timelines rather than scheduling tasks.
+
+**Problem**: Sections mentioning "Q3", "next quarter", "end-of-quarter", "annual" were being dropped due to high calendar out-of-scope signal, even though these are timeline references describing when work should happen, not calendar scheduling tasks like "Schedule meeting next Thursday".
+
+**Root Cause**: V3_CALENDAR_MARKERS (lines 432-460) included timeline-only tokens:
+- Quarters: q1, q2, q3, q4, quarter
+- Months: january, february, march, april, may, june, july, august, september, october, november, december
+
+These triggered calendar out-of-scope signal at +0.6, causing sections with timeline language to be filtered out even when they contained actionable plan changes.
+
+**Change**: Removed timeline tokens from V3_CALENDAR_MARKERS, keeping only true scheduling markers:
+- **Kept**: weekdays (monday-sunday), "next week", "this week", "next month"
+- **Removed**: q1, q2, q3, q4, quarter, all month names
+
+**Behavior Change**:
+- Timeline references like "Push to Q3", "Reassess next quarter", "Delay by 2 sprints" no longer trigger calendar out-of-scope
+- True calendar scheduling like "Schedule meeting next Thursday" still triggers calendar out-of-scope at +0.6
+- No threshold changes, no dominance logic changes
+- Out-of-scope override (clamp to ≤0.3 when actionable signal ≥0.8) still works as before
+
+**Tests**: Added 2 regression tests in "Timeline vs calendar out-of-scope distinction" describe block:
+1. Timeline references (Q3, quarter, sprints) should NOT trip out-of-scope
+2. True calendar scheduling (meeting, weekday) should trip out-of-scope
+
+**Minimal Diff**: Modified only V3_CALENDAR_MARKERS array (removed 17 timeline tokens). No new patterns, no threshold changes, no new labels.
+
+---
+
+## Decision Marker and Role Assignment Intent Distribution (2026-02-08)
+
+**Files**: `classifiers.ts`, `suggestion-engine-v2.test.ts`
+
+Extended the intent score distribution logic to classify sections with decision markers or role assignments as plan_change (update/planning family) rather than new_workstream.
+
+**Problem**: Meeting notes with "Decision" sections and "Next Steps" sections were being classified as `new_workstream` (and sometimes `status_informational`) even though they represent actionable updates to existing plans. This caused:
+- Incorrect intent labels in debug JSON (new_workstream instead of plan_change)
+- Incorrect type labels (idea instead of project_update)
+- Potential downstream routing issues
+
+**Root Cause**: The distribution heuristic `isPlanChangeDominant = hasChangeOperators || hasStructuredTasks` didn't account for sections that are actionable due to decision markers (Rule 10) or role assignments (Rule 9), even though these signals indicate planning/update content.
+
+**Change**: Extended line 1099 in `classifiers.ts`:
+```typescript
+// Before:
+const isPlanChangeDominant = hasChangeOperators || hasStructuredTasks;
+
+// After:
+const isPlanChangeDominant = hasChangeOperators || hasStructuredTasks || hasDecisionMarker || hasRoleAssignment;
+```
+
+**Behavior Change**:
+- Decision sections (e.g., "Feature request will be logged in backlog. No near-term resourcing; revisit during next planning cycle.") now receive:
+  - `intentLabel = plan_change` (was: new_workstream or status_informational)
+  - `typeLabel = project_update` (was: idea or non_actionable)
+  - `plan_change` signal gets full `maxActionableScore`
+  - `new_workstream` gets partial signal (0.4 × maxActionableScore)
+
+- Next Steps sections with role assignments (e.g., "PM to document... CS to manage...") now receive:
+  - `intentLabel = plan_change` (was: new_workstream or status_informational)
+  - `typeLabel = project_update` (was: idea)
+  - Distribution same as decision markers
+
+**Implementation**: No new keywords added. Reuses existing signals:
+- `hasDecisionMarker` flag (set when Rule 10 fires, lines 988-990)
+- `hasRoleAssignment` flag (set when Rule 9 fires, lines 983-985)
+
+**Tests**: Added regression test "meeting notes with Decision and Next Steps are classified as plan_change/project_update" covering:
+- Decision section: intentLabel=plan_change, typeLabel=project_update, not dropped at ACTIONABILITY
+- Next Steps section: intentLabel=plan_change, typeLabel=project_update, not dropped at ACTIONABILITY
+- Suggestions emitted with type=project_update
+
+**Minimal Diff**: Change touches only the distribution condition (1 line modified). No new patterns, thresholds, or gates added.
+
+---
+
 ## Intent Scoring Contract Restoration (2026-02-07)
 
 **Files**: `types.ts`, `classifiers.ts`, `debugTypes.ts`, `DebugLedger.ts`, `synthesis.ts`, `suggestion-engine-v2.test.ts`
