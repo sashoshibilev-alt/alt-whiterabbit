@@ -225,4 +225,101 @@ describe('Actionability-Emitted Invariant', () => {
       expect(suggestion.suggestion!.body).toBeDefined();
     }
   });
+
+  it('should emit idea suggestion for implicit feature request with pain + product context', () => {
+    // Test the high-precision implicit feature request rule:
+    // Pain signal ("dissatisfied", "too many clicks") + product context ("workflow", "usability")
+    // should trigger actionable idea suggestion, even without explicit imperative
+    const implicitFeatureRequestNote: NoteInput = {
+      note_id: 'implicit-feature-request',
+      raw_markdown: `# Customer Feedback
+• CS shared that an enterprise customer is dissatisfied with the number of clicks required for employees to complete annual attestations.
+• Issue is impacting usability and customer satisfaction.`,
+    };
+
+    const result = generateSuggestionsWithDebug(
+      implicitFeatureRequestNote,
+      undefined,
+      {
+        enable_debug: true,
+        thresholds: DEFAULT_THRESHOLDS,
+      },
+      { verbosity: 'REDACTED' }
+    );
+
+    expect(result.debugRun).toBeDefined();
+    const debugRun = result.debugRun!;
+
+    // Find the Customer Feedback section
+    expect(debugRun.sections.length).toBeGreaterThanOrEqual(1);
+    const section = debugRun.sections.find(s =>
+      s.heading?.toLowerCase().includes('customer feedback')
+    ) || debugRun.sections[0];
+
+    // Section must be actionable
+    expect(section.decisions.isActionable).toBe(true);
+
+    // Section must have intentLabel = new_workstream
+    expect(section.decisions.intentLabel).toBe('new_workstream');
+
+    // Section must have typeLabel = idea
+    expect(section.decisions.typeLabel).toBe('idea');
+
+    // Section must be emitted
+    expect(section.emitted).toBe(true);
+
+    // Must have at least one emitted candidate
+    const emittedCandidates = section.candidates.filter(c => c.emitted);
+    expect(emittedCandidates.length).toBeGreaterThanOrEqual(1);
+
+    // Emitted candidate must have suggestion context
+    const candidate = emittedCandidates[0];
+    expect(candidate.suggestion).toBeDefined();
+    expect(candidate.suggestion!.title).toBeDefined();
+    expect(candidate.suggestion!.body).toBeDefined();
+
+    // Evidence should include the complaint line(s), not the heading
+    expect(candidate.suggestion!.evidencePreview).toBeDefined();
+    const evidenceText = candidate.suggestion!.evidencePreview?.join(' ').toLowerCase() || '';
+    expect(evidenceText).toContain('dissatisfied');
+    expect(evidenceText).not.toContain('customer feedback');
+
+    // Final result must include at least one idea suggestion
+    expect(result.suggestions.length).toBeGreaterThanOrEqual(1);
+    const ideaSuggestions = result.suggestions.filter(s => s.type === 'idea');
+    expect(ideaSuggestions.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('should NOT emit suggestion for generic status line without pain or impact', () => {
+    // Negative test: generic status update without pain/friction or product context
+    // should NOT trigger implicit feature request rule
+    const genericStatusNote: NoteInput = {
+      note_id: 'generic-status',
+      raw_markdown: `# Status Update
+The team met with the customer last week to discuss the roadmap.`,
+    };
+
+    const result = generateSuggestionsWithDebug(
+      genericStatusNote,
+      undefined,
+      {
+        enable_debug: true,
+        thresholds: DEFAULT_THRESHOLDS,
+      },
+      { verbosity: 'REDACTED' }
+    );
+
+    expect(result.debugRun).toBeDefined();
+    const debugRun = result.debugRun!;
+
+    // Section should NOT be actionable (no pain signal, no product context)
+    if (debugRun.sections.length > 0) {
+      const section = debugRun.sections[0];
+      expect(section.decisions.isActionable).toBe(false);
+      expect(section.emitted).toBe(false);
+    }
+
+    // No suggestions should be emitted
+    expect(result.suggestions.length).toBe(0);
+  });
 });
