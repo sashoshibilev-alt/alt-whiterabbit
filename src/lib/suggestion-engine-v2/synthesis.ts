@@ -134,13 +134,100 @@ function generateProjectUpdateTitle(section: ClassifiedSection): string {
 }
 
 /**
+ * Truncate title to max length safely (avoid cutting mid-word)
+ */
+function truncateTitle(title: string, maxLength: number): string {
+  if (title.length <= maxLength) {
+    return title;
+  }
+
+  // Find last space before maxLength
+  const truncated = title.substring(0, maxLength);
+  const lastSpace = truncated.lastIndexOf(' ');
+
+  if (lastSpace > maxLength * 0.6) {
+    // If we have a reasonable break point, use it
+    return truncated.substring(0, lastSpace).trim();
+  }
+
+  // Otherwise, hard truncate
+  return truncated.trim();
+}
+
+/**
+ * Generate title from proposal line
+ * Strips list markers, capitalizes, truncates to 80 chars
+ */
+function generateTitleFromProposal(proposalLine: string): string {
+  // Strip list markers using existing helper
+  let title = normalizeForProposal(proposalLine);
+
+  // Capitalize first letter
+  title = capitalizeFirst(title);
+
+  // Truncate if needed
+  if (title.length > 80) {
+    title = truncateTitle(title, 80);
+  }
+
+  return title;
+}
+
+/**
+ * Generate title from friction complaint
+ * Creates solution-shaped title (e.g., "Reduce clicks to complete annual attestations")
+ */
+function generateTitleFromFriction(frictionType: string, target: string): string {
+  let title: string;
+  const normalizedTarget = target.trim();
+
+  if (frictionType === 'clicks') {
+    title = `Reduce clicks to ${normalizedTarget.toLowerCase()}`;
+  } else if (frictionType === 'steps') {
+    title = `Reduce steps to ${normalizedTarget.toLowerCase()}`;
+  } else {
+    title = `Streamline ${normalizedTarget.toLowerCase()}`;
+  }
+
+  // Truncate if needed
+  if (title.length > 80) {
+    title = truncateTitle(title, 80);
+  }
+
+  return title;
+}
+
+/**
  * Generate a title for an idea suggestion
+ * Priority:
+ * 1. Proposal line (if detected) → contentful title without "New idea:" prefix
+ * 2. Friction complaint (if detected) → solution-shaped title without "New idea:" prefix
+ * 3. Fallback → "New idea: <Heading>" or generic fallback
  */
 function generateIdeaTitle(section: ClassifiedSection): string {
   const headingText = section.heading_text || '';
   const bodyText = section.raw_text;
 
-  // Try to use heading if it names a workstream
+  // PROPOSAL-FIRST: Check for proposal lines
+  const lines = bodyText.split(/[.!?\n]+/).map(s => s.trim()).filter(s => s.length > 10);
+  const proposalLines = lines.filter(isProposalLine);
+
+  if (proposalLines.length > 0) {
+    // Generate title from first proposal line
+    return generateTitleFromProposal(proposalLines[0]);
+  }
+
+  // FRICTION HEURISTIC: Check for friction complaint
+  const frictionComplaint = detectFrictionComplaint(bodyText);
+  if (frictionComplaint) {
+    // Generate solution-shaped title from friction complaint
+    return generateTitleFromFriction(
+      frictionComplaint.frictionType,
+      frictionComplaint.target
+    );
+  }
+
+  // FALLBACK: Try to use heading if it names a workstream
   if (headingText && headingText.length > 3 && headingText.length < 60) {
     const normalized = headingText.toLowerCase();
     if (!isGenericHeading(normalized)) {
@@ -532,16 +619,33 @@ function generateIdeaBody(section: ClassifiedSection): string {
       );
       parts.push(solutionBody);
 
-      // Add problem context if available
-      const nonProposalLines = lines.filter(l => l.length > 20);
-      if (nonProposalLines.length > 0) {
+      // Optionally add problem context if available (stripped of bullet markers)
+      const contextLines = lines
+        .map(l => normalizeForProposal(l)) // Strip bullet markers
+        .filter(l => l.length > 20);
+
+      if (contextLines.length > 0 && parts.length < 2) {
         // Add first contextual line that's not just repeating the solution
-        const firstContext = nonProposalLines[0];
+        const firstContext = contextLines[0];
         if (!firstContext.toLowerCase().startsWith('reduce') &&
             !firstContext.toLowerCase().startsWith('streamline')) {
           parts.push(capitalizeFirst(firstContext));
         }
       }
+
+      // EARLY RETURN: friction path is complete, skip all fallback extraction
+      // Build body and return directly
+      let body = parts.join('. ').trim();
+      // Clean up any double punctuation that might have been introduced
+      body = body.replace(/\.\s*\./g, '.').replace(/\s+\./g, '.');
+      if (!body.endsWith('.')) body += '.';
+
+      // Truncate if needed
+      if (body.length > 300) {
+        body = body.substring(0, 297) + '...';
+      }
+
+      return body || 'New initiative proposed in section.';
     } else {
       // No proposal lines or friction complaint - fall back to existing pattern-based extraction
 
@@ -583,7 +687,7 @@ function generateIdeaBody(section: ClassifiedSection): string {
     }
   }
 
-  // Extract purpose/goal if present
+  // Extract purpose/goal if present (only for non-friction paths)
   const purposePatterns = [
     /\b(goal|purpose|objective|to)\s+(?:is\s+)?(?:to\s+)?([^.!?\n]{10,100})/i,
     /\b(enable|allow|help)\s+(?:us\s+to\s+)?([^.!?\n]{10,100})/i,
@@ -637,6 +741,8 @@ function generateIdeaBody(section: ClassifiedSection): string {
 
   // Build body with max 300 characters
   let body = parts.join('. ').trim();
+  // Clean up any double punctuation (in case parts already had trailing periods)
+  body = body.replace(/\.\s*\./g, '.').replace(/\s+\./g, '.');
   if (!body.endsWith('.')) body += '.';
 
   // Truncate if needed
