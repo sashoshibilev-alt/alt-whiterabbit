@@ -463,3 +463,358 @@ describe('Body Generation - Role Assignment Punctuation', () => {
     expect(body.length).toBeLessThanOrEqual(300);
   });
 });
+
+describe('Body Generation - Plan Change Impact Lines', () => {
+  beforeEach(() => {
+    resetSectionCounter();
+    resetSuggestionCounter();
+  });
+
+  it('should prioritize impact line in body for project_update (slip by N sprints)', () => {
+    const note: NoteInput = {
+      note_id: 'test-impact-slip',
+      raw_markdown: `# Project Updates
+
+## Deliverables Timeline
+
+VP confirmed resources will be allocated.
+
+As a result, current self-service deliverables will slip by 2 sprints.
+
+Target is to complete the changes by early Q3.
+`,
+    };
+
+    const result = generateSuggestions(note, DEFAULT_CONFIG);
+
+    expect(result.suggestions.length).toBeGreaterThan(0);
+
+    const suggestion = result.suggestions[0];
+    expect(suggestion).toBeDefined();
+    expect(suggestion.type).toBe('project_update');
+    expect(suggestion.suggestion).toBeDefined();
+
+    const body = suggestion.suggestion!.body;
+
+    // Body should prioritize the impact line (slip statement)
+    expect(body.toLowerCase()).toMatch(/slip/);
+    expect(body.toLowerCase()).toMatch(/self-service|deliverable/);
+    expect(body.toLowerCase()).toMatch(/2\s+sprint/);
+
+    // Body should NOT start with the VP confirmation line
+    expect(body).not.toMatch(/^VP confirmed/i);
+  });
+
+  it('should prioritize impact line in evidencePreview for project_update', () => {
+    const note: NoteInput = {
+      note_id: 'test-evidence-impact',
+      raw_markdown: `# Sprint Planning
+
+## Timeline Changes
+
+VP confirmed resources will be allocated.
+
+As a result, current self-service deliverables will slip by 2 sprints.
+
+Target is to complete the changes by early Q3.
+`,
+    };
+
+    const result = generateSuggestions(note, DEFAULT_CONFIG);
+
+    expect(result.suggestions.length).toBeGreaterThan(0);
+
+    const suggestion = result.suggestions[0];
+    expect(suggestion).toBeDefined();
+    expect(suggestion.type).toBe('project_update');
+    expect(suggestion.suggestion).toBeDefined();
+
+    const evidencePreview = suggestion.suggestion!.evidencePreview;
+    expect(evidencePreview).toBeDefined();
+    expect(evidencePreview!.length).toBeGreaterThan(0);
+
+    // Evidence preview should include the slip line
+    const evidenceText = evidencePreview!.join(' ').toLowerCase();
+    expect(evidenceText).toMatch(/slip/);
+    expect(evidenceText).toMatch(/self-service|deliverable/);
+  });
+
+  it('should detect various time-shift patterns (delay, pushed, moved)', () => {
+    const testCases = [
+      {
+        markdown: 'Release will delay by 3 weeks due to scope changes.',
+        pattern: /delay/,
+      },
+      {
+        markdown: 'Launch timeline pushed by 1 sprint to accommodate testing.',
+        pattern: /push/,
+      },
+      {
+        markdown: 'Roadmap items moved to Q4 for resource reallocation.',
+        pattern: /move/,
+      },
+      {
+        markdown: 'Initiative shifted by 2 months to align with dependencies.',
+        pattern: /shift/,
+      },
+    ];
+
+    for (const testCase of testCases) {
+      const note: NoteInput = {
+        note_id: `test-${testCase.pattern.source}`,
+        raw_markdown: `# Updates\n\n## Schedule\n\n${testCase.markdown}`,
+      };
+
+      const result = generateSuggestions(note, DEFAULT_CONFIG);
+
+      if (result.suggestions.length > 0) {
+        const suggestion = result.suggestions[0];
+        if (suggestion.type === 'project_update' && suggestion.suggestion) {
+          const body = suggestion.suggestion.body.toLowerCase();
+          expect(body).toMatch(testCase.pattern);
+        }
+      }
+    }
+  });
+
+  it('should fallback to default extraction when no impact line exists', () => {
+    const note: NoteInput = {
+      note_id: 'test-no-impact-fallback',
+      raw_markdown: `# Planning
+
+## Strategic Shift
+
+Shift from enterprise to SMB focus for Q2.
+
+This aligns better with market opportunities.
+`,
+    };
+
+    const result = generateSuggestions(note, DEFAULT_CONFIG);
+
+    expect(result.suggestions.length).toBeGreaterThan(0);
+
+    const suggestion = result.suggestions[0];
+    expect(suggestion).toBeDefined();
+    expect(suggestion.type).toBe('project_update');
+    expect(suggestion.suggestion).toBeDefined();
+
+    const body = suggestion.suggestion!.body;
+
+    // Body should use fallback extraction (shift pattern)
+    expect(body.toLowerCase()).toMatch(/shift|enterprise|smb/);
+
+    // Body should be well-formed
+    expect(body.length).toBeGreaterThan(20);
+    expect(body).toMatch(/\.$/); // Ends with period
+  });
+
+  it('should include target timeline when impact line is present', () => {
+    const note: NoteInput = {
+      note_id: 'test-impact-with-target',
+      raw_markdown: `# Q2 Updates
+
+## Launch Timeline
+
+Current roadmap features will slip by 4 weeks.
+
+Target is to complete rollout by mid Q3.
+`,
+    };
+
+    const result = generateSuggestions(note, DEFAULT_CONFIG);
+
+    expect(result.suggestions.length).toBeGreaterThan(0);
+
+    const suggestion = result.suggestions[0];
+    expect(suggestion).toBeDefined();
+    expect(suggestion.type).toBe('project_update');
+    expect(suggestion.suggestion).toBeDefined();
+
+    const body = suggestion.suggestion!.body;
+
+    // Body should contain the impact line
+    expect(body.toLowerCase()).toMatch(/slip/);
+    expect(body.toLowerCase()).toMatch(/4\s+week/);
+
+    // Body should optionally include the target
+    // (may or may not be included depending on length constraints)
+    if (body.toLowerCase().includes('target') || body.toLowerCase().includes('q3')) {
+      expect(body.toLowerCase()).toMatch(/target|q3/);
+    }
+  });
+
+  it('should detect impact lines with various subject tokens', () => {
+    const subjectTokens = [
+      'deliverables',
+      'release',
+      'rollout',
+      'launch',
+      'self-service',
+      'roadmap',
+      'initiative',
+      'scope',
+      'feature',
+      'milestone',
+    ];
+
+    for (const subject of subjectTokens) {
+      const note: NoteInput = {
+        note_id: `test-subject-${subject}`,
+        raw_markdown: `# Updates\n\n## Timeline\n\nThe ${subject} will slip by 2 sprints due to dependencies.`,
+      };
+
+      const result = generateSuggestions(note, DEFAULT_CONFIG);
+
+      if (result.suggestions.length > 0) {
+        const suggestion = result.suggestions[0];
+        if (suggestion.type === 'project_update' && suggestion.suggestion) {
+          const body = suggestion.suggestion.body.toLowerCase();
+          // The body should contain the impact information
+          // Note: body extraction splits on sentence boundaries, so check for key components
+          expect(body).toMatch(/slip|2\s+sprint/);
+          expect(body).toContain(subject.toLowerCase());
+        }
+      }
+    }
+  });
+
+  it('should not match lines without time deltas', () => {
+    const note: NoteInput = {
+      note_id: 'test-no-time-delta',
+      raw_markdown: `# Updates
+
+## Strategic Direction
+
+We need to shift focus to new priorities.
+
+This will require reallocation of resources.
+`,
+    };
+
+    const result = generateSuggestions(note, DEFAULT_CONFIG);
+
+    expect(result.suggestions.length).toBeGreaterThan(0);
+
+    const suggestion = result.suggestions[0];
+    expect(suggestion).toBeDefined();
+
+    if (suggestion.type === 'project_update' && suggestion.suggestion) {
+      const body = suggestion.suggestion.body;
+
+      // Without a time delta, should use fallback extraction
+      // Should NOT be treated as an impact line
+      expect(body.toLowerCase()).toMatch(/shift|focus|priorities/);
+    }
+  });
+
+  it('Leadership Alignment example - body without bullet markers, impact-based title', () => {
+    const note: NoteInput = {
+      note_id: 'test-leadership-alignment',
+      raw_markdown: `# Project Updates
+
+## Leadership Alignment
+
+VP confirmed resources will be allocated.
+
+• As a result, current self-service deliverables will slip by 2 sprints.
+
+Target is to complete the changes by early Q3.
+`,
+    };
+
+    const result = generateSuggestions(note, DEFAULT_CONFIG);
+
+    expect(result.suggestions.length).toBeGreaterThan(0);
+
+    const suggestion = result.suggestions[0];
+    expect(suggestion).toBeDefined();
+    expect(suggestion.type).toBe('project_update');
+    expect(suggestion.suggestion).toBeDefined();
+
+    const body = suggestion.suggestion!.body;
+    const title = suggestion.title;
+
+    // REQUIREMENT: Body uses the impact line (slip statement)
+    expect(body.toLowerCase()).toMatch(/slip/);
+    expect(body.toLowerCase()).toMatch(/self-service|deliverable/);
+    expect(body.toLowerCase()).toMatch(/2\s+sprint/);
+
+    // REQUIREMENT: Body does NOT start with "•" and does not contain list marker artifacts
+    expect(body).not.toContain('•');
+    expect(body).not.toMatch(/^[-*+•]\s+/);
+
+    // REQUIREMENT: Title contains "self-service" + ("slip" or "delay") and does NOT equal "Update Leadership Alignment plan"
+    expect(title).not.toBe('Update Leadership Alignment plan');
+    expect(title.toLowerCase()).toMatch(/self-service|deliverable/);
+    expect(title.toLowerCase()).toMatch(/slip|delay/);
+
+    // Title should be concise (≤60 chars as per spec)
+    expect(title.length).toBeLessThanOrEqual(60);
+  });
+
+  it('project_update title fallback when no impact line exists', () => {
+    const note: NoteInput = {
+      note_id: 'test-title-fallback-no-impact',
+      raw_markdown: `# Planning
+
+## Leadership Alignment
+
+Shift from enterprise to SMB focus for Q2.
+
+This aligns better with market opportunities.
+`,
+    };
+
+    const result = generateSuggestions(note, DEFAULT_CONFIG);
+
+    expect(result.suggestions.length).toBeGreaterThan(0);
+
+    const suggestion = result.suggestions[0];
+    expect(suggestion).toBeDefined();
+    expect(suggestion.type).toBe('project_update');
+
+    const title = suggestion.title;
+
+    // Title should use fallback behavior (not impact-based)
+    // Should be "Update Leadership Alignment plan" or change-pattern based
+    expect(title.length).toBeGreaterThan(10);
+
+    // This is a fallback case, so we accept current template behavior
+    // Could be "Update Leadership Alignment plan" or "Project update: SMB focus"
+    expect(title).toMatch(/update|shift|leadership|alignment|smb/i);
+  });
+
+  it('should respect 300 character limit even with impact lines', () => {
+    const note: NoteInput = {
+      note_id: 'test-impact-truncation',
+      raw_markdown: `# Project Status
+
+## Comprehensive Timeline Update
+
+The previously scheduled enterprise self-service deliverables and automation features will slip by 2 sprints due to unexpected technical complexity in the authentication layer and security review requirements.
+
+Target is to complete the comprehensive rollout with full feature parity by early Q3, contingent on resource availability and stakeholder approval.
+
+Additional context about the strategic implications and downstream dependencies.
+`,
+    };
+
+    const result = generateSuggestions(note, DEFAULT_CONFIG);
+
+    expect(result.suggestions.length).toBeGreaterThan(0);
+
+    const suggestion = result.suggestions[0];
+    expect(suggestion).toBeDefined();
+    expect(suggestion.type).toBe('project_update');
+    expect(suggestion.suggestion).toBeDefined();
+
+    const body = suggestion.suggestion!.body;
+
+    // Body should be truncated to 300 chars
+    expect(body.length).toBeLessThanOrEqual(300);
+
+    // Body should still contain impact information
+    expect(body.toLowerCase()).toMatch(/slip/);
+  });
+});

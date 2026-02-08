@@ -86,6 +86,28 @@ function isStopWord(word: string): boolean {
 }
 
 /**
+ * Generate title from impact line for project_update suggestions
+ * Strips leading result phrases and truncates to 60 chars
+ */
+function generateTitleFromImpactLine(impactLine: string): string {
+  // Strip list markers first
+  let title = normalizeLineForSynthesis(impactLine);
+
+  // Strip leading result phrases
+  title = stripResultPhrases(title);
+
+  // Capitalize first letter
+  title = capitalizeFirst(title);
+
+  // Truncate to 60 chars if needed
+  if (title.length > 60) {
+    title = truncateTitle(title, 60);
+  }
+
+  return title;
+}
+
+/**
  * Generate a title for a project update suggestion
  */
 function generateProjectUpdateTitle(section: ClassifiedSection): string {
@@ -95,6 +117,19 @@ function generateProjectUpdateTitle(section: ClassifiedSection): string {
   // Special case: role assignment sections
   if (section.intent.flags?.forceRoleAssignment && headingText) {
     return `Action items: ${headingText}`;
+  }
+
+  // IMPACT-FIRST: Check for impact lines (e.g., "slip by 2 sprints")
+  const sentences = bodyText
+    .split(/[.!?\n]+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 20);
+
+  const impactLines = sentences.filter(isPlanChangeImpactLine);
+
+  if (impactLines.length > 0) {
+    // Found impact line - use it for the title
+    return generateTitleFromImpactLine(impactLines[0]);
   }
 
   // Try to use heading if it names a workstream
@@ -159,8 +194,8 @@ function truncateTitle(title: string, maxLength: number): string {
  * Strips list markers, capitalizes, truncates to 80 chars
  */
 function generateTitleFromProposal(proposalLine: string): string {
-  // Strip list markers using existing helper
-  let title = normalizeForProposal(proposalLine);
+  // Strip list markers preserving case
+  let title = normalizeLineForSynthesis(proposalLine);
 
   // Capitalize first letter
   title = capitalizeFirst(title);
@@ -451,11 +486,11 @@ function isImperativeSentence(sentence: string): boolean {
 }
 
 /**
- * Normalize text for proposal detection (lowercase, strip list markers)
- * Uses same preprocessing as classifiers for consistency
+ * Normalize text for synthesis outputs (strip list markers, preserve case)
+ * Use this for any text that will appear in synthesis outputs (body, title, evidence)
  */
-function normalizeForProposal(text: string): string {
-  let processed = text.toLowerCase().trim();
+function normalizeLineForSynthesis(text: string): string {
+  let processed = text.trim();
 
   // Strip list markers at start of line
   processed = processed
@@ -464,6 +499,37 @@ function normalizeForProposal(text: string): string {
 
   // Collapse whitespace
   return processed.replace(/\s+/g, ' ');
+}
+
+/**
+ * Strip leading result phrases from text
+ * Removes phrases like "As a result,", "Result:", "So", etc.
+ */
+function stripResultPhrases(text: string): string {
+  let processed = text.trim();
+
+  const resultPhrases = [
+    /^as a result,?\s*/i,
+    /^result:\s*/i,
+    /^so,?\s*/i,
+    /^therefore,?\s*/i,
+    /^consequently,?\s*/i,
+  ];
+
+  for (const phrase of resultPhrases) {
+    processed = processed.replace(phrase, '');
+  }
+
+  return processed.trim();
+}
+
+/**
+ * Normalize text for proposal detection (lowercase, strip list markers)
+ * Uses same preprocessing as classifiers for consistency
+ */
+function normalizeForProposal(text: string): string {
+  // Use the synthesis normalizer, then lowercase
+  return normalizeLineForSynthesis(text).toLowerCase();
 }
 
 /**
@@ -591,11 +657,12 @@ function generateIdeaBody(section: ClassifiedSection): string {
 
   if (proposalLines.length > 0) {
     // Found proposal line(s) - use the first one as primary
-    parts.push(capitalizeFirst(proposalLines[0]));
+    // Strip list markers before adding to parts
+    parts.push(capitalizeFirst(normalizeLineForSynthesis(proposalLines[0])));
 
     // If we have multiple proposal lines, include a second one if space allows
     if (proposalLines.length > 1) {
-      parts.push(capitalizeFirst(proposalLines[1]));
+      parts.push(capitalizeFirst(normalizeLineForSynthesis(proposalLines[1])));
     } else {
       // Look for problem/context statement to pair with the proposal
       const nonProposalLines = lines.filter(l => !isProposalLine(l) && l.length > 20);
@@ -604,7 +671,7 @@ function generateIdeaBody(section: ClassifiedSection): string {
         const firstProposal = proposalLines[0].toLowerCase();
         const firstContext = nonProposalLines[0].toLowerCase();
         if (!firstProposal.includes(firstContext.substring(0, 30))) {
-          parts.push(capitalizeFirst(nonProposalLines[0]));
+          parts.push(capitalizeFirst(normalizeLineForSynthesis(nonProposalLines[0])));
         }
       }
     }
@@ -621,7 +688,7 @@ function generateIdeaBody(section: ClassifiedSection): string {
 
       // Optionally add problem context if available (stripped of bullet markers)
       const contextLines = lines
-        .map(l => normalizeForProposal(l)) // Strip bullet markers
+        .map(l => normalizeLineForSynthesis(l)) // Strip bullet markers
         .filter(l => l.length > 20);
 
       if (contextLines.length > 0 && parts.length < 2) {
@@ -658,7 +725,7 @@ function generateIdeaBody(section: ClassifiedSection): string {
       for (const pattern of problemPatterns) {
         const match = bodyText.match(pattern);
         if (match && match[2]) {
-          parts.push(capitalizeFirst(match[2].trim()));
+          parts.push(capitalizeFirst(normalizeLineForSynthesis(match[2].trim())));
           break;
         }
       }
@@ -674,7 +741,7 @@ function generateIdeaBody(section: ClassifiedSection): string {
         const match = bodyText.match(pattern);
         if (match && match[2]) {
           const verb = match[1].toLowerCase();
-          const solution = match[2].trim();
+          const solution = normalizeLineForSynthesis(match[2].trim());
           // For imperative verbs (launch, build, create, etc.), include the verb
           if (IMPERATIVE_VERBS.includes(verb)) {
             parts.push(capitalizeFirst(verb + ' ' + solution));
@@ -696,7 +763,7 @@ function generateIdeaBody(section: ClassifiedSection): string {
   for (const pattern of purposePatterns) {
     const match = bodyText.match(pattern);
     if (match && match[2]) {
-      parts.push(capitalizeFirst(match[2].trim()));
+      parts.push(capitalizeFirst(normalizeLineForSynthesis(match[2].trim())));
       break;
     }
   }
@@ -705,7 +772,7 @@ function generateIdeaBody(section: ClassifiedSection): string {
   if (parts.length === 0) {
     const sentences = bodyText
       .split(/[.!?]+/)
-      .map(s => s.trim())
+      .map(s => normalizeLineForSynthesis(s.trim()))
       .filter(s => s.length > 20 && s.length < 200);
 
     // Separate imperative and non-imperative sentences
@@ -730,7 +797,7 @@ function generateIdeaBody(section: ClassifiedSection): string {
     // If we only extracted one part (e.g., problem), check for imperative
     const sentences = bodyText
       .split(/[.!?]+/)
-      .map(s => s.trim())
+      .map(s => normalizeLineForSynthesis(s.trim()))
       .filter(s => s.length > 20 && s.length < 200);
 
     const imperatives = sentences.filter(isImperativeSentence);
@@ -754,13 +821,82 @@ function generateIdeaBody(section: ClassifiedSection): string {
 }
 
 /**
+ * Check if a line contains a plan change impact statement
+ * Impact lines describe concrete schedule/scope changes with time deltas
+ */
+function isPlanChangeImpactLine(line: string): boolean {
+  const normalized = line.toLowerCase();
+
+  // Check for time-shift verbs (more flexible pattern)
+  const hasTimeShiftVerb = /\b(slip|delay|push|move|shift|pull|bring)\b/i.test(normalized);
+
+  if (!hasTimeShiftVerb) return false;
+
+  // Check for time delta patterns
+  const hasTimeDelta = /\b\d+\s+(sprint|week|month|day|quarter)s?\b/i.test(normalized);
+
+  if (!hasTimeDelta) return false;
+
+  // Check for subject tokens that indicate impact on deliverables/plans
+  const hasSubject = /\b(deliverables?|releases?|rollouts?|launchs?|launches|self-service|roadmaps?|initiatives?|scopes?|features?|projects?|timelines?|milestones?)\b/i.test(normalized);
+
+  return hasSubject;
+}
+
+/**
  * Generate standalone body for project_update suggestions
  * Format: what changed → why → timing (if present)
+ * Prioritizes impact lines (e.g., "self-service deliverables will slip by 2 sprints")
  */
 function generateProjectUpdateBody(section: ClassifiedSection): string {
   const bodyText = section.raw_text;
   const parts: string[] = [];
 
+  // IMPACT-FIRST: Check for plan change impact lines
+  const sentences = bodyText
+    .split(/[.!?\n]+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 20);
+
+  const impactLines = sentences.filter(isPlanChangeImpactLine);
+
+  if (impactLines.length > 0) {
+    // Found impact line - use it as primary statement (strip list markers and result phrases)
+    const normalizedImpact = normalizeLineForSynthesis(impactLines[0]);
+    const cleanedImpact = stripResultPhrases(normalizedImpact);
+    parts.push(capitalizeFirst(cleanedImpact));
+
+    // Look for target/timeline to add as context
+    const timingPatterns = [
+      /\b(target|timeline|goal)\s+(?:is\s+)?(?:to\s+)?([^.!?\n]{10,100})/i,
+      /\b(by\s+(?:early|mid|late)?\s*Q[1-4])/i,
+      /\b(complete.*by\s+[^.!?\n]{5,50})/i,
+    ];
+
+    for (const pattern of timingPatterns) {
+      const match = bodyText.match(pattern);
+      if (match) {
+        const timing = match[2] || match[1] || match[0];
+        if (timing && timing.length >= 5) {
+          parts.push(capitalizeFirst(normalizeLineForSynthesis(timing.trim())));
+          break;
+        }
+      }
+    }
+
+    // Build body and return early (skip fallback logic)
+    let body = parts.join('. ').trim();
+    if (!body.endsWith('.')) body += '.';
+
+    // Truncate if needed
+    if (body.length > 300) {
+      body = body.substring(0, 297) + '...';
+    }
+
+    return body;
+  }
+
+  // FALLBACK: No impact line found, use existing extraction logic
   // Extract what changed
   const changePatterns = [
     /\b(shift|pivot|refocus|change|adjust|narrow|expand)\s+(?:to|towards?|the\s+)?([^.!?\n]{10,150})/i,
@@ -773,7 +909,7 @@ function generateProjectUpdateBody(section: ClassifiedSection): string {
     if (match) {
       const change = match[2] || match[1];
       if (change && change.length >= 10) {
-        parts.push(capitalizeFirst(change.trim()));
+        parts.push(capitalizeFirst(normalizeLineForSynthesis(change.trim())));
         break;
       }
     }
@@ -788,7 +924,7 @@ function generateProjectUpdateBody(section: ClassifiedSection): string {
   for (const pattern of reasonPatterns) {
     const match = bodyText.match(pattern);
     if (match && match[2]) {
-      parts.push(capitalizeFirst(match[2].trim()));
+      parts.push(capitalizeFirst(normalizeLineForSynthesis(match[2].trim())));
       break;
     }
   }
@@ -803,18 +939,18 @@ function generateProjectUpdateBody(section: ClassifiedSection): string {
     const match = bodyText.match(pattern);
     if (match) {
       const timing = match[2] || match[0];
-      parts.push(capitalizeFirst(timing.trim()));
+      parts.push(capitalizeFirst(normalizeLineForSynthesis(timing.trim())));
       break;
     }
   }
 
   // Fallback: extract first meaningful sentences or bullets
   if (parts.length === 0) {
-    const sentences = bodyText
+    const fallbackSentences = bodyText
       .split(/[.!?]+/)
-      .map(s => s.trim())
+      .map(s => normalizeLineForSynthesis(s.trim()))
       .filter(s => s.length > 20 && s.length < 200);
-    parts.push(...sentences.slice(0, 2));
+    parts.push(...fallbackSentences.slice(0, 2));
   }
 
   // Build body with max 300 characters
@@ -863,8 +999,8 @@ function generateRoleAssignmentBody(section: ClassifiedSection): string {
   // Find lines with role assignments
   const roleAssignmentLines: string[] = [];
   for (const line of lines) {
-    // Strip bullet markers if present
-    const cleanLine = line.replace(/^[-*•]\s+/, '').trim();
+    // Strip bullet markers if present using synthesis normalizer
+    const cleanLine = normalizeLineForSynthesis(line);
     if (isRoleAssignmentLine(cleanLine)) {
       roleAssignmentLines.push(cleanLine);
     }
@@ -905,6 +1041,7 @@ function generateRoleAssignmentBody(section: ClassifiedSection): string {
  * Extract evidence previews from evidence spans
  * Returns 1-2 short quotes (max 150 chars each)
  * Prioritizes imperative sentences when present
+ * Strips list markers from all preview text
  */
 function extractEvidencePreviews(evidenceSpans: EvidenceSpan[]): string[] | undefined {
   if (!evidenceSpans || evidenceSpans.length === 0) {
@@ -916,7 +1053,11 @@ function extractEvidencePreviews(evidenceSpans: EvidenceSpan[]): string[] | unde
   for (const span of evidenceSpans.slice(0, 2)) {
     if (span.text) {
       const text = span.text.trim();
-      const sentences = text.split(/[.!?\n]/).map(s => s.trim()).filter(s => s.length > 20);
+      // Strip list markers from each sentence
+      const sentences = text
+        .split(/[.!?\n]/)
+        .map(s => normalizeLineForSynthesis(s.trim()))
+        .filter(s => s.length > 20);
 
       // Check for imperative sentences in this span
       const imperatives = sentences.filter(isImperativeSentence);
@@ -935,6 +1076,9 @@ function extractEvidencePreviews(evidenceSpans: EvidenceSpan[]): string[] | unde
         // No imperatives, use first sentence
         preview = sentences[0] || text;
       }
+
+      // Strip result phrases from preview
+      preview = stripResultPhrases(preview);
 
       // Truncate to 150 characters
       if (preview.length > 150) {
@@ -957,6 +1101,7 @@ function extractEvidencePreviews(evidenceSpans: EvidenceSpan[]): string[] | unde
 /**
  * Extract evidence spans from section
  * For idea type: prioritizes proposal lines over complaint/problem lines
+ * For project_update type: prioritizes impact lines (schedule/scope changes)
  */
 function extractEvidenceSpans(
   section: ClassifiedSection,
@@ -1005,8 +1150,47 @@ function extractEvidenceSpans(
         relevantLines.push(...paragraphLines.slice(0, 3 - relevantLines.length));
       }
     }
+  } else if (type === 'project_update') {
+    // IMPACT-FIRST HEURISTIC: For project_update type, prefer impact lines
+    const impactLineObjs = bodyLines.filter((l) =>
+      l.text.trim().length > 20 && isPlanChangeImpactLine(l.text)
+    );
+
+    if (impactLineObjs.length > 0) {
+      // Found impact lines - use them as primary evidence
+      relevantLines.push(...impactLineObjs.slice(0, 2));
+
+      // Add target/timeline context if we have room
+      if (relevantLines.length < 2) {
+        // Look for lines with target/timeline keywords
+        const targetLines = bodyLines.filter(
+          (l) => l.text.trim().length > 20 &&
+                 !isPlanChangeImpactLine(l.text) &&
+                 /\b(target|timeline|goal|complete|by\s+(?:early|mid|late)?\s*Q[1-4])\b/i.test(l.text)
+        );
+        relevantLines.push(...targetLines.slice(0, 2 - relevantLines.length));
+      }
+
+      // Skip to span grouping
+      // (fall through to span creation logic below)
+    } else {
+      // No impact lines - fall back to default logic
+      // Prioritize list items as they often contain key decisions
+      const listItems = bodyLines.filter((l) => l.line_type === 'list_item');
+      if (listItems.length > 0) {
+        relevantLines.push(...listItems.slice(0, 3));
+      }
+
+      // Add non-blank paragraph lines if needed
+      if (relevantLines.length < 2) {
+        const paragraphLines = bodyLines.filter(
+          (l) => l.line_type === 'paragraph' && l.text.trim().length > 20
+        );
+        relevantLines.push(...paragraphLines.slice(0, 3 - relevantLines.length));
+      }
+    }
   } else {
-    // Non-idea types use existing logic
+    // Non-idea/non-project_update types use existing logic
     // Prioritize list items as they often contain key decisions
     const listItems = bodyLines.filter((l) => l.line_type === 'list_item');
     if (listItems.length > 0) {
