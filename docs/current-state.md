@@ -1,5 +1,125 @@
 # Current State
 
+## Action Items Body Generation for Role Assignments (2026-02-08)
+
+**Files**: `synthesis.ts`, `suggestion-engine-v2.test.ts`
+
+Improved body generation for role assignment sections to extract task lines instead of collapsing to timeline tokens.
+
+**Problem**: After the role assignment flag change (Prompt 1), sections with `forceRoleAssignment=true` map to `plan_change` intent and `project_update` type. Title generation was correctly using "Action items: <Heading>", but body generation was routing through `generateProjectUpdateBody()`, which looks for change patterns ("shift to", "from X to Y") and timing. Role assignment lines like "PM to document..." don't match these patterns, causing thin fallback bodies like "Next quarter." when timeline tokens are present.
+
+**Requirements**:
+- Preserve robustness: role assignment sections remain `plan_change` (not dropped at ACTIONABILITY)
+- Improve categorization/output: use action-items-style body generation
+- Title: keep "Action items: <Heading>" (already correct from Prompt 1)
+- Body: extract top 2-3 role assignment lines (e.g., "PM to document...", "CS to manage...")
+- Respect `maxSuggestionsPerNote` and validators (no changes to gating logic)
+
+**Changes**:
+
+1. **Added `ROLE_ASSIGNMENT_PATTERNS`** (`synthesis.ts` line 633):
+   - Array of regex patterns matching role assignment syntax: `/\bpm to\b/i`, `/\bcs to\b/i`, etc.
+   - Mirrors the patterns from `classifiers.ts` V3_ROLE_ASSIGNMENT_PATTERNS
+   - Used for extracting matching lines from section body
+
+2. **Added `isRoleAssignmentLine()`** (`synthesis.ts` line 647):
+   - Helper to check if a line contains a role assignment pattern
+   - Uses `normalizeForComparison()` for consistent preprocessing
+
+3. **Added `generateRoleAssignmentBody()`** (`synthesis.ts` line 653):
+   - New body generation function for role assignment sections
+   - Extracts lines matching role assignment patterns from body text
+   - Takes top 2-3 lines (or fewer if less available)
+   - Strips bullet markers, capitalizes first letter, formats as flowing text
+   - Max 300 chars (consistent with other body generators)
+   - Fallback: extracts meaningful sentences if no matches found (defensive)
+
+4. **Modified `synthesizeSuggestion()`** (`synthesis.ts` line 920-928):
+   - Added routing check: if `section.intent.flags?.forceRoleAssignment`, use `generateRoleAssignmentBody()`
+   - Otherwise: fall through to existing logic (`generateProjectUpdateBody()` or `generateIdeaBody()`)
+   - No changes to title generation, payload generation, or evidence extraction
+
+**Behavior Change**:
+- Role assignment sections now emit with bodies like: "PM to document feature requirements and acceptance criteria. CS to manage customer communication and set expectations. Design to create wireframes for new user dashboard."
+- Instead of collapsing to thin bodies like "Next quarter." when timeline tokens are present
+- Title remains "Action items: <Heading>" (unchanged from Prompt 1)
+- Type remains `project_update`, intent remains `plan_change` (unchanged)
+- Evidence spans unchanged (use existing extraction logic)
+
+**Tests**: Added regression test "role assignment sections generate action-items-style bodies (not timeline tokens)" in `suggestion-engine-v2.test.ts`:
+- Section with "Next Steps" heading, 4 role assignment bullets, and "Timeline: Next quarter." line
+- Asserts title begins with "Action items:" and includes heading text
+- Asserts body length > 20 chars (substantial content, not collapsed to timeline token)
+- Asserts body does NOT equal "Next quarter."
+- Asserts body includes at least 2 task indicators (verbs/roles/objects from task lines)
+
+**Minimal Diff**:
+- 53 lines added to synthesis.ts (patterns, helpers, new body generator, routing check)
+- 1 test added to existing test suite
+- No changes to classifiers, validators, scoring, routing, or evidence extraction
+
+---
+
+## Proposal-First Heuristic for Idea Synthesis (2026-02-08)
+
+**Files**: `classifiers.ts`, `synthesis.ts`, `list-marker-normalization.test.ts`
+
+Added a proposal-first heuristic for idea-type suggestions to prefer solution/proposal lines over complaint noun phrases when generating suggestion bodies and selecting evidence spans.
+
+**Problem**: When sections contain both complaint/problem statements ("Employees are dissatisfied with too many clicks") and solution/proposal statements ("Reduce required steps by merging attestation screens"), the suggestion synthesis was treating both equally. This resulted in idea suggestions that emphasized the problem rather than the proposed solution.
+
+**Requirements** (minimal diff):
+- Define `PROPOSAL_VERBS_IDEA_ONLY` = ["reduce","merge","streamline","simplify","remove","eliminate","consolidate","log","cut"]
+- Detect proposal lines by: (a) starts with proposal verb, OR (b) contains "by <verb+ing>" pattern
+- For idea-type suggestions: prefer proposal lines for evidence spans and body text
+- No changes to actionability thresholds, V3_ACTION_VERBS, validators, or routing
+- Only affects idea-type suggestions (project_update unchanged)
+
+**Changes**:
+
+1. **Added PROPOSAL_VERBS_IDEA_ONLY** (`classifiers.ts` line 287):
+   - Exported constant for use in synthesis module
+   - Separate from V3_ACTION_VERBS (which affects actionability scoring)
+   - Used only for idea synthesis, not for actionability detection
+
+2. **Added proposal detection helpers** (`synthesis.ts` line 366):
+   - `normalizeForProposal()`: strips list markers, lowercases (same as classifier preprocessing)
+   - `isProposalLine()`: detects proposal verbs at line start OR "by <verb+ing>" pattern
+   - Handles gerunds ("by merging" matches "merge", "by reducing" matches "reduce")
+
+3. **Modified generateIdeaBody()** (`synthesis.ts` line 420):
+   - Added proposal-first check before existing pattern-based extraction
+   - If proposal lines found: use first proposal as primary, optionally add context/second proposal
+   - If no proposal lines: fall back to existing problem/solution pattern extraction
+   - Preserves all existing fallback logic
+
+4. **Modified extractEvidenceSpans()** (`synthesis.ts` line 605):
+   - For idea type: filter bodyLines to find proposal lines first
+   - If proposal lines exist: use them as primary evidence (up to 2 lines)
+   - Add context lines if room allows
+   - For non-idea types: unchanged (existing list-item prioritization logic)
+
+**Behavior Change**:
+- Idea suggestions from sections with proposal lines now emphasize the solution/action in body and evidence
+- Example: "Reduce required steps by merging attestation screens" preferred over "dissatisfied with too many clicks"
+- Complaint/problem lines still available as context but not primary evidence
+- No impact on actionability scoring, thresholds, or type classification
+
+**Tests**: Added comprehensive test in `list-marker-normalization.test.ts`:
+- Proposal line preferred over complaint line in idea body and evidence
+- Evidence spans include proposal line (not only complaint line)
+- Works with bullet markers (list normalization)
+- Falls back to existing logic when no proposal found
+- No impact on project_update suggestions
+
+**Minimal Diff**:
+- 36 lines added to classifiers.ts (PROPOSAL_VERBS_IDEA_ONLY + export)
+- 201 lines added to synthesis.ts (proposal detection + modified body/evidence generation)
+- 1 test added to existing list-marker-normalization.test.ts
+- No changes to actionability gates, thresholds, validators, or routing logic
+
+---
+
 ## Timeline vs Calendar Out-of-Scope Distinction (2026-02-08)
 
 **Files**: `classifiers.ts`, `suggestion-engine-v2.test.ts`
