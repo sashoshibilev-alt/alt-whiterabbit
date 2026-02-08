@@ -1,5 +1,71 @@
 # Current State
 
+## Body Generation Quality Fixes (2026-02-08)
+
+**Files**: `synthesis.ts`, `body-generation.test.ts`
+
+Two targeted quality fixes for suggestion body generation:
+
+### Task A: Friction Complaint Detection for Idea Bodies
+
+**Problem**: When Customer Feedback sections contain friction/clicks complaints without explicit proposals (e.g., "Enterprise customer reports frustration with the number of clicks required to complete annual attestations"), the body generation was extracting complaint noun phrases like "Complete annual attestations." instead of generating solution-shaped bodies.
+
+**Solution**: Added friction complaint detection heuristic in `generateIdeaBody()` that runs after proposal-line check but before pattern fallback:
+
+1. **Added friction detection** (`synthesis.ts` lines 418-471):
+   - `FRICTION_MARKERS`: patterns for clicks, steps, friction, "takes too long", "difficult to", burden, cumbersome
+   - `FRICTION_TARGET_PATTERNS`: attestation, workflow, flow, process, completion
+   - `detectFrictionComplaint()`: checks for friction marker + target object, returns friction type
+   - `generateFrictionSolution()`: creates solution-shaped body based on friction type:
+     - "clicks" → "Reduce clicks required to [target]."
+     - "steps" → "Reduce steps required to [target]."
+     - generic → "Streamline [target] to improve usability."
+
+2. **Modified `generateIdeaBody()`** (`synthesis.ts` line 422):
+   - After proposal-line check, before existing fallback patterns
+   - If friction complaint detected: generate solution body + add problem context if available
+   - Preserves all existing proposal-first and fallback logic
+
+**Behavior Change**:
+- Friction complaints now emit solution-shaped bodies: "Reduce clicks required to attestations. Enterprise customer reports frustration..."
+- Instead of noun phrase fallbacks: "Complete annual attestations."
+- Only applies when no explicit proposal lines exist in section
+- Minimal, rule-based heuristic (no ML/probabilistic)
+
+**Tests**: Added 4 regression tests in `body-generation.test.ts`:
+- Clicks friction → body contains "reduce" + "clicks" + target object
+- Steps friction → body contains "reduce" + "steps" + target object
+- Generic friction → body contains "streamline" + target object
+- Proposal lines still take priority (no friction heuristic applied)
+
+### Task B: Role Assignment Punctuation Fix
+
+**Problem**: `generateRoleAssignmentBody()` was joining lines that already ended with punctuation (e.g., "PM to document."), causing double punctuation in bodies: "impact.. Design.. CS.."
+
+**Solution**: Strip trailing punctuation before joining lines.
+
+1. **Modified `generateRoleAssignmentBody()`** (`synthesis.ts` line 703):
+   - Before joining lines: strip trailing `.`, `;`, `:` (preserve `?`, `!`)
+   - Then join with single `.`
+   - Preserves existing 300-char max and all other behavior
+
+**Behavior Change**:
+- Role assignment bodies no longer contain `..`, `;.`, or `:.`
+- Clean single-period joining: "PM to document requirements. Design to create mockups. CS to gather feedback."
+
+**Tests**: Added 3 regression tests in `body-generation.test.ts`:
+- No double periods in role assignment bodies
+- Mixed punctuation (`;`, `:`, `.`) normalized correctly
+- Content preserved when normalizing punctuation
+
+**Minimal Diff**:
+- 72 lines added to `synthesis.ts` (friction detection + punctuation normalization)
+- 1 new test file: `body-generation.test.ts` (7 tests, all passing)
+- No changes to classifiers, validators, scoring, routing, thresholds, or V3_ACTION_VERBS
+- All existing tests pass (259 tests across suggestion-engine-v2)
+
+---
+
 ## Action Items Body Generation for Role Assignments (2026-02-08)
 
 **Files**: `synthesis.ts`, `suggestion-engine-v2.test.ts`

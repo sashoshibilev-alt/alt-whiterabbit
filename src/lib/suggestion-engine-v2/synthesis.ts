@@ -415,6 +415,81 @@ function isProposalLine(line: string): boolean {
 }
 
 /**
+ * Friction markers that indicate clicks/steps complaints
+ */
+const FRICTION_MARKERS = [
+  /\bclicks?\b/i,
+  /\b(?:too\s+many|number\s+of)\s+steps?\b/i,
+  /\bfriction\b/i,
+  /\btakes?\s+too\s+long\b/i,
+  /\b(?:difficult|hard)\s+to\b/i,
+  /\bburden(?:some)?\b/i,
+  /\bcumbersome\b/i,
+];
+
+/**
+ * Target object patterns for friction complaints
+ */
+const FRICTION_TARGET_PATTERNS = [
+  /\battestation(?:s)?\b/i,
+  /\bworkflow(?:s)?\b/i,
+  /\bflow(?:s)?\b/i,
+  /\bprocess(?:es)?\b/i,
+  /\bcompletion\b/i,
+];
+
+/**
+ * Detect if section is primarily a friction/clicks complaint
+ * Returns the friction type ('clicks', 'steps', or 'generic') and target object if detected
+ */
+function detectFrictionComplaint(text: string): { frictionType: string; target: string } | null {
+  const lowerText = text.toLowerCase();
+
+  // Check for friction markers
+  let frictionType: string | null = null;
+  for (const marker of FRICTION_MARKERS) {
+    if (marker.test(lowerText)) {
+      if (/\bclicks?\b/i.test(lowerText)) {
+        frictionType = 'clicks';
+      } else if (/\bsteps?\b/i.test(lowerText)) {
+        frictionType = 'steps';
+      } else {
+        frictionType = 'generic';
+      }
+      break;
+    }
+  }
+
+  if (!frictionType) return null;
+
+  // Check for target object
+  for (const pattern of FRICTION_TARGET_PATTERNS) {
+    const match = text.match(pattern);
+    if (match) {
+      return { frictionType, target: match[0] };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Generate solution-shaped body for friction complaints
+ */
+function generateFrictionSolution(frictionType: string, target: string): string {
+  // Normalize target (keep original case)
+  const normalizedTarget = target.trim();
+
+  if (frictionType === 'clicks') {
+    return `Reduce clicks required to ${normalizedTarget.toLowerCase()}.`;
+  } else if (frictionType === 'steps') {
+    return `Reduce steps required to ${normalizedTarget.toLowerCase()}.`;
+  } else {
+    return `Streamline ${normalizedTarget.toLowerCase()} to improve usability.`;
+  }
+}
+
+/**
  * Generate standalone body for idea suggestions
  * Format: problem → proposed change → purpose (if present)
  * Prefers proposal lines (with proposal verbs or "by <verb+ing>") when available
@@ -447,41 +522,63 @@ function generateIdeaBody(section: ClassifiedSection): string {
       }
     }
   } else {
-    // No proposal lines found - fall back to existing pattern-based extraction
+    // FRICTION COMPLAINT HEURISTIC: Check for friction/clicks complaints
+    const frictionComplaint = detectFrictionComplaint(bodyText);
+    if (frictionComplaint) {
+      // Generate solution-shaped body for friction complaint
+      const solutionBody = generateFrictionSolution(
+        frictionComplaint.frictionType,
+        frictionComplaint.target
+      );
+      parts.push(solutionBody);
 
-    // Extract problem statement
-    const problemPatterns = [
-      /\b(problem|issue|challenge|pain\s+point)\s*(?::|is|involves?)\s*([^.!?\n]{10,150})/i,
-      /\b(currently|today|right\s+now)\s+([^.!?\n]{10,150})/i,
-    ];
-
-    for (const pattern of problemPatterns) {
-      const match = bodyText.match(pattern);
-      if (match && match[2]) {
-        parts.push(capitalizeFirst(match[2].trim()));
-        break;
-      }
-    }
-
-    // Extract proposed change/solution
-    // Include common imperative verbs that introduce actions
-    const solutionPatterns = [
-      /\b(add|remove|update|change|introduce|show|hide|rename|move|split|merge|track|instrument|alert|surface|display|log|notify|create|implement|fix|launch|build|develop)\s+(?:a\s+|an\s+|the\s+)?([^.!?\n]{10,150})/i,
-      /\b(solution|approach|idea)\s*(?::|is|would\s+be)\s*([^.!?\n]{10,150})/i,
-    ];
-
-    for (const pattern of solutionPatterns) {
-      const match = bodyText.match(pattern);
-      if (match && match[2]) {
-        const verb = match[1].toLowerCase();
-        const solution = match[2].trim();
-        // For imperative verbs (launch, build, create, etc.), include the verb
-        if (IMPERATIVE_VERBS.includes(verb)) {
-          parts.push(capitalizeFirst(verb + ' ' + solution));
-        } else {
-          parts.push(capitalizeFirst(solution));
+      // Add problem context if available
+      const nonProposalLines = lines.filter(l => l.length > 20);
+      if (nonProposalLines.length > 0) {
+        // Add first contextual line that's not just repeating the solution
+        const firstContext = nonProposalLines[0];
+        if (!firstContext.toLowerCase().startsWith('reduce') &&
+            !firstContext.toLowerCase().startsWith('streamline')) {
+          parts.push(capitalizeFirst(firstContext));
         }
-        break;
+      }
+    } else {
+      // No proposal lines or friction complaint - fall back to existing pattern-based extraction
+
+      // Extract problem statement
+      const problemPatterns = [
+        /\b(problem|issue|challenge|pain\s+point)\s*(?::|is|involves?)\s*([^.!?\n]{10,150})/i,
+        /\b(currently|today|right\s+now)\s+([^.!?\n]{10,150})/i,
+      ];
+
+      for (const pattern of problemPatterns) {
+        const match = bodyText.match(pattern);
+        if (match && match[2]) {
+          parts.push(capitalizeFirst(match[2].trim()));
+          break;
+        }
+      }
+
+      // Extract proposed change/solution
+      // Include common imperative verbs that introduce actions
+      const solutionPatterns = [
+        /\b(add|remove|update|change|introduce|show|hide|rename|move|split|merge|track|instrument|alert|surface|display|log|notify|create|implement|fix|launch|build|develop)\s+(?:a\s+|an\s+|the\s+)?([^.!?\n]{10,150})/i,
+        /\b(solution|approach|idea)\s*(?::|is|would\s+be)\s*([^.!?\n]{10,150})/i,
+      ];
+
+      for (const pattern of solutionPatterns) {
+        const match = bodyText.match(pattern);
+        if (match && match[2]) {
+          const verb = match[1].toLowerCase();
+          const solution = match[2].trim();
+          // For imperative verbs (launch, build, create, etc.), include the verb
+          if (IMPERATIVE_VERBS.includes(verb)) {
+            parts.push(capitalizeFirst(verb + ' ' + solution));
+          } else {
+            parts.push(capitalizeFirst(solution));
+          }
+          break;
+        }
       }
     }
   }
@@ -680,8 +777,14 @@ function generateRoleAssignmentBody(section: ClassifiedSection): string {
     return sentences.slice(0, 2).join('. ').trim() + '.' || 'Action items defined.';
   }
 
-  // Build body from selected lines
-  let body = selectedLines.map(line => capitalizeFirst(line)).join('. ').trim();
+  // Build body from selected lines, stripping trailing punctuation before joining
+  const normalizedLines = selectedLines.map(line => {
+    const capitalized = capitalizeFirst(line);
+    // Strip trailing punctuation (., ;, :) but keep ?/!
+    return capitalized.replace(/[.;:]+\s*$/, '').trim();
+  });
+
+  let body = normalizedLines.join('. ').trim();
   if (!body.endsWith('.')) body += '.';
 
   // Truncate if needed
