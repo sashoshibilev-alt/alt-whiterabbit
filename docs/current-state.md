@@ -1,5 +1,54 @@
 # Current State
 
+## Idea Title Generation: Proposal and Friction Based (2026-02-08)
+
+**Files**: `synthesis.ts`, `body-generation.test.ts`
+
+Fixed IDEA suggestion titles to be contentful (proposal/friction-based) instead of heading-based, making them suitable for pushing into Linear/Jira.
+
+**Problem**: IDEA titles defaulted to "New idea: <Heading>" (e.g., "New idea: Customer Feedback"), which is not appropriate for issue trackers. The proposal-first and friction heuristics already existed for body generation but were not applied to title generation.
+
+**Requirements**:
+- Implement idea title generation with priority:
+  1. If proposal line(s) detected → generate title from first proposal (no "New idea:" prefix)
+  2. Else if friction heuristic fires → generate title from friction template (no "New idea:" prefix)
+  3. Else fallback to existing behavior: "New idea: <Heading>"
+- Keep title concise: ≤80 chars, truncate safely without cutting mid-word
+- Reuse existing normalization helpers (strip list markers, smart quotes, etc.)
+
+**Solution**: Modified `generateIdeaTitle()` in `synthesis.ts`:
+
+1. **Added helper functions** (lines 139-191):
+   - `truncateTitle()`: Safely truncate to max length without cutting mid-word
+   - `generateTitleFromProposal()`: Strip list markers, capitalize, truncate to 80 chars
+   - `generateTitleFromFriction()`: Create solution-shaped title (e.g., "Reduce clicks to complete annual attestations")
+
+2. **Modified `generateIdeaTitle()`** (lines 193-255):
+   - Added proposal-first check: if proposal lines found, generate title from first proposal (no prefix)
+   - Added friction heuristic check: if friction complaint detected, generate solution-shaped title (no prefix)
+   - Preserved existing fallback logic: heading-based "New idea: <Heading>" or generic patterns
+
+**Behavior Change**:
+- Proposal-based titles: "Reduce required steps by merging attestation screens" (was: "New idea: UX Improvement")
+- Friction-based titles: "Reduce clicks to complete annual attestations" (was: "New idea: Attestation UX")
+- Fallback titles still work when no proposal/friction found: "New idea: Dashboard Metrics"
+- Titles are truncated to ≤80 chars, cutting at word boundaries
+
+**Tests**: Added 5 regression tests in `body-generation.test.ts`:
+- Proposal line generates contentful title without "New idea:" prefix
+- Friction complaint generates solution-shaped title without "New idea:" prefix
+- Fallback to "New idea: <Heading>" when no proposal/friction found
+- Long proposal titles truncated to 80 chars without cutting mid-word
+- Proposal prioritized over friction when both present
+
+**Minimal Diff**:
+- 53 lines added to `synthesis.ts` (3 new helper functions + modified title generation)
+- 5 tests added to existing `body-generation.test.ts`
+- No changes to actionability gates, thresholds, validators, scoring, routing, or body generation
+- All existing tests pass (265 tests across suggestion-engine-v2)
+
+---
+
 ## Body Generation Quality Fixes (2026-02-08)
 
 **Files**: `synthesis.ts`, `body-generation.test.ts`
@@ -37,6 +86,31 @@ Two targeted quality fixes for suggestion body generation:
 - Steps friction → body contains "reduce" + "steps" + target object
 - Generic friction → body contains "streamline" + target object
 - Proposal lines still take priority (no friction heuristic applied)
+
+**Bug Fix (2026-02-08)**: Friction heuristic concatenation + punctuation cleanup
+
+**Problem**: The friction heuristic was falling through to the fallback pattern extraction logic, causing:
+1. Concatenation of friction template + raw evidence lines (including bullet markers like "•")
+2. Concatenation with old fallback noun phrase extractions (e.g., "Complete annual attestations")
+3. Double punctuation issues (.., . .)
+
+**Root Cause**: After generating the friction solution body, the code continued executing the subsequent pattern-based extraction logic (lines 592-636) instead of returning early.
+
+**Fix**:
+1. **Early return in friction path** (`synthesis.ts` lines 527-561):
+   - After generating friction solution + optional context, build final body and return immediately
+   - Prevents fallthrough to purpose/goal patterns and fallback sentence extraction
+   - Strip bullet markers from context lines using `normalizeForProposal()`
+2. **Punctuation cleanup** added to both paths:
+   - Friction path: clean double periods before returning
+   - Main path: clean double periods in final body building (line 657)
+   - Pattern: `.replace(/\.\s*\./g, '.').replace(/\s+\./g, '.')`
+
+**Tests**: Added regression test `should not concatenate friction template with fallback noun phrase or include bullet markers`:
+- Uses exact complaint line: "• Enterprise customer reports frustration with the number of clicks required to complete annual attestations."
+- Asserts body contains "Reduce" and "click"
+- Asserts body does NOT contain "•", "..", or "Complete annual attestations"
+- Asserts body is at most 2 sentences and under 150 chars
 
 ### Task B: Role Assignment Punctuation Fix
 
