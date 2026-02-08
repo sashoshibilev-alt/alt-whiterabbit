@@ -814,6 +814,69 @@ function matchImplicitIdea(line: string): number {
 }
 
 /**
+ * Pain/friction signals for implicit feature request detection
+ * High-precision signals focused on explicit complaints and dissatisfaction
+ */
+const IMPLICIT_FEATURE_REQUEST_PAIN_SIGNALS = [
+  'dissatisfied',
+  'too many clicks',
+  'number of clicks',
+  'confusing',
+  'frustrating',
+  'usability issue',
+  'hard to use',
+  'difficult to',
+  'painful',
+  'annoying',
+  'slow',
+  'inefficient',
+  'broken',
+  'impacting',
+];
+
+/**
+ * Product scope/impact context signals for implicit feature request detection
+ * Focus on workflow, process, and stakeholder impact rather than generic user mentions
+ */
+const IMPLICIT_FEATURE_REQUEST_CONTEXT_SIGNALS = [
+  'workflow',
+  'attestation',
+  'completion',
+  'usability',
+  'customer satisfaction',
+  'user experience',
+  'productivity',
+  'efficiency',
+  'employees',
+];
+
+/**
+ * Detect implicit feature request = +0.76
+ *
+ * An implicit feature request is a problem statement that contains:
+ * 1. A pain/friction signal (e.g., "dissatisfied", "too many clicks", "confusing")
+ * 2. A product scope/impact context (e.g., "workflow", "usability", "customer satisfaction")
+ *
+ * This rule is high-precision and designed for "Customer Feedback" style sections
+ * that describe clear product problems with impact, even without explicit imperatives.
+ *
+ * Returns +0.76 if both conditions are met, 0.0 otherwise.
+ * Note: 0.76 chosen to ensure these suggestions pass scoring thresholds with
+ * confidence, even for short sections (above T_action + short_section_penalty = 0.65,
+ * with margin >= 0.1 for borderline check, accounting for floating-point precision).
+ */
+function matchImplicitFeatureRequest(text: string): number {
+  const hasPainSignal = IMPLICIT_FEATURE_REQUEST_PAIN_SIGNALS.some(signal => text.includes(signal));
+  const hasContextSignal = IMPLICIT_FEATURE_REQUEST_CONTEXT_SIGNALS.some(signal => text.includes(signal));
+
+  if (hasPainSignal && hasContextSignal) {
+    return 0.76;
+  }
+
+  return 0.0;
+}
+
+/**
  * Classify a section's intent
  */
 export function classifyIntent(section: Section): IntentClassification {
@@ -992,6 +1055,17 @@ export function classifyIntent(section: Section): IntentClassification {
     maxActionableScore = Math.max(maxActionableScore, implicitIdeaSignal);
     // Note: implicit ideas are not added to maxNonHedgedActionableScore
     // because they're a lower-confidence signal
+  }
+
+  // Rule 11: Implicit feature request (section-level check)
+  // High-precision rule for problem statements with pain + product context
+  // Check full section text including heading for maximum recall
+  const fullSectionText = ((section.heading_text || '') + ' ' + section.raw_text).toLowerCase();
+  const implicitFeatureRequestSignal = matchImplicitFeatureRequest(fullSectionText);
+  if (implicitFeatureRequestSignal > 0) {
+    maxActionableScore = Math.max(maxActionableScore, implicitFeatureRequestSignal);
+    // Note: implicit feature requests are not added to maxNonHedgedActionableScore
+    // because they're a different pattern than explicit imperatives
   }
 
   // V3 OVERRIDE: If we have strong signals of substantial product work, clamp outOfScopeSignal <= 0.3
