@@ -23,7 +23,7 @@ import {
 } from "./DebugLedger";
 import { preprocessNote, resetSectionCounter } from "./preprocessing";
 import { classifySections, filterActionableSections, isPlanChangeIntentLabel } from "./classifiers";
-import { synthesizeSuggestions, resetSuggestionCounter } from "./synthesis";
+import { synthesizeSuggestions, resetSuggestionCounter, checkSectionSuppression, shouldSplitByTopic, splitSectionByTopic } from "./synthesis";
 import { runQualityValidators } from "./validators";
 import { runScoringPipeline } from "./scoring";
 import { routeSuggestions } from "./routing";
@@ -177,28 +177,233 @@ export function generateSuggestionsWithDebug(
     }
 
     // ============================================
+    // Stage 2.5: Topic Isolation (Before Synthesis)
+    // ============================================
+    // Split mixed-topic sections into topic-isolated subsections BEFORE synthesis
+    // This ensures subsections go through normal synthesis instead of fallback path
+    const expandedSections: ClassifiedSection[] = [];
+    const splitParentSectionIds = new Set<string>();
+
+    for (const section of actionableSections) {
+      // Check if section should be split, with debug instrumentation
+      const debugInfo: { topicIsolation?: any; topicSplit?: any } = {};
+      const shouldSplit = shouldSplitByTopic(section, finalConfig.enable_debug ? debugInfo : undefined);
+
+      if (shouldSplit) {
+        const subsections = splitSectionByTopic(section, finalConfig.enable_debug ? debugInfo : undefined);
+        expandedSections.push(...subsections);
+
+        // Track parent section as split (so we don't emit from it)
+        splitParentSectionIds.add(section.section_id);
+
+        // Mark parent section as split in debug ledger with topic isolation info
+        if (ledger) {
+          const parentDebug = ledger.getSection(section.section_id);
+          if (parentDebug) {
+            parentDebug.emitted = false;
+            parentDebug.dropStage = DropStage.TOPIC_ISOLATION;
+            parentDebug.dropReason = DropReason.SPLIT_INTO_SUBSECTIONS;
+            parentDebug.synthesisRan = false;
+
+            // Store topic isolation debug info if available
+            if (finalConfig.enable_debug && debugInfo.topicIsolation) {
+              parentDebug.metadata = {
+                ...parentDebug.metadata,
+                topicIsolation: debugInfo.topicIsolation,
+                topicSplit: debugInfo.topicSplit,
+              };
+            }
+          }
+        }
+
+        // Create debug entries for subsections
+        if (ledger) {
+          for (const subsection of subsections) {
+            sectionToDebug(ledger, subsection);
+            // Inherit parent section's classification
+            const parentDebug = ledger.getSection(section.section_id);
+            const subsectionDebug = ledger.getSection(subsection.section_id);
+            if (parentDebug && subsectionDebug) {
+              ledger.afterIntentClassification(
+                subsectionDebug,
+                subsection.intent,
+                subsection.is_actionable,
+                subsection.actionability_reason,
+                parentDebug.signals?.actionabilitySignals
+              );
+              if (subsection.suggested_type) {
+                ledger.afterTypeClassification(
+                  subsectionDebug,
+                  subsection.suggested_type,
+                  subsection.type_confidence || 0
+                );
+              }
+            }
+          }
+        }
+      } else {
+        // Not split-eligible, add to expanded sections as-is
+        expandedSections.push(section);
+
+        // Record debug info even if not split (to explain why)
+        if (ledger && finalConfig.enable_debug && debugInfo.topicIsolation) {
+          const sectionDebug = ledger.getSection(section.section_id);
+          if (sectionDebug) {
+            sectionDebug.metadata = {
+              ...sectionDebug.metadata,
+              topicIsolation: debugInfo.topicIsolation,
+            };
+          }
+        }
+      }
+    }
+
+    // ============================================
     // Stage 3: Synthesis
     // ============================================
     const synthStart = Date.now();
-    let synthesizedSuggestions = synthesizeSuggestions(actionableSections);
+    let synthesizedSuggestions = synthesizeSuggestions(expandedSections);
 
     // PLAN_CHANGE PROTECTION (Task 4): Guarantee at least one suggestion per plan_change section
     // If synthesis produced 0 candidates for a plan_change section, emit a fallback suggestion
     const sectionIdsWithSuggestions = new Set(synthesizedSuggestions.map(s => s.section_id));
-    
-    for (const section of actionableSections) {
+
+    // Use expandedSections (which includes subsections) for fallback checks
+    for (const section of expandedSections) {
       const isPlanChange = isPlanChangeIntentLabel(section.intent);
       const hasSuggestion = sectionIdsWithSuggestions.has(section.section_id);
-      
-      if (isPlanChange && !hasSuggestion) {
+
+      // Skip fallback creation for topic-isolated subsections
+      // Topic isolation has already run, so if a subsection has no suggestion, it was suppressed
+      const isTopicIsolatedSubsection = section.section_id.includes('__topic_');
+
+      if (isPlanChange && !hasSuggestion && isTopicIsolatedSubsection) {
+        // Mark topic-isolated subsection with no candidates as suppressed (not INTERNAL_ERROR)
+        if (ledger) {
+          const sectionDebug = ledger.getSection(section.section_id);
+          if (sectionDebug && sectionDebug.candidates.length === 0) {
+            sectionDebug.emitted = false;
+            sectionDebug.dropStage = DropStage.POST_SYNTHESIS_SUPPRESS;
+            sectionDebug.dropReason = DropReason.LOW_RELEVANCE;
+            sectionDebug.synthesisRan = true; // Synthesis did run, it just suppressed the output
+          }
+        }
+        continue; // Skip fallback creation
+      }
+
+      if (isPlanChange && !hasSuggestion && !isTopicIsolatedSubsection) {
+        // FIX 1: Check section-level suppression before creating fallback
+        // Suppression must be normal control flow, not an exception
+        const headingText = section.heading_text?.trim() || '';
+        const hasForceRoleAssignment = section.intent.flags?.forceRoleAssignment || false;
+        const isSuppressed = checkSectionSuppression(headingText, section.structural_features, section.raw_text, hasForceRoleAssignment, section.body_lines);
+
+        if (isSuppressed) {
+          // Section is suppressed (e.g., "Next steps", "Summary")
+          // Mark section as dropped with SUPPRESSED_SECTION reason at POST_SYNTHESIS_SUPPRESS stage
+          if (ledger) {
+            const sectionDebug = ledger.getSection(section.section_id);
+            if (sectionDebug) {
+              // Update section debug state to reflect suppression
+              sectionDebug.emitted = false;
+              sectionDebug.dropStage = DropStage.POST_SYNTHESIS_SUPPRESS;
+              sectionDebug.dropReason = DropReason.SUPPRESSED_SECTION;
+              sectionDebug.synthesisRan = false;
+
+              // Mark all candidates as suppressed
+              for (const candidate of sectionDebug.candidates) {
+                if (!candidate.dropped) {
+                  candidate.emitted = false;
+                  candidate.dropStage = DropStage.POST_SYNTHESIS_SUPPRESS;
+                  candidate.dropReason = DropReason.SUPPRESSED_SECTION;
+                }
+              }
+            }
+          }
+          continue; // Skip fallback creation
+        }
+
+        // FIX 2: Check if section is split-eligible (topic isolation should have run earlier but may have been missed)
+        // If split-eligible, DO NOT create fallback - split and process subsections instead
+        const debugInfo: { topicIsolation?: any; topicSplit?: any } = {};
+        const isSplitEligible = shouldSplitByTopic(section, finalConfig.enable_debug ? debugInfo : undefined);
+
+        if (isSplitEligible) {
+          // Split the section and add subsections to expanded list for synthesis
+          const subsections = splitSectionByTopic(section, finalConfig.enable_debug ? debugInfo : undefined);
+
+          if (finalConfig.enable_debug && ledger) {
+            console.warn('[TOPIC_ISOLATION_FALLBACK_PATH] Section was split-eligible but reached fallback path:', {
+              sectionId: section.section_id,
+              heading: section.heading_text,
+              subsectionCount: subsections.length,
+              debugInfo,
+            });
+
+            // Record topic isolation info in parent section debug
+            const parentDebug = ledger.getSection(section.section_id);
+            if (parentDebug && debugInfo.topicIsolation) {
+              parentDebug.emitted = false;
+              parentDebug.dropStage = DropStage.TOPIC_ISOLATION;
+              parentDebug.dropReason = DropReason.SPLIT_INTO_SUBSECTIONS;
+            }
+          }
+
+          // Process subsections through normal synthesis (retry synthesis for them)
+          for (const subsection of subsections) {
+            // Skip original section (parent)
+            if (subsection.section_id === section.section_id) continue;
+
+            // Create debug entry for subsection
+            if (ledger) {
+              sectionToDebug(ledger, subsection);
+              const subsectionDebug = ledger.getSection(subsection.section_id);
+              if (subsectionDebug) {
+                // Inherit parent classification
+                ledger.afterIntentClassification(
+                  subsectionDebug,
+                  subsection.intent,
+                  subsection.is_actionable,
+                  subsection.actionability_reason,
+                  undefined
+                );
+                if (subsection.suggested_type) {
+                  ledger.afterTypeClassification(
+                    subsectionDebug,
+                    subsection.suggested_type,
+                    subsection.type_confidence || 0
+                  );
+                }
+              }
+            }
+
+            // Synthesize subsection
+            const subsectionSuggestions = synthesizeSuggestions([subsection]);
+            for (const suggestion of subsectionSuggestions) {
+              synthesizedSuggestions.push(suggestion);
+              sectionIdsWithSuggestions.add(subsection.section_id);
+
+              if (ledger) {
+                const subsectionDebug = ledger.getSection(subsection.section_id);
+                if (subsectionDebug) {
+                  ledger.afterSynthesis(subsectionDebug, suggestion);
+                }
+              }
+            }
+          }
+
+          continue; // Skip fallback creation
+        }
+
         // Create fallback suggestion for plan_change section with 0 candidates
+        // Only reaches here if section is NOT suppressed AND NOT split-eligible
         const fallbackSuggestion: Suggestion = {
           suggestion_id: `fallback_${section.section_id}_${Date.now()}`,
           note_id: section.note_id,
           section_id: section.section_id,
           type: 'project_update',
-          title: section.heading_text 
-            ? `Review: ${section.heading_text}` 
+          title: section.heading_text
+            ? `Review: ${section.heading_text}`
             : 'Review plan change',
           payload: {
             after_description: `Plan change detected in section. ${
@@ -209,7 +414,7 @@ export function generateSuggestionsWithDebug(
                 .join(' ')
             }`.trim(),
           },
-          evidence_spans: section.body_lines.length > 0 
+          evidence_spans: section.body_lines.length > 0
             ? [{
                 start_line: section.start_line,
                 end_line: Math.min(section.end_line, section.start_line + 5),
@@ -227,10 +432,10 @@ export function generateSuggestionsWithDebug(
           clarification_reasons: ['fallback_synthesis'],
           is_high_confidence: false,
         };
-        
+
         synthesizedSuggestions.push(fallbackSuggestion);
         sectionIdsWithSuggestions.add(section.section_id);
-        
+
         if (ledger) {
           console.warn('[PLAN_CHANGE_FALLBACK] Created fallback suggestion for section:', section.section_id);
         }
@@ -240,9 +445,24 @@ export function generateSuggestionsWithDebug(
     // Record synthesis results
     if (ledger) {
       for (const suggestion of synthesizedSuggestions) {
-        const sectionDebug = ledger.getSection(suggestion.section_id);
+        let sectionDebug = ledger.getSection(suggestion.section_id);
+
+        // Handle topic-isolated subsections: if debug entry not found, try parent section
+        if (!sectionDebug && suggestion.section_id.includes('__topic_')) {
+          const parentId = suggestion.section_id.split('__topic_')[0];
+          sectionDebug = ledger.getSection(parentId);
+          if (sectionDebug && finalConfig.enable_debug) {
+            console.warn('[DEBUG] Subsection debug entry not found, using parent:', {
+              subsectionId: suggestion.section_id,
+              parentId,
+            });
+          }
+        }
+
         if (sectionDebug) {
           ledger.afterSynthesis(sectionDebug, suggestion);
+        } else if (finalConfig.enable_debug) {
+          console.error('[DEBUG] Section debug entry not found for suggestion:', suggestion.section_id);
         }
       }
       ledger.recordStageTiming(DropStage.SYNTHESIS, Date.now() - synthStart);
@@ -252,10 +472,16 @@ export function generateSuggestionsWithDebug(
       return buildResult([], ledger, finalConfig.enable_debug);
     }
 
-    // Build section lookup map
+    // Build section lookup map (include both original classified sections and expanded subsections)
     const sectionMap = new Map<string, ClassifiedSection>();
     for (const section of classifiedSections) {
       sectionMap.set(section.section_id, section);
+    }
+    // Add expanded subsections to map
+    for (const section of expandedSections) {
+      if (!sectionMap.has(section.section_id)) {
+        sectionMap.set(section.section_id, section);
+      }
     }
 
     // ============================================
@@ -265,41 +491,75 @@ export function generateSuggestionsWithDebug(
     const validatedSuggestions: Suggestion[] = [];
 
     for (const suggestion of synthesizedSuggestions) {
-      const section = sectionMap.get(suggestion.section_id);
-      if (!section) {
+      try {
+        let section = sectionMap.get(suggestion.section_id);
+
+        // Handle topic-isolated sub-sections: if section not found, try parent section
+        if (!section && suggestion.section_id.includes('__topic_')) {
+          const parentId = suggestion.section_id.split('__topic_')[0];
+          section = sectionMap.get(parentId);
+        }
+
+        if (!section) {
+          const errorMsg = `Section not found for suggestion ${suggestion.suggestion_id}`;
+          if (finalConfig.enable_debug) {
+            console.error('[VALIDATION_ERROR]', {
+              suggestionId: suggestion.suggestion_id,
+              sectionId: suggestion.section_id,
+              error: errorMsg,
+            });
+          }
+          if (ledger) {
+            ledger.dropCandidateById(
+              suggestion.suggestion_id,
+              DropReason.INTERNAL_ERROR
+            );
+          }
+          continue;
+        }
+
+        const validationResult = runQualityValidators(
+          suggestion,
+          section,
+          finalConfig.thresholds,
+          section.typeLabel
+        );
+
+        // Record validation results
+        if (ledger) {
+          const sectionDebug = ledger.getSection(suggestion.section_id);
+          if (sectionDebug) {
+            ledger.afterValidation(sectionDebug, suggestion, validationResult.results);
+          }
+        }
+
+        if (validationResult.passed) {
+          suggestion.validation_results = validationResult.results;
+          validatedSuggestions.push(suggestion);
+        } else {
+          // Map validator to drop reason
+          const dropReason = mapValidatorToDropReason(validationResult.failedValidator);
+
+          if (ledger) {
+            ledger.dropCandidateById(suggestion.suggestion_id, dropReason);
+          }
+        }
+      } catch (error) {
+        // Capture validation errors in debug mode
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (finalConfig.enable_debug) {
+          console.error('[VALIDATION_ERROR]', {
+            suggestionId: suggestion.suggestion_id,
+            sectionId: suggestion.section_id,
+            error: errorMessage,
+            stack: error instanceof Error ? error.stack : undefined,
+          });
+        }
         if (ledger) {
           ledger.dropCandidateById(
             suggestion.suggestion_id,
             DropReason.INTERNAL_ERROR
           );
-        }
-        continue;
-      }
-
-      const validationResult = runQualityValidators(
-        suggestion,
-        section,
-        finalConfig.thresholds,
-        section.typeLabel
-      );
-
-      // Record validation results
-      if (ledger) {
-        const sectionDebug = ledger.getSection(suggestion.section_id);
-        if (sectionDebug) {
-          ledger.afterValidation(sectionDebug, suggestion, validationResult.results);
-        }
-      }
-
-      if (validationResult.passed) {
-        suggestion.validation_results = validationResult.results;
-        validatedSuggestions.push(suggestion);
-      } else {
-        // Map validator to drop reason
-        const dropReason = mapValidatorToDropReason(validationResult.failedValidator);
-
-        if (ledger) {
-          ledger.dropCandidateById(suggestion.suggestion_id, dropReason);
         }
       }
     }

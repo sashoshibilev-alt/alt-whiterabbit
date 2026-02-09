@@ -24,6 +24,7 @@ export enum DropStage {
   SEGMENTATION = "SEGMENTATION",
   ACTIONABILITY = "ACTIONABILITY",
   TYPE = "TYPE",
+  TOPIC_ISOLATION = "TOPIC_ISOLATION",
   SYNTHESIS = "SYNTHESIS",
   EVIDENCE = "EVIDENCE",
   VALIDATION = "VALIDATION",
@@ -47,6 +48,8 @@ export enum DropReason {
   DUPLICATE_FINGERPRINT = "DUPLICATE_FINGERPRINT",
   INTERNAL_ERROR = "INTERNAL_ERROR",
   LOW_RELEVANCE = "LOW_RELEVANCE",
+  SUPPRESSED_SECTION = "SUPPRESSED_SECTION",
+  SPLIT_INTO_SUBSECTIONS = "SPLIT_INTO_SUBSECTIONS",
 }
 
 /**
@@ -72,6 +75,8 @@ export const DROP_REASON_STAGE: Record<DropReason, DropStage> = {
   [DropReason.DUPLICATE_FINGERPRINT]: DropStage.DEDUPE,
   [DropReason.INTERNAL_ERROR]: DropStage.VALIDATION,
   [DropReason.LOW_RELEVANCE]: DropStage.POST_SYNTHESIS_SUPPRESS,
+  [DropReason.SUPPRESSED_SECTION]: DropStage.POST_SYNTHESIS_SUPPRESS,
+  [DropReason.SPLIT_INTO_SUBSECTIONS]: DropStage.TOPIC_ISOLATION,
 };
 
 // ============================================
@@ -291,6 +296,9 @@ export interface SectionDebug {
 
   errorMessage?: string;
   errorStage?: DropStage;
+
+  /** Additional metadata (e.g., topic isolation debug info) */
+  metadata?: Record<string, unknown>;
 }
 
 // ============================================

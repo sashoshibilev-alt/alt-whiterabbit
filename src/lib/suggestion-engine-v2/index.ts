@@ -27,7 +27,7 @@ import type {
 import { DEFAULT_CONFIG as defaultConfig } from './types';
 import { preprocessNote, resetSectionCounter } from './preprocessing';
 import { classifySections, filterActionableSections } from './classifiers';
-import { synthesizeSuggestions, resetSuggestionCounter } from './synthesis';
+import { synthesizeSuggestions, resetSuggestionCounter, shouldSplitByTopic, splitSectionByTopic } from './synthesis';
 import { runQualityValidators } from './validators';
 import { runScoringPipeline, refineSuggestionScores } from './scoring';
 import { routeSuggestions, computeRoutingStats } from './routing';
@@ -157,19 +157,40 @@ export function generateSuggestions(
   }
 
   // ============================================
+  // Stage 2.5: Topic Isolation (Before Synthesis)
+  // ============================================
+  // Split mixed-topic sections into topic-isolated subsections BEFORE synthesis
+  // This ensures subsections go through normal synthesis instead of fallback path
+  const expandedSections: ClassifiedSection[] = [];
+  for (const section of actionableSections) {
+    if (shouldSplitByTopic(section)) {
+      const subsections = splitSectionByTopic(section);
+      expandedSections.push(...subsections);
+    } else {
+      expandedSections.push(section);
+    }
+  }
+
+  // ============================================
   // Stage 3: Synthesis
   // ============================================
-  const synthesizedSuggestions = synthesizeSuggestions(actionableSections);
+  const synthesizedSuggestions = synthesizeSuggestions(expandedSections);
   debug.suggestions_before_validation = synthesizedSuggestions.length;
 
   if (synthesizedSuggestions.length === 0) {
     return buildResult([], debug, finalConfig.enable_debug);
   }
 
-  // Build section lookup map
+  // Build section lookup map (include both original classified sections and expanded subsections)
   const sectionMap = new Map<string, ClassifiedSection>();
   for (const section of classifiedSections) {
     sectionMap.set(section.section_id, section);
+  }
+  // Add expanded subsections to map
+  for (const section of expandedSections) {
+    if (!sectionMap.has(section.section_id)) {
+      sectionMap.set(section.section_id, section);
+    }
   }
 
   // ============================================
@@ -178,36 +199,60 @@ export function generateSuggestions(
   const validatedSuggestions: Suggestion[] = [];
 
   for (const suggestion of synthesizedSuggestions) {
-    const section = sectionMap.get(suggestion.section_id);
-    if (!section) {
+    try {
+      let section = sectionMap.get(suggestion.section_id);
+
+      // Handle topic-isolated sub-sections: if section not found, try parent section
+      if (!section && suggestion.section_id.includes('__topic_')) {
+        const parentId = suggestion.section_id.split('__topic_')[0];
+        section = sectionMap.get(parentId);
+      }
+
+      if (!section) {
+        debug.dropped_suggestions.push({
+          section_id: suggestion.section_id,
+          reason: 'Section not found',
+        });
+        continue;
+      }
+
+      const validationResult = runQualityValidators(
+        suggestion,
+        section,
+        finalConfig.thresholds,
+        section.typeLabel
+      );
+
+      if (validationResult.passed) {
+        // Store validation results in suggestion
+        suggestion.validation_results = validationResult.results;
+        validatedSuggestions.push(suggestion);
+      } else {
+        // Track drop
+        const validator = validationResult.failedValidator;
+        if (validator === 'V2_anti_vacuity') debug.v2_drops++;
+        else if (validator === 'V3_evidence_sanity') debug.v3_drops++;
+
+        debug.dropped_suggestions.push({
+          section_id: suggestion.section_id,
+          reason: validationResult.failureReason || 'Validation failed',
+          validator: validator,
+        });
+      }
+    } catch (error) {
+      // Capture validation errors in debug mode
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (finalConfig.enable_debug) {
+        console.error('[VALIDATION_ERROR]', {
+          suggestionId: suggestion.suggestion_id,
+          sectionId: suggestion.section_id,
+          error: errorMessage,
+          stack: error instanceof Error ? error.stack : undefined,
+        });
+      }
       debug.dropped_suggestions.push({
         section_id: suggestion.section_id,
-        reason: 'Section not found',
-      });
-      continue;
-    }
-
-    const validationResult = runQualityValidators(
-      suggestion,
-      section,
-      finalConfig.thresholds,
-      section.typeLabel
-    );
-
-    if (validationResult.passed) {
-      // Store validation results in suggestion
-      suggestion.validation_results = validationResult.results;
-      validatedSuggestions.push(suggestion);
-    } else {
-      // Track drop
-      const validator = validationResult.failedValidator;
-      if (validator === 'V2_anti_vacuity') debug.v2_drops++;
-      else if (validator === 'V3_evidence_sanity') debug.v3_drops++;
-
-      debug.dropped_suggestions.push({
-        section_id: suggestion.section_id,
-        reason: validationResult.failureReason || 'Validation failed',
-        validator: validator,
+        reason: `Internal error: ${errorMessage.substring(0, 100)}`,
       });
     }
   }
