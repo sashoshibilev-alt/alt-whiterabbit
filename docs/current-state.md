@@ -1,5 +1,241 @@
 # Current State
 
+## Strategic Relevance Suppression & Topic Isolation (2026-02-09)
+
+**Files**: `synthesis.ts`, `debugTypes.ts`, `types.ts`, `strategic-relevance-and-topic-isolation.test.ts`
+
+Implemented two tightly-scoped quality improvements to filter low-value suggestions and prevent cross-topic leakage in mixed sections.
+
+### Problem 1: Low-Relevance Suggestions
+
+The engine emitted technically actionable suggestions that are not useful to show right now:
+- Generic summary sections (e.g., "💡 Summary", "Overview")
+- "Next steps" task lists that are administrative
+- Internal culture/naming conventions without delivery impact (e.g., "rename servers to Game of Thrones names")
+
+### Problem 2: Mixed-Topic Sections
+
+Long "Discussion details" sections with multiple topics caused cross-topic leakage during synthesis:
+- Example: "New Feature Requests" evidence → "Game of Thrones server names" appearing in output
+- Single section containing unrelated topics (features, timelines, culture) synthesized together
+
+### Solution: Post-Synthesis Suppression
+
+**Implementation** (`synthesis.ts` lines 1415-1478):
+
+Added `shouldSuppressCandidate()` function that runs **after synthesis** but **before emitting**:
+
+1. **Next Steps Suppression (Rule A)**:
+   - Headings: "Next steps", "Action items", "Follow-ups", "TODO" (case-insensitive, works with emoji)
+   - Suppresses ALL candidates from these sections
+
+2. **Summary/Recap Suppression (Rule B)**:
+   - Keywords: "summary", "overview", "tl;dr", "recap"
+   - Detects emoji headings (e.g., "💡 Summary", "🚀 Next steps")
+   - Suppresses ALL candidates from summary-type sections
+
+3. **Low-Impact Culture Suppression (Rule C)**:
+   - Culture markers: "naming convention", "server naming", "rename", "meeting-free", "wednesdays", "ritual", "culture shift", "avoid confusion"
+   - Hard delivery signals (exemptions): project name, numeric delta (days/weeks/sprints), date references (Q1-Q4, ISO dates), customer impact words
+   - Suppresses ONLY if culture marker present AND no hard delivery signals
+
+**Behavior**:
+- Candidates marked with `dropStage = POST_SYNTHESIS_SUPPRESS` and `dropReason = LOW_RELEVANCE`
+- Debug explainability preserved (candidates dropped but reason recorded)
+- Deterministic rules, no ML/embeddings
+
+### Solution: Topic Isolation
+
+**Implementation** (`synthesis.ts` lines 1480-1585):
+
+Added section splitting logic to prevent cross-topic evidence leakage:
+
+1. **Split Trigger** (`shouldSplitByTopic()`):
+   - Explicit "Discussion details", "Discussion", or "Details" heading
+   - OR bulletCount >= 5 OR charCount >= 500
+   - AND body contains at least one topic anchor
+
+2. **Topic Anchors** (deterministic labels):
+   - "New Feature Requests:"
+   - "Project Timelines:"
+   - "Internal Operations:"
+   - "Cultural Shift:"
+
+3. **Sub-Section Creation** (`splitSectionByTopic()`):
+   - Split section into sub-blocks by topic anchors
+   - Each sub-block gets isolated section_id (e.g., `sec_abc_sub0`, `sec_abc_sub1`)
+   - Evidence spans constrained to sub-block boundaries
+   - Synthesis runs independently per sub-block
+
+**Behavior**:
+- "Discussion details" with mixed topics → split into isolated sub-sections
+- Project Ares suggestion body DOES NOT contain "offline mode" or "Game of Thrones"
+- Suppression rules (Rule C) still apply to sub-blocks (e.g., culture shift sub-block suppressed)
+- No splitting if no topic anchors detected (returns original section)
+
+### Tests
+
+**File**: `strategic-relevance-and-topic-isolation.test.ts` (12 tests, all passing)
+
+**Suppression Tests** (7 tests):
+- Emoji headings: "💡 Summary", "🚀 Next steps" suppressed
+- Explicit headings: "Next Steps", "Action Items" suppressed
+- Culture markers: naming/ritual suppressed when no hard delivery signals
+- Hard signals: Project Ares delay (14 days, Q2 2025, customer beta) NOT suppressed
+- Project name reference: culture shift with "Project Zenith" NOT suppressed
+
+**Topic Isolation Tests** (5 tests):
+- "Discussion details" section split by topic anchors, no cross-topic leakage
+- Long sections (bulletCount >= 5) split when topic anchors present
+- Char count threshold (>= 500) triggers split with topic anchors
+- Sections without anchors NOT split
+- Combined: split + suppression work together
+
+### Pipeline Integration
+
+**Modified `synthesizeSuggestions()`** (`synthesis.ts` lines 1640-1730):
+
+1. Pre-existing derivative content check (summary heading or 70% overlap)
+2. **NEW**: Topic isolation check → split if needed
+3. Decision table normalization (status marker stripping, duplicate detection)
+4. Synthesis per section/sub-section
+5. **NEW**: Post-synthesis suppression → check `shouldSuppressCandidate()`
+6. If suppressed: mark dropStage/dropReason, skip emitting
+7. Track evidence for derivative detection
+
+### Type System Changes
+
+**`debugTypes.ts`**:
+- Added `DropStage.POST_SYNTHESIS_SUPPRESS`
+- Added `DropReason.LOW_RELEVANCE`
+- Updated `DROP_REASON_STAGE` mapping
+
+**`types.ts`**:
+- Added `dropStage?: string` to Suggestion interface
+- Added `dropReason?: string` (new field, prefer over legacy `drop_reason`)
+
+### Minimal Diff
+
+- **synthesis.ts**: 370 lines added (suppression + topic isolation functions + pipeline modifications)
+- **debugTypes.ts**: 2 enum values added + 1 mapping entry
+- **types.ts**: 2 fields added to Suggestion interface
+- **strategic-relevance-and-topic-isolation.test.ts**: 380 lines (new test file, 12 tests)
+- **No changes** to: thresholds, scoring, validators, routing, classifiers, evidence extraction core logic
+- **All existing tests pass**: 302 tests across suggestion-engine-v2 (12 skipped)
+
+### Risks / Follow-ups
+
+1. **Culture marker coverage**: May need to add more patterns if new culture topics appear in production
+2. **Topic anchor coverage**: Currently supports 4 anchor labels; may need expansion for other meeting formats
+3. **Sub-section actionability**: Split sub-blocks must still pass actionability gates; very short sub-blocks may be dropped
+4. **Emoji detection**: Unicode ranges cover common emojis but may miss new emoji standards
+
+---
+
+## Derivative Content Suppression & Decision Table Normalization (2026-02-09)
+
+**Files**: `synthesis.ts`, `derivative-suppression.test.ts`
+
+Implemented two tightly-scoped quality improvements to prevent redundant suggestions and clean decision table outputs.
+
+### Problem 1: Derivative Content (Summary/Overview Sections)
+
+Some sections (e.g., "Summary", "Overview", "TL;DR", "Recap") restate information that already appears in more concrete sections. These derivative sections were emitting redundant suggestions.
+
+### Problem 2: Decision Table Status Noise
+
+Decision tables often include status columns ("Aligned", "Needs Discussion") that polluted suggestion titles and bodies. Duplicate decisions across rows were also being emitted.
+
+### Solution: Derivative Content Suppression
+
+**Implementation** (`synthesis.ts` lines 1260-1316):
+
+1. **Added helper functions**:
+   - `normalizeForDerivativeCheck()`: Normalize text for overlap detection (lowercase, strip punctuation, collapse whitespace)
+   - `computeOverlapRatio()`: Calculate word-level overlap between section and emitted evidence (0-1 ratio)
+   - `isDerivativeSection()`: Return true if overlap >= 70%
+   - `isSummaryHeading()`: Detect summary-type headings
+
+2. **Modified `synthesizeSuggestions()`** (lines 1505-1576):
+   - Track `emittedEvidenceTexts` array as pipeline progresses
+   - For each actionable section:
+     - Check if heading is summary-type OR content overlap >= 70%
+     - If derivative: skip synthesis entirely (no suggestion emitted)
+     - If not derivative: synthesize and append evidence to tracker
+
+**Behavior**:
+- Summary/Overview/TL;DR/Recap sections suppressed when redundant
+- 70% overlap threshold ensures only truly derivative content is suppressed
+- Deterministic: word-based overlap, no ML/embeddings
+- Evidence tracking is sequential: earlier sections always emit first
+
+### Solution: Decision Table Normalization
+
+**Implementation** (`synthesis.ts` lines 1318-1401):
+
+1. **Added helper functions**:
+   - `STATUS_MARKERS`: Regex patterns for common status markers (Aligned, Needs Discussion, Pending, etc.)
+   - `containsStatusMarker()`: Check if text has status markers
+   - `stripStatusMarkers()`: Remove status markers from text
+   - `extractDecisionStatement()`: Extract first column from table rows (handles `|`, tabs, multi-space separators)
+   - `areDecisionsDuplicate()`: Compare normalized decision texts for near-duplicates
+
+2. **Modified `synthesizeSuggestions()`** (lines 1526-1562):
+   - Track `emittedDecisions` array
+   - For sections with status markers:
+     - Extract clean decision from each line (first column, status stripped)
+     - Check if decision was already emitted (duplicate detection)
+     - Skip duplicate decision lines
+     - If all lines are duplicates: skip entire section
+   - Create `processedSection` with cleaned lines and raw_text
+
+**Behavior**:
+- Status markers ("Aligned", "Needs Discussion") removed from suggestion bodies
+- Decision statements extracted from first column of tables
+- Duplicate decisions suppressed (e.g., same decision with different status)
+- Supports pipe-separated (`|`), tab-separated, and multi-space column formats
+- Deterministic text comparison
+
+### Tests
+
+**File**: `derivative-suppression.test.ts` (15 tests, all passing)
+
+**Derivative Content Tests** (6 tests):
+- Summary section suppressed when redundant
+- TL;DR section suppressed with high overlap
+- Overview section suppressed at >= 70% threshold
+- Sections below 70% NOT suppressed
+- Multiple concrete sections before summary
+- Recap heading recognized
+
+**Decision Table Tests** (6 tests):
+- Status markers stripped from decision text
+- Table-formatted decisions with pipe separators handled
+- Duplicate decisions suppressed across rows
+- First column extracted from multi-column tables
+- Decisions without table structure but with status markers
+- Clean decisions preserved (no status markers)
+
+**Combined Tests** (3 tests):
+- Decision table with summary section
+- Deterministic across multiple runs
+- All-duplicate decision section suppressed
+
+### Minimal Diff
+
+- **synthesis.ts**: 169 lines added (helper functions + pipeline modifications)
+- **derivative-suppression.test.ts**: 348 lines (new test file)
+- **No changes** to: thresholds, scoring, validators, routing, classifiers, evidence extraction
+- **All existing tests pass**: 290 tests across suggestion-engine-v2
+
+### Risks / Follow-ups
+
+1. **Overlap threshold tuning**: 70% threshold may need adjustment based on production data
+2. **Status marker coverage**: May need to add more status patterns if new ones appear
+3. **Column separator detection**: Currently handles `|`, tabs, and multi-space; may need refinement for edge cases
+
+---
+
 ## Idea Title Generation: Proposal and Friction Based (2026-02-08)
 
 **Files**: `synthesis.ts`, `body-generation.test.ts`

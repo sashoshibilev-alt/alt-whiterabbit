@@ -18,6 +18,7 @@ import type {
 import { normalizeForComparison } from './preprocessing';
 import { computeSuggestionKey } from '../suggestion-keys';
 import { PROPOSAL_VERBS_IDEA_ONLY } from './classifiers';
+import { DropStage, DropReason } from './debugTypes';
 
 // ============================================
 // ID Generation
@@ -1256,6 +1257,345 @@ function createSpan(lines: Line[]): EvidenceSpan {
 }
 
 // ============================================
+// Derivative Content Suppression
+// ============================================
+
+/**
+ * Normalize text for derivative content detection
+ * Removes punctuation, collapses whitespace, lowercases
+ */
+function normalizeForDerivativeCheck(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s]/g, '') // Remove punctuation
+    .replace(/\s+/g, ' ')     // Collapse whitespace
+    .trim();
+}
+
+/**
+ * Compute overlap ratio between section text and emitted evidence
+ * Returns a ratio [0, 1] representing how much of the section appears in emitted evidence
+ */
+function computeOverlapRatio(sectionText: string, emittedEvidenceTexts: string[]): number {
+  if (emittedEvidenceTexts.length === 0) return 0;
+
+  const normalizedSection = normalizeForDerivativeCheck(sectionText);
+  const sectionWords = normalizedSection.split(/\s+/).filter(w => w.length > 3);
+
+  if (sectionWords.length === 0) return 0;
+
+  // Build combined evidence text
+  const combinedEvidence = normalizeForDerivativeCheck(emittedEvidenceTexts.join(' '));
+  const evidenceSet = new Set(combinedEvidence.split(/\s+/).filter(w => w.length > 3));
+
+  // Count how many section words appear in evidence
+  let matchCount = 0;
+  for (const word of sectionWords) {
+    if (evidenceSet.has(word)) {
+      matchCount++;
+    }
+  }
+
+  return matchCount / sectionWords.length;
+}
+
+/**
+ * Check if a section is derivative (mostly redundant with already-emitted content)
+ * Returns true if overlap >= 70%
+ */
+function isDerivativeSection(
+  section: ClassifiedSection,
+  emittedEvidenceTexts: string[]
+): boolean {
+  const DERIVATIVE_THRESHOLD = 0.70;
+  const overlapRatio = computeOverlapRatio(section.raw_text, emittedEvidenceTexts);
+  return overlapRatio >= DERIVATIVE_THRESHOLD;
+}
+
+/**
+ * Check if heading indicates a summary/overview/recap section
+ */
+function isSummaryHeading(headingText?: string): boolean {
+  if (!headingText) return false;
+  const normalized = headingText.toLowerCase().trim();
+  const summaryHeadings = ['summary', 'overview', 'tl;dr', 'tldr', 'recap', 'key takeaways'];
+  return summaryHeadings.some(h => normalized === h || normalized.startsWith(h + ':'));
+}
+
+// ============================================
+// Decision Table Normalization
+// ============================================
+
+/**
+ * Status markers commonly found in decision tables
+ */
+const STATUS_MARKERS = [
+  /\baligned\b/i,
+  /\bneeds discussion\b/i,
+  /\bpending\b/i,
+  /\bin progress\b/i,
+  /\bcompleted?\b/i,
+  /\bapproved\b/i,
+  /\brejected\b/i,
+  /\bblocked\b/i,
+];
+
+/**
+ * Detect if text contains a status marker
+ */
+function containsStatusMarker(text: string): boolean {
+  return STATUS_MARKERS.some(pattern => pattern.test(text));
+}
+
+/**
+ * Strip status markers from text
+ * Returns cleaned text with status markers removed
+ */
+function stripStatusMarkers(text: string): string {
+  let cleaned = text;
+  for (const pattern of STATUS_MARKERS) {
+    cleaned = cleaned.replace(pattern, '');
+  }
+  // Clean up extra whitespace/punctuation left behind
+  return cleaned.replace(/\s+/g, ' ').replace(/[,;:]\s*$/, '').trim();
+}
+
+/**
+ * Extract decision from a line (first column before status marker)
+ * For table rows like "Decision | Status", extracts "Decision"
+ */
+function extractDecisionStatement(text: string): string {
+  // Strip list markers first
+  let cleaned = normalizeLineForSynthesis(text);
+
+  // Check for table separator (| or multiple spaces/tabs)
+  const tableSeparators = [/\s*\|\s*/, /\s{3,}/, /\t+/];
+
+  for (const separator of tableSeparators) {
+    const parts = cleaned.split(separator);
+    if (parts.length >= 2) {
+      // Take first column, strip status markers
+      const firstCol = parts[0].trim();
+      if (firstCol.length > 10) {
+        return stripStatusMarkers(firstCol);
+      }
+    }
+  }
+
+  // No table structure detected, strip status markers from full text
+  return stripStatusMarkers(cleaned);
+}
+
+/**
+ * Check if two decision statements are near-duplicates
+ * Uses normalized text comparison
+ */
+function areDecisionsDuplicate(decision1: string, decision2: string): boolean {
+  const norm1 = normalizeForDerivativeCheck(decision1);
+  const norm2 = normalizeForDerivativeCheck(decision2);
+
+  // Exact match after normalization
+  if (norm1 === norm2) return true;
+
+  // Check if one is substring of the other (very similar decisions)
+  if (norm1.length > 0 && norm2.length > 0) {
+    const longer = norm1.length > norm2.length ? norm1 : norm2;
+    const shorter = norm1.length > norm2.length ? norm2 : norm1;
+    if (longer.includes(shorter) && shorter.length >= 15) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// ============================================
+// Post-Synthesis Suppression
+// ============================================
+
+/**
+ * Check if candidate should be suppressed based on strategic relevance
+ * Post-synthesis suppression for low-value candidates
+ */
+function shouldSuppressCandidate(candidate: Suggestion, section: ClassifiedSection): boolean {
+  const headingText = section.heading_text?.trim() || '';
+  const normalizedHeading = headingText.toLowerCase();
+  // Remove emojis from normalized heading for comparison
+  const headingWithoutEmoji = normalizedHeading.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim();
+  const normalizedBody = normalizeForComparison(candidate.suggestion?.body || '');
+
+  // A) Next steps suppression (explicit)
+  const nextStepsHeadings = [
+    'next steps',
+    'action items',
+    'follow-ups',
+    'followups',
+    'to do',
+    'todo',
+  ];
+  if (nextStepsHeadings.some(h => headingWithoutEmoji === h || normalizedHeading === h)) {
+    return true;
+  }
+
+  // B) Summary/recap suppression (explicit, including emoji headings)
+  const summaryKeywords = ['summary', 'overview', 'tl;dr', 'tldr', 'recap'];
+  // Check if heading contains summary keywords (with or without emoji)
+  if (summaryKeywords.some(kw => headingWithoutEmoji.includes(kw) || normalizedHeading.includes(kw))) {
+    return true;
+  }
+
+  // C) Low-impact internal culture / naming conventions
+  const cultureMarkers = [
+    'naming convention',
+    'server naming',
+    'rename',
+    'meeting-free',
+    'wednesdays',
+    'wednesday',
+    'ritual',
+    'culture shift',
+    'avoid confusion',
+  ];
+
+  const hasCultureMarker = cultureMarkers.some(marker => normalizedBody.includes(marker));
+
+  if (hasCultureMarker) {
+    // Check for hard delivery signals
+    const hasProjectName = /\bproject\s+\w+\b/i.test(normalizedBody);
+    const hasNumericDelta = /\b\d+\s+(day|week|sprint|month)s?\b/i.test(normalizedBody);
+    const hasDateReference = /\b\d{4}-\d{2}-\d{2}\b|Q[1-4]\b/i.test(normalizedBody);
+    const hasCustomerImpact = /\b(customer|beta|launch|release|public|external)\b/i.test(normalizedBody);
+
+    const hasHardSignal = hasProjectName || hasNumericDelta || hasDateReference || hasCustomerImpact;
+
+    // Suppress if culture marker present AND no hard delivery signal
+    if (!hasHardSignal) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// ============================================
+// Topic Isolation for Mixed Sections
+// ============================================
+
+/**
+ * Topic anchor labels for splitting mixed-topic sections
+ */
+const TOPIC_ANCHORS = [
+  'new feature requests:',
+  'project timelines:',
+  'internal operations:',
+  'cultural shift:',
+];
+
+/**
+ * Check if section should be split by topic
+ */
+function shouldSplitByTopic(section: ClassifiedSection): boolean {
+  const headingText = (section.heading_text || '').toLowerCase().trim();
+
+  // Check for explicit "Discussion details" or similar headings
+  const discussionHeadings = ['discussion details', 'discussion', 'details'];
+  const hasDiscussionHeading = discussionHeadings.some(h => headingText === h || headingText.startsWith(h + ':'));
+
+  // Check for long sections with many bullets or high character count
+  const bulletCount = section.body_lines.filter(l => l.line_type === 'list_item').length;
+  const charCount = section.raw_text.length;
+  const isLongSection = bulletCount >= 5 || charCount >= 500;
+
+  // Only split if:
+  // 1. Has "Discussion details" heading OR is long section
+  // 2. AND contains at least one topic anchor in the body
+  if (hasDiscussionHeading || isLongSection) {
+    const bodyText = section.raw_text.toLowerCase();
+    const hasTopicAnchors = TOPIC_ANCHORS.some(anchor => bodyText.includes(anchor));
+    return hasTopicAnchors;
+  }
+
+  return false;
+}
+
+/**
+ * Split section into topic-based sub-blocks
+ * Returns array of sub-sections with isolated content
+ */
+function splitSectionByTopic(section: ClassifiedSection): ClassifiedSection[] {
+  const lines = section.body_lines;
+  const subSections: ClassifiedSection[] = [];
+
+  let currentTopicLabel: string | null = null;
+  let currentBlockLines: Line[] = [];
+  let subBlockIndex = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmedText = line.text.trim().toLowerCase();
+
+    // Check if line starts with a topic anchor
+    const matchedAnchor = TOPIC_ANCHORS.find(anchor => trimmedText.startsWith(anchor));
+
+    if (matchedAnchor) {
+      // Save previous block if it exists
+      if (currentBlockLines.length > 0 && currentTopicLabel) {
+        subSections.push(createSubSection(section, currentTopicLabel, currentBlockLines, subBlockIndex));
+        subBlockIndex++;
+      }
+
+      // Start new block
+      currentTopicLabel = matchedAnchor.replace(':', '').trim();
+      currentBlockLines = [];
+      // Don't include the anchor line itself in the block
+      continue;
+    }
+
+    // Add line to current block
+    if (currentTopicLabel) {
+      currentBlockLines.push(line);
+    } else {
+      // Lines before first anchor - keep them in a default block
+      currentBlockLines.push(line);
+    }
+  }
+
+  // Save final block
+  if (currentBlockLines.length > 0 && currentTopicLabel) {
+    subSections.push(createSubSection(section, currentTopicLabel, currentBlockLines, subBlockIndex));
+  }
+
+  // If no anchors found, return original section as single block
+  if (subSections.length === 0) {
+    return [section];
+  }
+
+  return subSections;
+}
+
+/**
+ * Create a sub-section from a topic block
+ */
+function createSubSection(
+  parentSection: ClassifiedSection,
+  topicLabel: string,
+  lines: Line[],
+  index: number
+): ClassifiedSection {
+  const rawText = lines.map(l => l.text).join('\n');
+
+  return {
+    ...parentSection,
+    section_id: `${parentSection.section_id}_sub${index}`,
+    heading_text: topicLabel,
+    body_lines: lines,
+    raw_text: rawText,
+    start_line: lines[0]?.index || parentSection.start_line,
+    end_line: lines[lines.length - 1]?.index || parentSection.end_line,
+  };
+}
+
+// ============================================
 // Full Synthesis Pipeline
 // ============================================
 
@@ -1351,20 +1691,99 @@ export function synthesizeSuggestion(section: ClassifiedSection): Suggestion | n
 
 /**
  * Synthesize suggestions from all actionable sections
+ * with derivative content suppression, topic isolation, and post-synthesis suppression
  */
 export function synthesizeSuggestions(
   sections: ClassifiedSection[]
 ): Suggestion[] {
   const suggestions: Suggestion[] = [];
 
+  // Track emitted evidence texts for derivative detection
+  const emittedEvidenceTexts: string[] = [];
+
+  // Track emitted decisions for decision table deduplication
+  const emittedDecisions: string[] = [];
+
   for (const section of sections) {
     if (!section.is_actionable || !section.suggested_type) {
       continue;
     }
 
-    const suggestion = synthesizeSuggestion(section);
-    if (suggestion) {
-      suggestions.push(suggestion);
+    // Derivative content suppression: check if section is mostly redundant
+    // Especially applies to summary/overview/recap sections
+    if (isSummaryHeading(section.heading_text) || isDerivativeSection(section, emittedEvidenceTexts)) {
+      // Skip synthesis for this section - it's derivative
+      continue;
+    }
+
+    // Topic isolation: split mixed-topic sections into sub-blocks
+    let sectionsToProcess: ClassifiedSection[] = [section];
+    if (shouldSplitByTopic(section)) {
+      sectionsToProcess = splitSectionByTopic(section);
+    }
+
+    // Process each section (or sub-section)
+    for (const sectionToProcess of sectionsToProcess) {
+      // Decision table normalization: extract clean decision statements
+      // Check if this appears to be a decision section with status markers
+      let processedSection = sectionToProcess;
+      if (containsStatusMarker(sectionToProcess.raw_text)) {
+        // Extract decisions, strip status markers, and check for duplicates
+        const lines = sectionToProcess.body_lines;
+        const cleanedLines: typeof lines = [];
+
+        for (const line of lines) {
+          const decision = extractDecisionStatement(line.text);
+
+          // Check if this decision was already emitted
+          if (emittedDecisions.some(prev => areDecisionsDuplicate(decision, prev))) {
+            // Skip duplicate decision line
+            continue;
+          }
+
+          // Create cleaned line with status markers stripped
+          cleanedLines.push({
+            ...line,
+            text: decision,
+          });
+
+          // Track this decision
+          if (decision.length > 10) {
+            emittedDecisions.push(decision);
+          }
+        }
+
+        // If all decisions were duplicates, skip this section
+        if (cleanedLines.length === 0) {
+          continue;
+        }
+
+        // Update section with cleaned lines
+        processedSection = {
+          ...sectionToProcess,
+          body_lines: cleanedLines,
+          raw_text: cleanedLines.map(l => l.text).join('\n'),
+        };
+      }
+
+      const suggestion = synthesizeSuggestion(processedSection);
+      if (suggestion) {
+        // Post-synthesis suppression: check for low-relevance candidates
+        if (shouldSuppressCandidate(suggestion, processedSection)) {
+          // Mark as suppressed for debug explainability
+          suggestion.dropStage = DropStage.POST_SYNTHESIS_SUPPRESS;
+          suggestion.dropReason = DropReason.LOW_RELEVANCE;
+          // Skip emitting this candidate
+          continue;
+        }
+
+        suggestions.push(suggestion);
+
+        // Track evidence text for derivative detection
+        for (const span of suggestion.evidence_spans) {
+          emittedEvidenceTexts.push(span.text);
+        }
+      }
     }
   }
 

@@ -270,7 +270,9 @@ export interface Suggestion {
   // Debug info
   validation_results?: ValidationResult[];
   dropped?: boolean;
-  drop_reason?: string;
+  dropStage?: string; // DropStage enum value (string for flexibility)
+  dropReason?: string; // DropReason enum value (string for flexibility)
+  drop_reason?: string; // Legacy field, prefer dropReason
 }
 
 // ============================================
