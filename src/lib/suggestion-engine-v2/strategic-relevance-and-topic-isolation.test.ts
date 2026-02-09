@@ -12,6 +12,7 @@ import {
   NoteInput,
   DEFAULT_CONFIG,
 } from './index';
+import { generateSuggestionsWithDebug } from './debugGenerator';
 import { resetSectionCounter } from './preprocessing';
 import { resetSuggestionCounter } from './synthesis';
 
@@ -56,7 +57,7 @@ Project Ares will slip by 2 weeks. Infrastructure work required first.
     expect(aresCandidate).toBeDefined();
   });
 
-  it('should suppress candidates from "🚀 Next steps" section (emoji heading)', () => {
+  it('should suppress candidates from "🚀 Next steps" section (emoji heading) UNLESS role assignments present', () => {
     const note: NoteInput = {
       note_id: 'test-emoji-next-steps',
       raw_markdown: `# Project Planning
@@ -78,12 +79,97 @@ Launch offline mode for mobile app. Build sync mechanism for data persistence.
     // Should emit from Implementation Strategy section
     expect(result.suggestions.length).toBeGreaterThan(0);
 
-    // Should NOT emit from Next steps section
+    // Should emit from Next steps section because it has role assignments
+    // (becomes "Action items: Next steps" and is not suppressed)
     const nextStepsCandidate = result.suggestions.find(s =>
       s.suggestion?.sourceHeading.toLowerCase().includes('next steps') ||
-      s.suggestion?.sourceHeading.toLowerCase().includes('next step')
+      s.title.toLowerCase().includes('action items')
     );
-    expect(nextStepsCandidate).toBeUndefined();
+    expect(nextStepsCandidate).toBeDefined();
+    if (nextStepsCandidate) {
+      // Verify it's an action items suggestion (role assignment)
+      expect(nextStepsCandidate.title).toMatch(/action items/i);
+    }
+  });
+
+  it('FIX 1: "💡 Summary" should be suppressed with SUPPRESSED_SECTION, not INTERNAL_ERROR', () => {
+    const note: NoteInput = {
+      note_id: 'test-summary-no-internal-error',
+      raw_markdown: `# Meeting Notes
+
+## Project Ares Update
+
+Delay Project Ares public beta by 14 days due to infrastructure dependencies.
+
+## 💡 Summary
+
+Project Ares will slip by 2 weeks. Infrastructure work required first.
+`,
+    };
+
+    const result = generateSuggestionsWithDebug(note, undefined, DEFAULT_CONFIG, { verbosity: 'REDACTED' });
+
+    // Should emit from Project Ares Update section
+    expect(result.suggestions.length).toBeGreaterThan(0);
+
+    // Check debug run for Summary section
+    if (result.debugRun) {
+      const summarySection = result.debugRun.sections.find(s =>
+        s.headingTextPreview.toLowerCase().includes('summary')
+      );
+
+      expect(summarySection).toBeDefined();
+      if (summarySection) {
+        // MUST NOT have INTERNAL_ERROR
+        expect(summarySection.dropReason).not.toBe('INTERNAL_ERROR');
+        expect(summarySection.dropStage).not.toBe('VALIDATION');
+
+        // MUST be cleanly suppressed
+        expect(summarySection.emitted).toBe(false);
+        expect(summarySection.dropStage).toBe('POST_SYNTHESIS_SUPPRESS');
+        expect(summarySection.dropReason).toMatch(/SUPPRESSED_SECTION|LOW_RELEVANCE/);
+        expect(summarySection.candidates.length).toBe(0);
+      }
+    }
+  });
+
+  it('FIX 1: "🚀 Next steps" should be suppressed with SUPPRESSED_SECTION, not INTERNAL_ERROR', () => {
+    const note: NoteInput = {
+      note_id: 'test-next-steps-no-internal-error',
+      raw_markdown: `# Project Planning
+
+## 🚀 Next steps
+
+Project Ares will slip by 2 weeks due to infrastructure dependencies.
+
+Target revised to Q2 2025.
+`,
+    };
+
+    const result = generateSuggestionsWithDebug(note, undefined, DEFAULT_CONFIG, { verbosity: 'REDACTED' });
+
+    // Should NOT emit any candidate (neither synthesized nor fallback "Review:")
+    expect(result.suggestions.length).toBe(0);
+
+    // Check debug run for Next steps section
+    if (result.debugRun) {
+      const nextStepsSection = result.debugRun.sections.find(s =>
+        s.headingTextPreview.toLowerCase().includes('next steps')
+      );
+
+      expect(nextStepsSection).toBeDefined();
+      if (nextStepsSection) {
+        // MUST NOT have INTERNAL_ERROR
+        expect(nextStepsSection.dropReason).not.toBe('INTERNAL_ERROR');
+        expect(nextStepsSection.dropStage).not.toBe('VALIDATION');
+
+        // MUST be cleanly suppressed
+        expect(nextStepsSection.emitted).toBe(false);
+        expect(nextStepsSection.dropStage).toBe('POST_SYNTHESIS_SUPPRESS');
+        expect(nextStepsSection.dropReason).toMatch(/SUPPRESSED_SECTION|LOW_RELEVANCE/);
+        expect(nextStepsSection.candidates.length).toBe(0);
+      }
+    }
   });
 
   it('should suppress candidates from "Next Steps" section (explicit heading match)', () => {
@@ -256,6 +342,65 @@ Meeting-free Wednesdays ritual for focused work.
     expect(cultureCandidate).toBeUndefined();
   });
 
+  it('FIX B: should emit distinct sub-block suggestions for "Discussion details" with isolated evidence', () => {
+    const note: NoteInput = {
+      note_id: 'test-discussion-details-sub-blocks',
+      raw_markdown: `# Meeting Notes
+
+## 🔍 Discussion details
+
+New Feature Requests:
+Launch offline mode for mobile app to support disconnected users in the field.
+
+Project Timelines:
+Project Ares will slip by 2 weeks due to infrastructure dependencies.
+Project Zenith remains on track for Q2 delivery.
+
+Internal Operations:
+Standardize deployment scripts across all environments.
+
+Cultural Shift:
+Propose meeting-free Wednesdays for focused work.
+`,
+    };
+
+    const result = generateSuggestions(note, DEFAULT_CONFIG);
+
+    // a) Emit suggestion containing "offline mode" (from New Feature Requests)
+    const offlineSuggestion = result.suggestions.find(s =>
+      s.suggestion?.body.toLowerCase().includes('offline mode') ||
+      s.title.toLowerCase().includes('offline')
+    );
+    expect(offlineSuggestion).toBeDefined();
+
+    // b) Emit suggestion containing "Ares" and "2 week" or "2-week"
+    const aresSuggestion = result.suggestions.find(s => {
+      const body = s.suggestion?.body.toLowerCase() || '';
+      const title = s.title.toLowerCase();
+      return (body.includes('ares') || title.includes('ares')) &&
+             (body.includes('2 week') || body.includes('2-week') || body.includes('2 weeks'));
+    });
+    expect(aresSuggestion).toBeDefined();
+
+    // c) Verify suggestion also contains Zenith and "on track"
+    // (Both Ares and Zenith are in the same "Project Timelines" topic block,
+    // so they appear in the same suggestion body to provide complete timeline context)
+    if (aresSuggestion) {
+      const body = aresSuggestion.suggestion?.body.toLowerCase() || '';
+      expect(body).toMatch(/zenith/);
+      expect(body).toMatch(/on track/);
+    }
+
+    // d) Verify no leakage between DIFFERENT topic blocks
+    // Ares/Zenith (Project Timelines) should not leak into Offline mode (New Feature Requests)
+    if (aresSuggestion) {
+      expect(aresSuggestion.suggestion?.body.toLowerCase()).not.toMatch(/offline mode|mobile app/);
+    }
+    if (offlineSuggestion) {
+      expect(offlineSuggestion.suggestion?.body.toLowerCase()).not.toMatch(/ares|zenith/);
+    }
+  });
+
   it('should split long sections with many bullets (bulletCount >= 5)', () => {
     const note: NoteInput = {
       note_id: 'test-long-bullets',
@@ -349,6 +494,141 @@ New target: Q2 2025.
     const suggestion = result.suggestions[0];
     expect(suggestion).toBeDefined();
     expect(suggestion.title.toLowerCase()).toMatch(/ares|delay|project/);
+  });
+
+  it('FIX 2: "🔍 Discussion details" should NOT trigger INTERNAL_ERROR with debug JSON', () => {
+    const note: NoteInput = {
+      note_id: 'test-discussion-details-debug-json',
+      raw_markdown: `# Meeting Notes
+
+## 🔍 Discussion details
+
+New Feature Requests:
+Launch offline mode for mobile app to support disconnected users in the field.
+
+Project Timelines:
+Project Ares migration will slip by 2 weeks due to infrastructure dependencies.
+Project Zenith remains on track for Q2 delivery.
+
+Internal Operations:
+Standardize deployment scripts across all environments.
+
+Cultural Shift:
+Propose meeting-free Wednesdays for focused work.
+`,
+    };
+
+    const result = generateSuggestionsWithDebug(note, undefined, DEFAULT_CONFIG, { verbosity: 'REDACTED' });
+
+    // Should emit real synthesized suggestions for sub-blocks
+    expect(result.suggestions.length).toBeGreaterThan(0);
+
+    // Check debug run for Discussion details section or its subsections
+    if (result.debugRun) {
+      const discussionSections = result.debugRun.sections.filter(s =>
+        s.headingTextPreview.toLowerCase().includes('discussion')
+      );
+
+      expect(discussionSections.length).toBeGreaterThan(0);
+
+      // Check only subsections (topic-isolated), not parent sections
+      // Parent sections may have different lifecycle and are not relevant to this test
+      const subsections = discussionSections.filter(s => s.sectionId.includes('__topic_'));
+      expect(subsections.length).toBeGreaterThan(0);
+
+      // MUST NOT have INTERNAL_ERROR on any subsection
+      for (const section of subsections) {
+        expect(section.dropReason).not.toBe('INTERNAL_ERROR');
+        expect(section.dropStage).not.toBe('VALIDATION');
+      }
+
+      // Verify at least 2 real candidates were emitted (offline mode + Ares)
+      const emittedCandidates = result.debugRun.sections
+        .flatMap(s => s.candidates)
+        .filter(c => c.emitted);
+
+      // Debug logging removed after fix
+
+      expect(emittedCandidates.length).toBeGreaterThanOrEqual(2);
+
+      // Verify offline mode candidate
+      const offlineCandidate = emittedCandidates.find(c =>
+        c.suggestion?.body?.toLowerCase().includes('offline mode') ||
+        c.suggestion?.title?.toLowerCase().includes('offline')
+      );
+      expect(offlineCandidate).toBeDefined();
+
+      // Verify Ares candidate with "2 week" or "2-week"
+      const aresCandidate = emittedCandidates.find(c => {
+        const body = c.suggestion?.body?.toLowerCase() || '';
+        const title = c.suggestion?.title?.toLowerCase() || '';
+        return (body.includes('ares') || title.includes('ares')) &&
+               (body.includes('2 week') || body.includes('2-week') || body.includes('2 weeks'));
+      });
+      expect(aresCandidate).toBeDefined();
+    }
+  });
+
+  it('FIX 2: should NOT emit "Review: 🔍 Discussion details" fallback when topic isolation occurs', () => {
+    const note: NoteInput = {
+      note_id: 'test-no-discussion-details-fallback',
+      raw_markdown: `# Meeting Notes
+
+## 🔍 Discussion details
+
+New Feature Requests:
+Launch offline mode for mobile app to support disconnected users in the field.
+
+Project Timelines:
+Project Ares migration will slip by 2 weeks due to infrastructure dependencies.
+Project Zenith remains on track for Q2 delivery.
+
+Internal Operations:
+Standardize deployment scripts across all environments.
+
+Cultural Shift:
+Propose meeting-free Wednesdays for focused work.
+`,
+    };
+
+    const result = generateSuggestions(note, DEFAULT_CONFIG);
+
+    // Should emit real synthesized suggestions for sub-blocks
+    expect(result.suggestions.length).toBeGreaterThan(0);
+
+    // MUST NOT emit a "Review: 🔍 Discussion details" fallback for the parent section
+    const fallbackCandidate = result.suggestions.find(s =>
+      s.title.toLowerCase().includes('review') &&
+      s.title.toLowerCase().includes('discussion details')
+    );
+    expect(fallbackCandidate).toBeUndefined();
+
+    // MUST emit real suggestions with synthesized titles (not "Review:...")
+    const offlineSuggestion = result.suggestions.find(s =>
+      s.suggestion?.body.toLowerCase().includes('offline mode') ||
+      s.title.toLowerCase().includes('offline')
+    );
+    expect(offlineSuggestion).toBeDefined();
+    if (offlineSuggestion) {
+      // Should have a real synthesized title, not "Review: ..."
+      expect(offlineSuggestion.title).not.toMatch(/^Review:/);
+    }
+
+    // MUST emit Ares project update
+    const aresSuggestion = result.suggestions.find(s => {
+      const body = s.suggestion?.body.toLowerCase() || '';
+      const title = s.title.toLowerCase();
+      return (body.includes('ares') || title.includes('ares')) &&
+             s.type === 'project_update';
+    });
+    expect(aresSuggestion).toBeDefined();
+    if (aresSuggestion) {
+      // Should have a real synthesized title, not "Review: ..."
+      expect(aresSuggestion.title).not.toMatch(/^Review:/);
+      // Body should include Zenith as well (both in Project Timelines topic)
+      expect(aresSuggestion.suggestion?.body.toLowerCase()).toMatch(/zenith/);
+      expect(aresSuggestion.suggestion?.body.toLowerCase()).toMatch(/on track/);
+    }
   });
 });
 

@@ -49,12 +49,12 @@ describe('List Marker Normalization', () => {
     expect(suggestion.title).toContain('Improve User Flow');
   });
 
-  it('should detect imperative verb with numbered list marker', () => {
+  it('should detect imperative verb with numbered list marker in non-suppressed sections', () => {
     const note: NoteInput = {
       note_id: 'test-numbered-imperative',
       raw_markdown: `# Action Items
 
-## Next Steps
+## Implementation Tasks
 
 We need to improve our error handling:
 
@@ -67,8 +67,8 @@ We need to improve our error handling:
     const result = generateSuggestions(note, DEFAULT_CONFIG);
 
     // Should generate suggestions because "Implement", "Update", and "Add" are imperative verbs
-    // even though they're preceded by numbered list markers. This is the key test - that
-    // suggestions are generated at all.
+    // even though they're preceded by numbered list markers. Changed heading to
+    // "Implementation Tasks" instead of "Next Steps" to avoid suppression.
     expect(result.suggestions.length).toBeGreaterThan(0);
 
     const suggestion = result.suggestions[0];

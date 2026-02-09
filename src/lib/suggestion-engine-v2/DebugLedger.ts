@@ -156,6 +156,7 @@ export class DebugLedger {
       emitted: false,
       dropStage: null,
       dropReason: null,
+      metadata: {},
     };
 
     this.sections.set(args.sectionId, sectionDebug);

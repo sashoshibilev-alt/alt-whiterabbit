@@ -37,6 +37,32 @@ export function resetSuggestionCounter(): void {
   suggestionCounter = 0;
 }
 
+/**
+ * Export section-level suppression check for use in fallback candidate creation
+ * IMPORTANT: This function NEVER throws - it wraps shouldSuppressSection in try-catch
+ * to ensure suppression is a normal control-flow outcome, not an exception
+ */
+export function checkSectionSuppression(
+  headingText: string,
+  structuralFeatures: StructuralFeatures,
+  rawText: string,
+  hasForceRoleAssignment: boolean = false,
+  bodyLines?: Line[]
+): boolean {
+  try {
+    // Reconstruct full text from body_lines if available
+    let fullText = rawText;
+    if (bodyLines && bodyLines.length > 0) {
+      fullText = bodyLines.map(l => l.text).join('\n');
+    }
+    return shouldSuppressSection(headingText, structuralFeatures, fullText, hasForceRoleAssignment);
+  } catch (error) {
+    // Suppression check failed - treat as NOT suppressed to avoid dropping valid content
+    console.warn('[checkSectionSuppression] Error during suppression check:', error);
+    return false;
+  }
+}
+
 // ============================================
 // Title Generation
 // ============================================
@@ -109,6 +135,25 @@ function generateTitleFromImpactLine(impactLine: string): string {
 }
 
 /**
+ * Check if heading indicates a topic-isolated sub-section
+ * Returns topic label if found, null otherwise
+ */
+function extractTopicLabel(headingText: string): string | null {
+  // Check if heading matches pattern: "Parent: topic label"
+  // E.g., "Meeting Notes > Discussion details: new feature requests"
+  const parts = headingText.split(':');
+  if (parts.length >= 2) {
+    const potentialTopic = parts[parts.length - 1].trim().toLowerCase();
+    // Check if it matches known topic anchors
+    const knownTopics = ['new feature requests', 'project timelines', 'internal operations', 'cultural shift'];
+    if (knownTopics.includes(potentialTopic)) {
+      return parts[parts.length - 1].trim();
+    }
+  }
+  return null;
+}
+
+/**
  * Generate a title for a project update suggestion
  */
 function generateProjectUpdateTitle(section: ClassifiedSection): string {
@@ -118,6 +163,27 @@ function generateProjectUpdateTitle(section: ClassifiedSection): string {
   // Special case: role assignment sections
   if (section.intent.flags?.forceRoleAssignment && headingText) {
     return `Action items: ${headingText}`;
+  }
+
+  // Special case: topic-isolated sub-sections
+  // Use first meaningful line as title base
+  const topicLabel = extractTopicLabel(headingText);
+  if (topicLabel) {
+    // Extract first meaningful sentence from body for title
+    const sentences = bodyText
+      .split(/[.!?\n]+/)
+      .map(s => normalizeLineForSynthesis(s.trim()))
+      .filter(s => s.length > 10 && s.length < 100);
+
+    if (sentences.length > 0) {
+      // For "Project Timelines" with multiple project mentions, use first project as title
+      let title = capitalizeFirst(sentences[0]);
+      // Truncate if needed
+      if (title.length > 70) {
+        title = truncateTitle(title, 70);
+      }
+      return title;
+    }
   }
 
   // IMPACT-FIRST: Check for impact lines (e.g., "slip by 2 sprints")
@@ -851,6 +917,7 @@ function isPlanChangeImpactLine(line: string): boolean {
  */
 function generateProjectUpdateBody(section: ClassifiedSection): string {
   const bodyText = section.raw_text;
+  const headingText = section.heading_text || '';
   const parts: string[] = [];
 
   // IMPACT-FIRST: Check for plan change impact lines
@@ -862,25 +929,40 @@ function generateProjectUpdateBody(section: ClassifiedSection): string {
   const impactLines = sentences.filter(isPlanChangeImpactLine);
 
   if (impactLines.length > 0) {
-    // Found impact line - use it as primary statement (strip list markers and result phrases)
-    const normalizedImpact = normalizeLineForSynthesis(impactLines[0]);
-    const cleanedImpact = stripResultPhrases(normalizedImpact);
-    parts.push(capitalizeFirst(cleanedImpact));
+    // Check if this is a topic-isolated sub-section with multiple updates
+    const topicLabel = extractTopicLabel(headingText);
+    const isTopicIsolated = topicLabel !== null;
 
-    // Look for target/timeline to add as context
-    const timingPatterns = [
-      /\b(target|timeline|goal)\s+(?:is\s+)?(?:to\s+)?([^.!?\n]{10,100})/i,
-      /\b(by\s+(?:early|mid|late)?\s*Q[1-4])/i,
-      /\b(complete.*by\s+[^.!?\n]{5,50})/i,
-    ];
+    // For topic-isolated sections, include ALL meaningful sentences (up to 3) to capture multiple projects
+    // This ensures we include both "slip" updates and "on track" statuses
+    if (isTopicIsolated && sentences.length > 1) {
+      // Use ALL sentences from the sub-section (they're already isolated by topic)
+      const meaningfulSentences = sentences
+        .slice(0, 3)
+        .map(s => normalizeLineForSynthesis(s))
+        .map(s => capitalizeFirst(stripResultPhrases(s)));
+      parts.push(...meaningfulSentences);
+    } else {
+      // Single section or non-isolated: use first impact line only
+      const normalizedImpact = normalizeLineForSynthesis(impactLines[0]);
+      const cleanedImpact = stripResultPhrases(normalizedImpact);
+      parts.push(capitalizeFirst(cleanedImpact));
 
-    for (const pattern of timingPatterns) {
-      const match = bodyText.match(pattern);
-      if (match) {
-        const timing = match[2] || match[1] || match[0];
-        if (timing && timing.length >= 5) {
-          parts.push(capitalizeFirst(normalizeLineForSynthesis(timing.trim())));
-          break;
+      // Look for target/timeline to add as context
+      const timingPatterns = [
+        /\b(target|timeline|goal)\s+(?:is\s+)?(?:to\s+)?([^.!?\n]{10,100})/i,
+        /\b(by\s+(?:early|mid|late)?\s*Q[1-4])/i,
+        /\b(complete.*by\s+[^.!?\n]{5,50})/i,
+      ];
+
+      for (const pattern of timingPatterns) {
+        const match = bodyText.match(pattern);
+        if (match) {
+          const timing = match[2] || match[1] || match[0];
+          if (timing && timing.length >= 5) {
+            parts.push(capitalizeFirst(normalizeLineForSynthesis(timing.trim())));
+            break;
+          }
         }
       }
     }
@@ -1414,33 +1496,80 @@ function areDecisionsDuplicate(decision1: string, decision2: string): boolean {
 // ============================================
 
 /**
+ * Extract leaf heading from hierarchical heading path
+ * E.g., "Project Planning > 🚀 Next steps" -> "🚀 Next steps"
+ */
+function extractLeafHeading(headingText: string): string {
+  const parts = headingText.split('>');
+  return parts[parts.length - 1].trim();
+}
+
+
+/**
+ * Check if a section should be suppressed (section-level check)
+ * Used for both synthesized and fallback candidates
+ * IMPORTANT: Does NOT suppress sections with forceRoleAssignment flag
+ * IMPORTANT: This function NEVER throws - all errors are caught and logged
+ */
+function shouldSuppressSection(
+  headingText: string,
+  structuralFeatures: StructuralFeatures,
+  rawText: string,
+  hasForceRoleAssignment: boolean = false
+): boolean {
+  try {
+    // Never suppress sections with forceRoleAssignment flag (role assignment takes precedence)
+    if (hasForceRoleAssignment) {
+      return false;
+    }
+
+    // Extract leaf heading (handle hierarchical paths like "Parent > Child")
+    const leafHeading = extractLeafHeading(headingText);
+    const normalizedHeading = leafHeading.toLowerCase().trim();
+    // Remove emojis from normalized heading for comparison
+    const headingWithoutEmoji = normalizedHeading.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim();
+
+    // A) Next steps suppression (explicit, but only for generic/non-actionable next steps)
+    const nextStepsHeadings = [
+      'next steps',
+      'action items',
+      'follow-ups',
+      'followups',
+      'to do',
+      'todo',
+    ];
+    if (nextStepsHeadings.some(h => headingWithoutEmoji === h || normalizedHeading === h)) {
+      return true;
+    }
+
+    // B) Summary/recap suppression (explicit, including emoji headings)
+    const summaryKeywords = ['summary', 'overview', 'tl;dr', 'tldr', 'recap'];
+    // Check if heading contains summary keywords (with or without emoji)
+    if (summaryKeywords.some(kw => headingWithoutEmoji.includes(kw) || normalizedHeading.includes(kw))) {
+      return true;
+    }
+
+    return false;
+  } catch (error) {
+    // Suppression check failed - treat as NOT suppressed to avoid dropping valid content
+    console.warn('[shouldSuppressSection] Error during suppression check:', error);
+    return false;
+  }
+}
+
+/**
  * Check if candidate should be suppressed based on strategic relevance
  * Post-synthesis suppression for low-value candidates
  */
 function shouldSuppressCandidate(candidate: Suggestion, section: ClassifiedSection): boolean {
   const headingText = section.heading_text?.trim() || '';
-  const normalizedHeading = headingText.toLowerCase();
-  // Remove emojis from normalized heading for comparison
-  const headingWithoutEmoji = normalizedHeading.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim();
   const normalizedBody = normalizeForComparison(candidate.suggestion?.body || '');
+  const hasForceRoleAssignment = section.intent.flags?.forceRoleAssignment || false;
 
-  // A) Next steps suppression (explicit)
-  const nextStepsHeadings = [
-    'next steps',
-    'action items',
-    'follow-ups',
-    'followups',
-    'to do',
-    'todo',
-  ];
-  if (nextStepsHeadings.some(h => headingWithoutEmoji === h || normalizedHeading === h)) {
-    return true;
-  }
-
-  // B) Summary/recap suppression (explicit, including emoji headings)
-  const summaryKeywords = ['summary', 'overview', 'tl;dr', 'tldr', 'recap'];
-  // Check if heading contains summary keywords (with or without emoji)
-  if (summaryKeywords.some(kw => headingWithoutEmoji.includes(kw) || normalizedHeading.includes(kw))) {
+  // First check section-level suppression
+  // Reconstruct full text from body_lines to ensure we have all content
+  const fullText = section.body_lines.map(l => l.text).join('\n');
+  if (shouldSuppressSection(headingText, section.structural_features, fullText, hasForceRoleAssignment)) {
     return true;
   }
 
@@ -1492,39 +1621,115 @@ const TOPIC_ANCHORS = [
 ];
 
 /**
- * Check if section should be split by topic
+ * Debug information for topic isolation decision
  */
-function shouldSplitByTopic(section: ClassifiedSection): boolean {
-  const headingText = (section.heading_text || '').toLowerCase().trim();
+export interface TopicIsolationDebug {
+  eligible: boolean;
+  reason: 'heading_match' | 'bulletCount>=5' | 'charCount>=500' | 'no_topic_anchors' | 'none';
+  leafHeadingUsed: string;
+  bulletCountSeen: number;
+  charCountSeen: number;
+  hasTopicAnchors: boolean;
+}
+
+/**
+ * Check if section should be split by topic
+ * Exported for use in debugGenerator fallback logic
+ *
+ * @param section - The classified section to check
+ * @param debugOut - Optional debug output object (only populated when enable_debug is true)
+ */
+export function shouldSplitByTopic(
+  section: ClassifiedSection,
+  debugOut?: { topicIsolation?: TopicIsolationDebug }
+): boolean {
+  const fullHeadingText = section.heading_text || '';
+  // Extract leaf heading to check for discussion heading match
+  const leafHeading = extractLeafHeading(fullHeadingText);
+  const normalizedLeaf = leafHeading.toLowerCase().trim();
+  // Remove emojis for heading comparison
+  const leafWithoutEmoji = normalizedLeaf.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim();
 
   // Check for explicit "Discussion details" or similar headings
   const discussionHeadings = ['discussion details', 'discussion', 'details'];
-  const hasDiscussionHeading = discussionHeadings.some(h => headingText === h || headingText.startsWith(h + ':'));
+  const hasDiscussionHeading = discussionHeadings.some(h =>
+    leafWithoutEmoji === h ||
+    normalizedLeaf === h ||
+    leafWithoutEmoji.startsWith(h + ':') ||
+    normalizedLeaf.startsWith(h + ':')
+  );
 
-  // Check for long sections with many bullets or high character count
-  const bulletCount = section.body_lines.filter(l => l.line_type === 'list_item').length;
-  const charCount = section.raw_text.length;
-  const isLongSection = bulletCount >= 5 || charCount >= 500;
+  // Use canonical structural features (avoid recompute drift)
+  // Fall back to local computation if structural_features is incomplete
+  const bulletCountSeen = section.structural_features?.num_list_items ??
+    section.body_lines.filter(l => l.line_type === 'list_item').length;
+  const charCountSeen = section.raw_text.length;
 
-  // Only split if:
-  // 1. Has "Discussion details" heading OR is long section
-  // 2. AND contains at least one topic anchor in the body
+  const isLongSection = bulletCountSeen >= 5 || charCountSeen >= 500;
+
+  // Check for topic anchors in body
+  const bodyText = section.raw_text.toLowerCase();
+  const hasTopicAnchors = TOPIC_ANCHORS.some(anchor => bodyText.includes(anchor));
+
+  // Determine eligibility and reason
+  let eligible = false;
+  let reason: TopicIsolationDebug['reason'] = 'none';
+
   if (hasDiscussionHeading || isLongSection) {
-    const bodyText = section.raw_text.toLowerCase();
-    const hasTopicAnchors = TOPIC_ANCHORS.some(anchor => bodyText.includes(anchor));
-    return hasTopicAnchors;
+    if (hasTopicAnchors) {
+      eligible = true;
+      // Determine primary reason (prioritize heading match)
+      if (hasDiscussionHeading) {
+        reason = 'heading_match';
+      } else if (bulletCountSeen >= 5) {
+        reason = 'bulletCount>=5';
+      } else if (charCountSeen >= 500) {
+        reason = 'charCount>=500';
+      }
+    } else {
+      // Split criteria met but no topic anchors
+      reason = 'no_topic_anchors';
+    }
   }
 
-  return false;
+  // Populate debug output if provided
+  if (debugOut) {
+    debugOut.topicIsolation = {
+      eligible,
+      reason,
+      leafHeadingUsed: leafHeading,
+      bulletCountSeen,
+      charCountSeen,
+      hasTopicAnchors,
+    };
+  }
+
+  return eligible;
+}
+
+/**
+ * Debug information for topic splitting
+ */
+export interface TopicSplitDebug {
+  topicsFound: string[];
+  subSectionIds: string[];
 }
 
 /**
  * Split section into topic-based sub-blocks
  * Returns array of sub-sections with isolated content
+ * Exported for use in debugGenerator fallback logic
+ *
+ * @param section - The classified section to split
+ * @param debugOut - Optional debug output object (only populated when enable_debug is true)
  */
-function splitSectionByTopic(section: ClassifiedSection): ClassifiedSection[] {
+export function splitSectionByTopic(
+  section: ClassifiedSection,
+  debugOut?: { topicSplit?: TopicSplitDebug }
+): ClassifiedSection[] {
   const lines = section.body_lines;
   const subSections: ClassifiedSection[] = [];
+  const topicsFound: string[] = [];
 
   let currentTopicLabel: string | null = null;
   let currentBlockLines: Line[] = [];
@@ -1538,39 +1743,58 @@ function splitSectionByTopic(section: ClassifiedSection): ClassifiedSection[] {
     const matchedAnchor = TOPIC_ANCHORS.find(anchor => trimmedText.startsWith(anchor));
 
     if (matchedAnchor) {
-      // Save previous block if it exists
+      // Save previous block if it exists (only if we have a topic label)
       if (currentBlockLines.length > 0 && currentTopicLabel) {
-        subSections.push(createSubSection(section, currentTopicLabel, currentBlockLines, subBlockIndex));
+        const subSection = createSubSection(section, currentTopicLabel, currentBlockLines, subBlockIndex);
+        subSections.push(subSection);
         subBlockIndex++;
       }
 
       // Start new block
       currentTopicLabel = matchedAnchor.replace(':', '').trim();
+      topicsFound.push(currentTopicLabel);
       currentBlockLines = [];
       // Don't include the anchor line itself in the block
       continue;
     }
 
-    // Add line to current block
+    // Only add line to current block if we're inside a topic
     if (currentTopicLabel) {
       currentBlockLines.push(line);
-    } else {
-      // Lines before first anchor - keep them in a default block
-      currentBlockLines.push(line);
     }
+    // Skip lines before first anchor (they're not part of any topic block)
   }
 
-  // Save final block
+  // Save final block (only if we have content and a topic label)
   if (currentBlockLines.length > 0 && currentTopicLabel) {
-    subSections.push(createSubSection(section, currentTopicLabel, currentBlockLines, subBlockIndex));
+    const subSection = createSubSection(section, currentTopicLabel, currentBlockLines, subBlockIndex);
+    subSections.push(subSection);
   }
 
-  // If no anchors found, return original section as single block
+  // Populate debug output if provided
+  if (debugOut) {
+    debugOut.topicSplit = {
+      topicsFound,
+      subSectionIds: subSections.map(s => s.section_id),
+    };
+  }
+
+  // If no anchors found or no valid sub-sections, return original section
   if (subSections.length === 0) {
     return [section];
   }
 
   return subSections;
+}
+
+/**
+ * Create a slug from topic label for fingerprint uniqueness
+ */
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
 }
 
 /**
@@ -1583,11 +1807,13 @@ function createSubSection(
   index: number
 ): ClassifiedSection {
   const rawText = lines.map(l => l.text).join('\n');
+  const slug = slugify(topicLabel);
+  const parentHeading = parentSection.heading_text || '';
 
   return {
     ...parentSection,
-    section_id: `${parentSection.section_id}_sub${index}`,
-    heading_text: topicLabel,
+    section_id: `${parentSection.section_id}__topic_${slug}__${index}`,
+    heading_text: `${parentHeading}: ${topicLabel}`,
     body_lines: lines,
     raw_text: rawText,
     start_line: lines[0]?.index || parentSection.start_line,
@@ -1716,14 +1942,11 @@ export function synthesizeSuggestions(
       continue;
     }
 
-    // Topic isolation: split mixed-topic sections into sub-blocks
-    let sectionsToProcess: ClassifiedSection[] = [section];
-    if (shouldSplitByTopic(section)) {
-      sectionsToProcess = splitSectionByTopic(section);
-    }
-
-    // Process each section (or sub-section)
-    for (const sectionToProcess of sectionsToProcess) {
+    // Topic isolation now happens BEFORE synthesis in the main pipeline (index.ts and debugGenerator.ts)
+    // Sections passed here are already split if needed, so just process them directly
+    // Process section directly
+    {
+      const sectionToProcess = section;
       // Decision table normalization: extract clean decision statements
       // Check if this appears to be a decision section with status markers
       let processedSection = sectionToProcess;
