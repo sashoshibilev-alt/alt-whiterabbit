@@ -23,7 +23,16 @@ import {
 } from "./DebugLedger";
 import { preprocessNote, resetSectionCounter } from "./preprocessing";
 import { classifySections, filterActionableSections, isPlanChangeIntentLabel } from "./classifiers";
-import { synthesizeSuggestions, resetSuggestionCounter, checkSectionSuppression, shouldSplitByTopic, splitSectionByTopic } from "./synthesis";
+import {
+  synthesizeSuggestions,
+  resetSuggestionCounter,
+  checkSectionSuppression,
+  shouldSplitByTopic,
+  splitSectionByTopic,
+  containsExplicitRequest,
+  extractExplicitAsk,
+  generateTitleFromExplicitAsk,
+} from "./synthesis";
 import { runQualityValidators } from "./validators";
 import { runScoringPipeline } from "./scoring";
 import { routeSuggestions } from "./routing";
@@ -462,7 +471,91 @@ export function generateSuggestionsWithDebug(
         const isLongSection = bulletCount >= 5 || charCount >= 500;
 
         // CRITICAL: Discussion details or long sections should NEVER get fallback
+        // EXCEPTION (B-lite fix): Discussion details with explicit requests should force synthesis
         if (isDiscussionDetails || isLongSection) {
+          // B-LITE FIX: Check if Discussion details section has explicit request language
+          // If so, force synthesis of a real suggestion
+          if (isDiscussionDetails) {
+            const hasExplicitRequest = containsExplicitRequest(section.raw_text);
+
+            if (hasExplicitRequest) {
+              // Force synthesis of a real new_feature suggestion
+              const explicitAsk = extractExplicitAsk(section.raw_text);
+
+              if (explicitAsk && explicitAsk.length > 10) {
+                // Create a real suggestion from the explicit ask (not a fallback)
+                const title = generateTitleFromExplicitAsk(explicitAsk);
+
+                // Find the line containing the explicit ask for evidence
+                const askLineObj = section.body_lines.find(l => {
+                  const normalizedLine = l.text.replace(/^\s*[-*+•]\s+/, '').replace(/^\s*\d+[.)]\s+/, '').trim();
+                  return normalizedLine.length > 10 && explicitAsk.includes(normalizedLine.substring(0, 30));
+                });
+
+                const evidenceSpans = askLineObj
+                  ? [{
+                      start_line: askLineObj.index,
+                      end_line: askLineObj.index,
+                      text: askLineObj.text,
+                    }]
+                  : [{
+                      start_line: section.start_line,
+                      end_line: Math.min(section.end_line, section.start_line + 2),
+                      text: section.body_lines.slice(0, 2).map(l => l.text).join('\n'),
+                    }];
+
+                const explicitAskSuggestion: Suggestion = {
+                  suggestion_id: `explicit_ask_${section.section_id}_${Date.now()}`,
+                  note_id: section.note_id,
+                  section_id: section.section_id,
+                  type: 'idea',
+                  title,
+                  payload: {
+                    draft_initiative: {
+                      title: title.replace(/^New idea:\s*/i, '').trim(),
+                      description: explicitAsk.charAt(0).toUpperCase() + explicitAsk.slice(1),
+                    },
+                  },
+                  evidence_spans: evidenceSpans,
+                  scores: {
+                    section_actionability: section.intent.new_workstream || 0.6,
+                    type_choice_confidence: 0.7,
+                    synthesis_confidence: 0.7,
+                    overall: 0, // Computed in scoring phase
+                  },
+                  routing: { create_new: true },
+                  suggestionKey: `${section.note_id}_${section.section_id}_idea_${title}`,
+                  structural_hint: 'explicit_ask',
+                  suggestion: {
+                    title,
+                    body: explicitAsk.charAt(0).toUpperCase() + explicitAsk.slice(1),
+                    evidencePreview: [explicitAsk.substring(0, 150)],
+                    sourceSectionId: section.section_id,
+                    sourceHeading: section.heading_text || '',
+                  },
+                };
+
+                synthesizedSuggestions.push(explicitAskSuggestion);
+                sectionIdsWithSuggestions.add(section.section_id);
+
+                if (ledger) {
+                  console.warn('[EXPLICIT_ASK_B_LITE] Created real suggestion for Discussion details with explicit ask:', {
+                    sectionId: section.section_id,
+                    title,
+                  });
+
+                  // Record in ledger
+                  const sectionDebug = ledger.getSection(section.section_id);
+                  if (sectionDebug) {
+                    ledger.afterSynthesis(sectionDebug, explicitAskSuggestion);
+                  }
+                }
+
+                continue; // Skip fallback creation - we created a real suggestion
+              }
+            }
+          }
+
           // These sections should get normal synthesis, not fallback
           // If synthesis produced 0 candidates, that's fine - emit nothing, don't fallback
           if (ledger) {

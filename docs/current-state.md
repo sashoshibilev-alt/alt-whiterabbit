@@ -1,5 +1,97 @@
 # Current State
 
+## Discussion Details B-lite Explicit Ask Path (2026-02-09)
+
+**Files**: `synthesis.ts`, `scoring.ts`, `debugGenerator.ts`, `discussion-details-explicit-asks.test.ts`
+
+Implemented B-lite synthesis path for Discussion details sections with explicit request language, fixing two critical bugs in type handling and title generation.
+
+### Problem 1: Type Override
+
+Suggestions created by the B-lite path with `type: 'idea'` were being overwritten to `type: 'project_update'` by the scoring pipeline's type normalization logic, which unconditionally applied section-level type decisions without respecting explicitly set types.
+
+### Problem 2: Broken Title Generation
+
+Titles extracted from explicit asks had two bugs:
+1. Article-stripping regex was malformed (`(?:a|an|the\s+)?` instead of `(?:(?:a|an|the)\s+)?`), causing incorrect substring captures
+2. Contextual break patterns checked " noted " before sentence breaks (`.`), causing titles to include trailing commentary like ". Leo"
+
+### Solution: B-lite Explicit Ask Detection
+
+**Implementation** (`synthesis.ts` lines 1407-1575):
+
+1. **Explicit Request Detection**:
+   - Patterns: "asks for", "request", "would like", "need", "want"
+   - Applied to Discussion details sections without topic anchors
+   - Returns first line/sentence containing explicit request language
+
+2. **Title Generation** (`generateTitleFromExplicitAsk()`):
+   - Fixed article-stripping regex: `(?:(?:a|an|the)\s+)?` matches article + space as unit
+   - Reordered contextual breaks: check sentence break (`.`) FIRST before " noted ", " said ", etc.
+   - Extracts clean ask: "Offline mode for mobile and a 1-click AI summary button"
+   - Stops at sentence boundaries or contextual clauses (but, however, noted, said, etc.)
+
+3. **B-lite Synthesis Path** (`synthesizeSuggestions()` lines 2108-2205):
+   - For Discussion details with explicit requests: create `type: 'idea'` suggestion
+   - Set `structural_hint: 'explicit_ask'` to mark as explicitly typed
+   - Use title from `generateTitleFromExplicitAsk()`
+   - Extract evidence from ask line
+   - Skip normal synthesis/fallback path
+
+### Solution: Type Precedence Rule
+
+**Implementation** (`scoring.ts` lines 495-506):
+
+Added precedence check in `runScoringPipeline()` type normalization:
+```typescript
+const hasExplicitType = s.structural_hint === 'explicit_ask' ||
+                       (s.structural_hint && s.structural_hint !== section.typeLabel);
+
+if (hasExplicitType) {
+  return s; // Respect explicitly set type - do not override
+}
+```
+
+**Behavior**:
+- Suggestions with `structural_hint: 'explicit_ask'` maintain their `type: 'idea'`
+- Section-level type normalization only applies when suggestion doesn't have explicit type
+- Prevents scoring pipeline from overwriting synthesized types
+
+### Tests
+
+**File**: `discussion-details-explicit-asks.test.ts` (8 tests, all passing)
+
+- B-lite suggestions emit with `type: 'idea'` (not `project_update`)
+- Titles are clean: no "N " prefix, no discussion commentary
+- No "Review:" fallback for explicit asks
+- No INTERNAL_ERROR for explicit asks
+- Evidence spans correct
+- Works for all request patterns: "asks for", "request", "would like", "need"
+
+### Minimal Diff
+
+- **synthesis.ts**: 291 lines added (B-lite detection + title generation with fixes)
+- **scoring.ts**: 11 lines added (type precedence check)
+- **debugGenerator.ts**: 95 lines added (B-lite path in fallback, mirrors synthesis)
+- **discussion-details-explicit-asks.test.ts**: 278 lines (new test file)
+- **No changes** to: thresholds, validators, routing, classifiers, evidence extraction core logic
+- **All existing tests pass**: 321 tests across suggestion-engine-v2 (12 skipped)
+
+### Contract Changes
+
+**Suggestion.structural_hint**:
+- Now used as type precedence indicator in scoring pipeline
+- Value `'explicit_ask'` signals that suggestion type is authoritative
+- Prevents section-level type normalization from overriding synthesis decision
+
+**Title Generation**:
+- `generateTitleFromExplicitAsk()` exported for use in debugGenerator
+- Deterministic title extraction with contextual break detection
+- Handles article stripping correctly
+- Stops at sentence breaks and discussion commentary
+
+---
+
 ## Strategic Relevance Suppression & Topic Isolation (2026-02-09)
 
 **Files**: `synthesis.ts`, `debugTypes.ts`, `types.ts`, `strategic-relevance-and-topic-isolation.test.ts`
