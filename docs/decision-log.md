@@ -1,5 +1,70 @@
 # Decision Log
 
+## 2026-02-09: Type Precedence Rule for Explicit Synthesis Paths
+
+### Context
+
+The scoring pipeline's type normalization logic (`runScoringPipeline()` in `scoring.ts`) was designed to ensure consistency between section-level intent classification and final suggestion types. However, this created a problem for specialized synthesis paths (like B-lite explicit asks) that need to set types independently of section-level classification.
+
+**Problem**: Discussion details sections are classified as `plan_change` (because they're plan-oriented), so the scoring pipeline was forcing all suggestions from these sections to `type: 'project_update'`, even when synthesis explicitly created `type: 'idea'` suggestions for explicit feature requests.
+
+### Decision
+
+Introduced a **type precedence rule** in the scoring pipeline: if a suggestion has an explicit type indicator (`structural_hint === 'explicit_ask'` or `structural_hint` differs from `section.typeLabel`), the synthesized type is authoritative and section-level normalization is skipped.
+
+**Implementation**: Added guard in `runScoringPipeline()` before type normalization:
+```typescript
+const hasExplicitType = s.structural_hint === 'explicit_ask' ||
+                       (s.structural_hint && s.structural_hint !== section.typeLabel);
+
+if (hasExplicitType) {
+  return s; // Respect explicitly set type
+}
+```
+
+### Rationale
+
+**Option A: Type precedence rule (chosen)**
+- Pro: Allows specialized synthesis paths to override section-level classification
+- Pro: Uses existing `structural_hint` field, no schema changes
+- Pro: Clear signal mechanism for synthesis → scoring communication
+- Con: Adds implicit contract between synthesis and scoring
+
+**Option B: Create separate type field for synthesis hint**
+- Pro: More explicit contract
+- Con: Schema change, additional field to maintain
+- Con: More coupling between synthesis and scoring
+
+**Option C: Skip Discussion details sections in type normalization**
+- Pro: Simpler guard condition
+- Con: Too specific to one use case, not extensible
+- Con: Doesn't solve general problem of synthesis-level type overrides
+
+**Option D: Change section classification to not be plan_change**
+- Pro: No scoring changes needed
+- Con: Loses important intent classification for Discussion details
+- Con: Breaks fallback protection for these sections
+- Rejected: Classification should reflect intent, not work around scoring
+
+### Behavior Change
+
+**Before**: All suggestions from Discussion details sections → `type: 'project_update'` (forced by scoring)
+
+**After**: Suggestions with `structural_hint: 'explicit_ask'` → maintain `type: 'idea'` (synthesis decision respected)
+
+### Future Options Preserved
+
+This rule is extensible to other specialized synthesis paths that need type control. Any synthesis path can set `structural_hint` to indicate its type should be respected.
+
+### Verification
+
+- All 8 tests in `discussion-details-explicit-asks.test.ts` pass
+- Type is `'idea'` (not `'project_update'`)
+- No "INVARIANT VIOLATED" warnings in test output
+- All 321 existing tests pass
+
+---
+
 ## 2026-02-04: Actionability Gate v2 → v3 Migration
 
 ### Context

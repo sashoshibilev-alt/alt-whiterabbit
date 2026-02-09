@@ -542,6 +542,9 @@ export class DebugLedger {
   finalize(emittedSuggestionIds: string[]): void {
     const emittedSet = new Set(emittedSuggestionIds);
 
+    // HARD INVARIANT CHECK: Validate topic isolation integrity before finalizing
+    this.validateTopicIsolationIntegrity();
+
     for (const section of this.sections.values()) {
       let hasEmitted = false;
 
@@ -571,16 +574,85 @@ export class DebugLedger {
       section.emitted = hasEmitted;
       if (!hasEmitted && !section.dropReason) {
         // Section had no emitted candidates
-        // PLAN_CHANGE PROTECTION: Avoid attributing SCORE_BELOW_THRESHOLD to
-        // plan_change sections; if no emitted candidates and decisions.intentLabel
-        // is 'plan_change', mark as INTERNAL_ERROR instead.
         const isPlanChangeSection = section.decisions.intentLabel === 'plan_change';
-        section.dropReason = isPlanChangeSection
-          ? DropReason.INTERNAL_ERROR
-          : DropReason.SCORE_BELOW_THRESHOLD;
-        section.dropStage = isPlanChangeSection
-          ? DropStage.VALIDATION
-          : DropStage.THRESHOLD;
+
+        // Check if fallback was intentionally skipped (discussion details / long section)
+        const fallbackSkipped = section.metadata?.fallbackSkipped;
+
+        if (isPlanChangeSection && fallbackSkipped) {
+          // PLAN_CHANGE with intentionally skipped fallback (discussion details / long section)
+          // This is acceptable - mark as LOW_RELEVANCE not INTERNAL_ERROR
+          section.dropReason = DropReason.LOW_RELEVANCE;
+          section.dropStage = DropStage.POST_SYNTHESIS_SUPPRESS;
+        } else if (isPlanChangeSection) {
+          // PLAN_CHANGE PROTECTION: Unexpected 0 candidates without fallback skip
+          // This indicates a real issue - mark as INTERNAL_ERROR
+          section.dropReason = DropReason.INTERNAL_ERROR;
+          section.dropStage = DropStage.VALIDATION;
+        } else {
+          // Non-plan_change section with 0 candidates
+          section.dropReason = DropReason.SCORE_BELOW_THRESHOLD;
+          section.dropStage = DropStage.THRESHOLD;
+        }
+      }
+    }
+  }
+
+  /**
+   * Validate topic isolation integrity
+   * Ensures that if a parent section is marked SPLIT_INTO_SUBSECTIONS,
+   * then subsections exist in the ledger and parent has topicSplit metadata
+   */
+  private validateTopicIsolationIntegrity(): void {
+    for (const section of this.sections.values()) {
+      // Check if section is marked as split
+      if (section.dropReason === DropReason.SPLIT_INTO_SUBSECTIONS) {
+        // Verify topicSplit metadata exists
+        const hasTopicSplitMetadata = section.metadata?.topicSplit !== undefined;
+
+        if (!hasTopicSplitMetadata) {
+          console.error('[TOPIC_ISOLATION_INVARIANT_VIOLATION] Parent marked as SPLIT but missing topicSplit metadata:', {
+            sectionId: section.sectionId,
+            dropReason: section.dropReason,
+            metadata: section.metadata,
+          });
+
+          // RECOVERY: Mark as INTERNAL_ERROR to prevent silent success
+          section.dropReason = DropReason.INTERNAL_ERROR;
+          section.dropStage = DropStage.TOPIC_ISOLATION;
+          section.metadata = {
+            ...section.metadata,
+            topicIsolationFailure: {
+              reason: 'missing_topicSplit_metadata',
+            },
+          };
+          continue;
+        }
+
+        // Verify subsections exist in ledger
+        const topicSplitMetadata = section.metadata.topicSplit as any;
+        const expectedSubsectionIds: string[] = topicSplitMetadata.subSectionIds || [];
+        const actualSubsections = expectedSubsectionIds.filter(id => this.sections.has(id));
+
+        if (actualSubsections.length === 0) {
+          console.error('[TOPIC_ISOLATION_INVARIANT_VIOLATION] Parent marked as SPLIT but no subsections found in ledger:', {
+            sectionId: section.sectionId,
+            expectedSubsectionIds,
+            actualSubsections,
+          });
+
+          // RECOVERY: Mark as INTERNAL_ERROR
+          section.dropReason = DropReason.INTERNAL_ERROR;
+          section.dropStage = DropStage.TOPIC_ISOLATION;
+          section.metadata = {
+            ...section.metadata,
+            topicIsolationFailure: {
+              reason: 'subsections_not_in_ledger',
+              expectedSubsectionIds,
+              actualSubsectionCount: actualSubsections.length,
+            },
+          };
+        }
       }
     }
   }

@@ -494,6 +494,17 @@ export function runScoringPipeline(
     const section = sections.get(s.section_id);
     if (!section) return s;
 
+    // IMPORTANT: If suggestion explicitly sets a type (e.g., B-lite explicit ask path),
+    // that type MUST be authoritative. Only apply section-level type normalization
+    // if the suggestion doesn't have an explicit type indicator.
+    const hasExplicitType = s.structural_hint === 'explicit_ask' ||
+                           (s.structural_hint && s.structural_hint !== section.typeLabel);
+
+    if (hasExplicitType) {
+      // Respect the explicitly set type - do not override
+      return s;
+    }
+
     const isPlanChangeSection = isPlanChangeIntentLabel(section.intent);
 
     if (isPlanChangeSection && s.type !== 'project_update') {

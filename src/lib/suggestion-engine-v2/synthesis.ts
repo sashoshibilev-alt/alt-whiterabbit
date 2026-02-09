@@ -1405,6 +1405,171 @@ function isSummaryHeading(headingText?: string): boolean {
 }
 
 // ============================================
+// Explicit Request Detection (B-lite Fix)
+// ============================================
+
+/**
+ * Explicit request patterns that indicate actionable asks
+ * Used for Discussion details sections with fallbackSkipped
+ */
+const EXPLICIT_REQUEST_PATTERNS = [
+  /\basksfor\b/i,
+  /\basks?\s+for\b/i,
+  /\brequest(?:s|ed)?\b/i,
+  /\bwould\s+like\b/i,
+  /\bneed(?:s)?\s+to\b/i,
+  /\bneed(?:s)?\s+(?:a|an|the)\b/i,
+  /\bwant(?:s)?\s+to\b/i,
+  /\bwant(?:s)?\s+(?:a|an|the)\b/i,
+];
+
+/**
+ * Check if text contains explicit request language
+ * Exported for use in debugGenerator fallback path
+ */
+export function containsExplicitRequest(text: string): boolean {
+  return EXPLICIT_REQUEST_PATTERNS.some(pattern => pattern.test(text));
+}
+
+/**
+ * Check if section is a Discussion details section with explicit requests
+ * Returns true only if ALL conditions met:
+ * - Heading contains "Discussion details"
+ * - hasTopicAnchors === false (no extractable topic anchors)
+ * - Section text contains explicit request language
+ */
+function isDiscussionDetailsWithExplicitAsk(
+  headingText: string,
+  bodyLines: Line[],
+  rawText: string
+): boolean {
+  // Extract leaf heading (handle hierarchical paths)
+  const leafHeading = headingText.split('>').pop()?.trim() || '';
+  const normalizedLeaf = leafHeading.toLowerCase().trim();
+  const leafWithoutEmoji = normalizedLeaf.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim();
+
+  // Check if heading contains "Discussion details"
+  const discussionHeadings = ['discussion details', 'discussion', 'details'];
+  const isDiscussionDetails = discussionHeadings.some(h =>
+    leafWithoutEmoji === h ||
+    normalizedLeaf === h ||
+    leafWithoutEmoji.startsWith(h + ':') ||
+    normalizedLeaf.startsWith(h + ':')
+  );
+
+  if (!isDiscussionDetails) return false;
+
+  // Check hasTopicAnchors === false (using same logic as shouldSplitByTopic)
+  const hasTopicAnchors = hasExtractableTopicAnchors(bodyLines);
+  if (hasTopicAnchors) return false;
+
+  // Check for explicit request language in section text
+  return containsExplicitRequest(rawText);
+}
+
+/**
+ * Extract first explicit ask from section text for new_feature suggestion
+ * Returns the line/sentence containing the explicit request
+ * Exported for use in debugGenerator fallback path
+ */
+export function extractExplicitAsk(text: string): string | null {
+  const lines = text.split(/[\n]/);
+
+  // Find first line with explicit request
+  for (const line of lines) {
+    if (containsExplicitRequest(line) && line.trim().length > 20) {
+      // Strip list markers and return
+      return normalizeLineForSynthesis(line.trim());
+    }
+  }
+
+  // Fallback: find first sentence with explicit request
+  const sentences = text.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 10);
+  for (const sentence of sentences) {
+    if (containsExplicitRequest(sentence)) {
+      return normalizeLineForSynthesis(sentence);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Generate title from explicit ask text
+ * Extracts the main ask after request markers like "asks for", "request", etc.
+ * Exported for use in debugGenerator fallback path
+ */
+export function generateTitleFromExplicitAsk(askText: string): string {
+  let title = askText;
+
+  // Try to extract the core ask after request markers
+  // Fixed pattern: properly match articles (a|an|the) followed by space as a unit
+  const requestMarkerPatterns = [
+    /asks?\s+for\s+(?:(?:a|an|the)\s+)?(.+)/i,
+    /requests?\s+(?:(?:a|an|the)\s+)?(.+)/i,
+    /would\s+like\s+(?:(?:a|an|the)\s+)?(.+)/i,
+    /needs?\s+(?:to\s+)?(?:(?:a|an|the)\s+)?(.+)/i,
+    /wants?\s+(?:to\s+)?(?:(?:a|an|the)\s+)?(.+)/i,
+  ];
+
+  for (const pattern of requestMarkerPatterns) {
+    const match = askText.match(pattern);
+    if (match && match[1]) {
+      title = match[1].trim();
+      break;
+    }
+  }
+
+  // Stop at contextual clauses (but, however, noted, etc.) or sentence breaks
+  // IMPORTANT: Check sentence break (period) FIRST before checking contextual clauses
+  // so we don't accidentally include trailing text like ". Leo" when there's ". Leo noted"
+  const contextualBreaks = [
+    /\./,  // sentence break (check first!)
+    /\s+but\s+/i,
+    /\s+however\s+/i,
+    /\s+noted\s+/i,
+    /\s+said\s+/i,
+    /\s+mentioned\s+/i,
+    /\s+explained\s+/i,
+  ];
+
+  for (const breakPattern of contextualBreaks) {
+    const match = title.match(breakPattern);
+    if (match) {
+      // Take text before the contextual break
+      title = title.substring(0, match.index).trim();
+      break;
+    }
+  }
+
+  // Capitalize first letter
+  title = capitalizeFirst(title);
+
+  // Truncate if needed
+  if (title.length > 80) {
+    title = truncateTitle(title, 80);
+  }
+
+  // Ensure title is not just the heading
+  if (title.length < 10) {
+    title = capitalizeFirst(askText);
+    // Apply same contextual break logic to fallback
+    for (const breakPattern of contextualBreaks) {
+      const match = title.match(breakPattern);
+      if (match) {
+        title = title.substring(0, match.index).trim();
+        break;
+      }
+    }
+    if (title.length > 80) {
+      title = truncateTitle(title, 80);
+    }
+  }
+
+  return title;
+}
+
+// ============================================
 // Decision Table Normalization
 // ============================================
 
@@ -1621,6 +1786,24 @@ const TOPIC_ANCHORS = [
 ];
 
 /**
+ * Check if section body contains topic anchors that are extractable
+ * (i.e., anchors that appear at the start of lines, not just as substrings)
+ *
+ * IMPORTANT: This must use the SAME logic as splitSectionByTopic() to avoid
+ * eligibility/execution disagreement
+ */
+function hasExtractableTopicAnchors(lines: Line[]): boolean {
+  for (const line of lines) {
+    const trimmedText = line.text.trim().toLowerCase();
+    const matchedAnchor = TOPIC_ANCHORS.find(anchor => trimmedText.startsWith(anchor));
+    if (matchedAnchor) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Debug information for topic isolation decision
  */
 export interface TopicIsolationDebug {
@@ -1667,9 +1850,9 @@ export function shouldSplitByTopic(
 
   const isLongSection = bulletCountSeen >= 5 || charCountSeen >= 500;
 
-  // Check for topic anchors in body
-  const bodyText = section.raw_text.toLowerCase();
-  const hasTopicAnchors = TOPIC_ANCHORS.some(anchor => bodyText.includes(anchor));
+  // Check for topic anchors in body using SAME logic as splitSectionByTopic
+  // (line-start match, not substring match, to avoid eligibility/execution disagreement)
+  const hasTopicAnchors = hasExtractableTopicAnchors(section.body_lines);
 
   // Determine eligibility and reason
   let eligible = false;
@@ -1935,6 +2118,123 @@ export function synthesizeSuggestions(
       continue;
     }
 
+    // B-LITE FIX: Check if this is a Discussion details section with explicit asks
+    // These sections should emit at least one real suggestion, bypassing normal suppression
+    const headingText = section.heading_text || '';
+    const isExplicitAskSection = isDiscussionDetailsWithExplicitAsk(
+      headingText,
+      section.body_lines,
+      section.raw_text
+    );
+
+    if (process.env.DEBUG_EXPLICIT_ASK === 'true' && headingText.toLowerCase().includes('discussion')) {
+      console.log('[DEBUG_EXPLICIT_ASK] Section check:', {
+        headingText,
+        isExplicitAskSection,
+        hasExplicitRequest: containsExplicitRequest(section.raw_text),
+        hasTopicAnchors: hasExtractableTopicAnchors(section.body_lines),
+      });
+    }
+
+    if (isExplicitAskSection) {
+      // Force synthesis of a real new_feature suggestion from explicit ask
+      const explicitAsk = extractExplicitAsk(section.raw_text);
+
+      if (process.env.DEBUG_EXPLICIT_ASK === 'true') {
+        console.log('[DEBUG_EXPLICIT_ASK] Explicit ask extracted:', {
+          explicitAsk: explicitAsk?.substring(0, 100),
+          length: explicitAsk?.length,
+        });
+      }
+
+      if (explicitAsk && explicitAsk.length > 10) {
+        // Generate a simple new_feature suggestion from the explicit ask
+        const title = generateTitleFromExplicitAsk(explicitAsk);
+        const body = capitalizeFirst(explicitAsk);
+
+        // Extract evidence from the ask line
+        const askLineObj = section.body_lines.find(l =>
+          normalizeLineForSynthesis(l.text).includes(explicitAsk.substring(0, 30))
+        );
+
+        const evidenceSpans: EvidenceSpan[] = askLineObj
+          ? [{
+              start_line: askLineObj.index,
+              end_line: askLineObj.index,
+              text: askLineObj.text,
+            }]
+          : [{
+              start_line: section.start_line,
+              end_line: Math.min(section.end_line, section.start_line + 2),
+              text: section.body_lines.slice(0, 2).map(l => l.text).join('\n'),
+            }];
+
+        const scores: SuggestionScores = {
+          section_actionability: section.intent.new_workstream || 0.6,
+          type_choice_confidence: 0.7,
+          synthesis_confidence: 0.7,
+          overall: 0, // Computed in scoring phase
+        };
+
+        const routing: SuggestionRouting = {
+          create_new: true,
+        };
+
+        const suggestionContext: SuggestionContext = {
+          title,
+          body,
+          evidencePreview: [explicitAsk.substring(0, 150)],
+          sourceSectionId: section.section_id,
+          sourceHeading: section.heading_text || '',
+        };
+
+        const suggestionKey = computeSuggestionKey({
+          noteId: section.note_id,
+          sourceSectionId: section.section_id,
+          type: 'idea',
+          title,
+        });
+
+        const suggestion: Suggestion = {
+          suggestion_id: generateSuggestionId(section.note_id),
+          note_id: section.note_id,
+          section_id: section.section_id,
+          type: 'idea',
+          title,
+          payload: {
+            draft_initiative: {
+              title: title.replace(/^New idea:\s*/i, '').trim(),
+              description: body,
+            },
+          },
+          evidence_spans: evidenceSpans,
+          scores,
+          routing,
+          suggestionKey,
+          structural_hint: 'explicit_ask',
+          suggestion: suggestionContext,
+        };
+
+        suggestions.push(suggestion);
+
+        if (process.env.DEBUG_EXPLICIT_ASK === 'true') {
+          console.log('[DEBUG_EXPLICIT_ASK] Created idea suggestion:', {
+            id: suggestion.suggestion_id,
+            type: suggestion.type,
+            title: suggestion.title.substring(0, 80),
+          });
+        }
+
+        // Track evidence for derivative detection
+        for (const span of suggestion.evidence_spans) {
+          emittedEvidenceTexts.push(span.text);
+        }
+
+        // Skip normal synthesis path for this section
+        continue;
+      }
+    }
+
     // Derivative content suppression: check if section is mostly redundant
     // Especially applies to summary/overview/recap sections
     if (isSummaryHeading(section.heading_text) || isDerivativeSection(section, emittedEvidenceTexts)) {
@@ -1990,6 +2290,15 @@ export function synthesizeSuggestions(
       }
 
       const suggestion = synthesizeSuggestion(processedSection);
+
+      if (process.env.DEBUG_EXPLICIT_ASK === 'true' && processedSection.heading_text?.toLowerCase().includes('discussion')) {
+        console.log('[DEBUG_EXPLICIT_ASK] Normal synthesis ran for Discussion details:', {
+          suggestionCreated: !!suggestion,
+          suggestionType: suggestion?.type,
+          suggestionId: suggestion?.suggestion_id,
+        });
+      }
+
       if (suggestion) {
         // Post-synthesis suppression: check for low-relevance candidates
         if (shouldSuppressCandidate(suggestion, processedSection)) {
