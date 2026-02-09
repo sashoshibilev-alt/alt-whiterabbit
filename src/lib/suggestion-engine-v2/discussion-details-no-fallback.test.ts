@@ -265,6 +265,72 @@ Finally, we are standardizing our internal processes, particularly around meetin
     }
   });
 
+  it('CRITICAL: Discussion details with NO anchors should NOT be INTERNAL_ERROR', () => {
+    // Regression for runId 3f8c6e88 where sec_j979vrgx_5 had INTERNAL_ERROR
+    // Section: "Discussion details", plan_change intent, no topic anchors
+    // Should be: LOW_RELEVANCE or emit real suggestion, NOT INTERNAL_ERROR
+    const note: NoteInput = {
+      note_id: 'test_3f8c6e88',
+      raw_markdown: `# Team Meeting
+
+## 🔍 Discussion details
+
+Customer feedback was positive overall. Timeline review showed Q2 on track.
+Internal process improvements continuing as planned.
+`,
+    };
+
+    const result = generateSuggestionsWithDebug(
+      note,
+      undefined,
+      {
+        enable_debug: true,
+        thresholds: {
+          T_action: 0.3,
+          T_out_of_scope: 0.7,
+          T_section_min: 0.3,
+          T_overall_min: 0.4,
+          MIN_EVIDENCE_CHARS: 20,
+        },
+      },
+      { verbosity: 'REDACTED' }
+    );
+
+    // Assert: NO INTERNAL_ERROR
+    if (result.debugRun) {
+      const discussionSection = result.debugRun.sections.find(s =>
+        s.headingTextPreview.toLowerCase().includes('discussion details')
+      );
+
+      if (discussionSection) {
+        // CRITICAL: dropReason must NOT be INTERNAL_ERROR
+        expect(discussionSection.dropReason).not.toBe('INTERNAL_ERROR');
+
+        // Check what actually happened
+        if (discussionSection.dropReason) {
+          // If dropped, should be LOW_RELEVANCE or similar, not INTERNAL_ERROR
+          const acceptableDropReasons = ['LOW_RELEVANCE', 'SUPPRESSED_SECTION', 'NOT_ACTIONABLE'];
+          expect(acceptableDropReasons).toContain(discussionSection.dropReason);
+        }
+
+        // Log for debugging
+        console.log('[3f8c6e88_REGRESSION]:', {
+          dropReason: discussionSection.dropReason,
+          dropStage: discussionSection.dropStage,
+          synthesisRan: discussionSection.synthesisRan,
+          candidatesCount: discussionSection.candidates.length,
+          metadata: discussionSection.metadata,
+        });
+      }
+    }
+
+    // Assert: NO "Review:" fallback
+    for (const suggestion of result.suggestions) {
+      expect(suggestion.title.toLowerCase()).not.toMatch(/^review:/);
+      expect(suggestion.suggestion_id).not.toContain('fallback_');
+    }
+  });
+
   it('ACCEPTABLE: Discussion details with 0 emitted suggestions (all dropped)', () => {
     // It's OK to emit 0 suggestions if all are dropped/suppressed
     // But NOT OK to emit "Review:" fallback

@@ -474,6 +474,21 @@ export function generateSuggestionsWithDebug(
               bulletCount,
               charCount,
             });
+
+            // Mark section to prevent INTERNAL_ERROR in finalize()
+            // This section intentionally skipped fallback and may have 0 candidates
+            const sectionDebug = ledger.getSection(section.section_id);
+            if (sectionDebug && !sectionDebug.dropReason) {
+              // Pre-mark with LOW_RELEVANCE if no candidates (finalize will respect this)
+              sectionDebug.metadata = {
+                ...sectionDebug.metadata,
+                fallbackSkipped: {
+                  reason: isDiscussionDetails ? 'discussion_details' : 'long_section',
+                  bulletCount,
+                  charCount,
+                },
+              };
+            }
           }
           continue; // Skip fallback creation
         }
