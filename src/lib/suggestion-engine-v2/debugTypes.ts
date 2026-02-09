@@ -29,6 +29,7 @@ export enum DropStage {
   VALIDATION = "VALIDATION",
   THRESHOLD = "THRESHOLD",
   DEDUPE = "DEDUPE",
+  POST_SYNTHESIS_SUPPRESS = "POST_SYNTHESIS_SUPPRESS",
 }
 
 /**
@@ -45,6 +46,7 @@ export enum DropReason {
   SCORE_BELOW_THRESHOLD = "SCORE_BELOW_THRESHOLD",
   DUPLICATE_FINGERPRINT = "DUPLICATE_FINGERPRINT",
   INTERNAL_ERROR = "INTERNAL_ERROR",
+  LOW_RELEVANCE = "LOW_RELEVANCE",
 }
 
 /**
@@ -69,6 +71,7 @@ export const DROP_REASON_STAGE: Record<DropReason, DropStage> = {
   [DropReason.SCORE_BELOW_THRESHOLD]: DropStage.THRESHOLD,
   [DropReason.DUPLICATE_FINGERPRINT]: DropStage.DEDUPE,
   [DropReason.INTERNAL_ERROR]: DropStage.VALIDATION,
+  [DropReason.LOW_RELEVANCE]: DropStage.POST_SYNTHESIS_SUPPRESS,
 };
 
 // ============================================
