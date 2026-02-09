@@ -630,6 +630,142 @@ Propose meeting-free Wednesdays for focused work.
       expect(aresSuggestion.suggestion?.body.toLowerCase()).toMatch(/on track/);
     }
   });
+
+  it('FIX C: subsections appear in debug output with full metadata and candidates', () => {
+    const note: NoteInput = {
+      note_id: 'test-subsections-debug-output',
+      raw_markdown: `# Meeting Notes
+
+## 🔍 Discussion details
+
+New Feature Requests:
+Launch offline mode for mobile app to support disconnected users in the field.
+
+Project Timelines:
+Project Ares migration will slip by 2 weeks due to infrastructure dependencies.
+Project Zenith remains on track for Q2 delivery.
+
+Internal Operations:
+Standardize deployment scripts across all environments.
+
+Cultural Shift:
+Propose meeting-free Wednesdays for focused work.
+`,
+      authored_at: new Date().toISOString(),
+    };
+
+    // Use enable_debug=true to get full metadata
+    const result = generateSuggestionsWithDebug(
+      note,
+      undefined,
+      { ...DEFAULT_CONFIG, enable_debug: true },
+      { verbosity: 'REDACTED' }
+    );
+
+    expect(result.debugRun).toBeDefined();
+    if (!result.debugRun) return;
+
+    // Requirement 1: Parent section must have proper metadata
+    const parentSection = result.debugRun.sections.find(s =>
+      s.headingTextPreview.includes('Discussion details') && !s.sectionId.includes('__topic_')
+    );
+    expect(parentSection).toBeDefined();
+    expect(parentSection?.emitted).toBe(false);
+    expect(parentSection?.dropStage).toBe('TOPIC_ISOLATION');
+    expect(parentSection?.dropReason).toBe('SPLIT_INTO_SUBSECTIONS');
+
+    // Check topicIsolation metadata
+    expect(parentSection?.metadata?.topicIsolation).toBeDefined();
+    expect(parentSection?.metadata?.topicIsolation?.eligible).toBe(true);
+    expect(parentSection?.metadata?.topicIsolation?.reason).toMatch(/heading_match|bulletCount>=5|charCount>=500/);
+    expect(parentSection?.metadata?.topicIsolation?.hasTopicAnchors).toBe(true);
+
+    // Check topicSplit metadata
+    expect(parentSection?.metadata?.topicSplit).toBeDefined();
+    expect(parentSection?.metadata?.topicSplit?.topicsFound).toBeInstanceOf(Array);
+    expect(parentSection?.metadata?.topicSplit?.subSectionIds).toBeInstanceOf(Array);
+    expect(parentSection?.metadata?.topicSplit?.topicsFound).toEqual([
+      'new feature requests',
+      'project timelines',
+      'internal operations',
+      'cultural shift',
+    ]);
+
+    // Requirement 2: Subsections must appear in sections array
+    const subsections = result.debugRun.sections.filter(s => s.sectionId.includes('__topic_'));
+    expect(subsections.length).toBeGreaterThanOrEqual(2);
+    expect(subsections.length).toBe(4); // Should be exactly 4 for this test
+
+    // Verify subsection structure
+    subsections.forEach(sub => {
+      // sectionId format
+      expect(sub.sectionId).toMatch(/__topic_/);
+
+      // headingTextPreview format: "Parent: Topic"
+      expect(sub.headingTextPreview).toMatch(/Discussion details:/);
+
+      // Should not have INTERNAL_ERROR
+      expect(sub.dropReason).not.toBe('INTERNAL_ERROR');
+      expect(sub.dropStage).not.toBe('VALIDATION');
+    });
+
+    // Requirement 3: Subsections must emit real candidates (not fallbacks)
+    const emittedCandidates = result.debugRun.sections
+      .flatMap(s => s.candidates)
+      .filter(c => c.emitted);
+
+    // Should have at least offline + Ares candidates
+    expect(emittedCandidates.length).toBeGreaterThanOrEqual(2);
+
+    // Verify no "Review: Discussion details" fallback
+    const fallbackCandidate = emittedCandidates.find(c =>
+      c.suggestion?.title?.toLowerCase().includes('review') &&
+      c.suggestion?.title?.toLowerCase().includes('discussion details')
+    );
+    expect(fallbackCandidate).toBeUndefined();
+
+    // Requirement 4: Verify specific candidates
+    // a) Offline mode candidate
+    const offlineCandidate = emittedCandidates.find(c =>
+      c.suggestion?.body?.toLowerCase().includes('offline mode') ||
+      c.suggestion?.title?.toLowerCase().includes('offline')
+    );
+    expect(offlineCandidate).toBeDefined();
+    expect(offlineCandidate?.suggestion?.title).not.toMatch(/^Review:/);
+    expect(offlineCandidate?.metadata?.type).toBe('project_update');
+
+    // b) Ares candidate
+    const aresCandidate = emittedCandidates.find(c => {
+      const body = c.suggestion?.body?.toLowerCase() || '';
+      const title = c.suggestion?.title?.toLowerCase() || '';
+      return (body.includes('ares') || title.includes('ares')) &&
+             (body.includes('2 week') || body.includes('2-week') || body.includes('2 weeks'));
+    });
+    expect(aresCandidate).toBeDefined();
+    expect(aresCandidate?.suggestion?.title).not.toMatch(/^Review:/);
+    expect(aresCandidate?.metadata?.type).toBe('project_update');
+
+    // c) Zenith candidate (optional but should be present in body)
+    // Zenith and Ares are in the same "Project Timelines" topic, so check Ares candidate includes Zenith
+    if (aresCandidate) {
+      const aresBody = aresCandidate.suggestion?.body?.toLowerCase() || '';
+      expect(aresBody).toMatch(/zenith/);
+      expect(aresBody).toMatch(/on track/);
+    }
+
+    // Verify subsections have evidence
+    const subsectionsWithCandidates = subsections.filter(s => s.candidates.length > 0);
+    expect(subsectionsWithCandidates.length).toBeGreaterThanOrEqual(2);
+
+    // Verify evidence spans are present for emitted candidates
+    emittedCandidates.forEach(candidate => {
+      expect(candidate.evidence).toBeDefined();
+      expect(candidate.evidence?.spans).toBeInstanceOf(Array);
+      if (candidate.evidence?.spans) {
+        expect(candidate.evidence.spans.length).toBeGreaterThan(0);
+      }
+    });
+  });
 });
 
 describe('Combined: Suppression + Topic Isolation', () => {
