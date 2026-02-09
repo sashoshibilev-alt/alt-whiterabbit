@@ -631,6 +631,88 @@ Propose meeting-free Wednesdays for focused work.
     }
   });
 
+  it('FIX C: Gemini note with topic anchors on same line as bullets', () => {
+    // This test reproduces the exact production scenario from runId=991c4213...
+    // where anchors like "Project Timelines:" appear on the same line as bullets
+    const note: NoteInput = {
+      note_id: 'test-gemini-format',
+      raw_markdown: `# Gemini Launch Retrospective
+
+## 🔍 Discussion details
+
+Project Timelines:
+* Project Ares: Migration delayed by 2 weeks due to infra dependencies
+* Project Zenith: On track for Q2 delivery
+
+New Feature Requests:
+* Launch offline mode for mobile app to support disconnected users in the field
+
+Internal Operations:
+* Standardize deployment scripts across all environments
+
+Cultural Shift:
+* Propose meeting-free Wednesdays for focused work
+`,
+      authored_at: new Date().toISOString(),
+    };
+
+    const result = generateSuggestionsWithDebug(
+      note,
+      undefined,
+      { ...DEFAULT_CONFIG, enable_debug: true },
+      { verbosity: 'REDACTED' }
+    );
+
+    expect(result.debugRun).toBeDefined();
+    if (!result.debugRun) return;
+
+    // Verify parent section exists and is marked as split
+    const parentSection = result.debugRun.sections.find(s =>
+      s.headingTextPreview.includes('Discussion details') && !s.sectionId.includes('__topic_')
+    );
+    expect(parentSection).toBeDefined();
+    expect(parentSection?.dropStage).toBe('TOPIC_ISOLATION');
+    expect(parentSection?.dropReason).toBe('SPLIT_INTO_SUBSECTIONS');
+    expect(parentSection?.emitted).toBe(false);
+
+    // CRITICAL: Verify subsections appear in debugRun.sections[]
+    const subsections = result.debugRun.sections.filter(s => s.sectionId.includes('__topic_'));
+    expect(subsections.length).toBe(4);
+
+    // Verify subsection IDs and headings
+    const subsectionHeadings = subsections.map(s => {
+      const match = s.headingTextPreview.match(/: ([^:]+)$/);
+      return match ? match[1].trim() : '';
+    });
+    expect(subsectionHeadings).toContain('project timelines');
+    expect(subsectionHeadings).toContain('new feature requests');
+    expect(subsectionHeadings).toContain('internal operations');
+    expect(subsectionHeadings).toContain('cultural shift');
+
+    // Verify suggestions emitted from subsections
+    expect(result.suggestions.length).toBeGreaterThanOrEqual(2);
+
+    // Verify specific suggestions
+    const aresSuggestion = result.suggestions.find(s =>
+      s.title.toLowerCase().includes('ares') || s.title.toLowerCase().includes('migration')
+    );
+    expect(aresSuggestion).toBeDefined();
+    expect(aresSuggestion?.section_id).toMatch(/__topic_project_timelines/);
+
+    const offlineSuggestion = result.suggestions.find(s =>
+      s.title.toLowerCase().includes('offline')
+    );
+    expect(offlineSuggestion).toBeDefined();
+    expect(offlineSuggestion?.section_id).toMatch(/__topic_new_feature_requests/);
+
+    // Verify no "Review: Discussion details" fallback
+    const fallbackSuggestion = result.suggestions.find(s =>
+      s.title.toLowerCase().includes('review') &&
+      s.title.toLowerCase().includes('discussion')
+    );
+    expect(fallbackSuggestion).toBeUndefined();
+  });
+
   it('FIX C: subsections appear in debug output with full metadata and candidates', () => {
     const note: NoteInput = {
       note_id: 'test-subsections-debug-output',

@@ -193,6 +193,15 @@ export function generateSuggestionsWithDebug(
         const subsections = splitSectionByTopic(section, finalConfig.enable_debug ? debugInfo : undefined);
         expandedSections.push(...subsections);
 
+        // DEBUG ASSERTION: Log subsection creation
+        if (finalConfig.enable_debug) {
+          console.log('[TOPIC_ISOLATION_DEBUG] Created subsections:', {
+            parentSectionId: section.section_id,
+            subsectionCount: subsections.length,
+            subsectionIds: subsections.map(s => s.section_id),
+          });
+        }
+
         // Track parent section as split (so we don't emit from it)
         splitParentSectionIds.add(section.section_id);
 
@@ -218,6 +227,19 @@ export function generateSuggestionsWithDebug(
 
         // Create debug entries for subsections
         if (ledger) {
+          const ledgerSizeBeforeSubsections = Array.from((ledger as any).sections.values()).length;
+
+          // DEBUG ASSERTION: Check if splitSectionByTopic returned actual subsections or just parent
+          if (finalConfig.enable_debug && subsections.length > 0) {
+            const hasActualSubsections = subsections.some(s => s.section_id.includes('__topic_'));
+            console.log('[TOPIC_ISOLATION_DEBUG] Subsection type check:', {
+              parentSectionId: section.section_id,
+              subsectionsLength: subsections.length,
+              hasActualSubsections,
+              firstSubsectionId: subsections[0]?.section_id,
+            });
+          }
+
           for (const subsection of subsections) {
             sectionToDebug(ledger, subsection);
             // Inherit parent section's classification
@@ -239,6 +261,18 @@ export function generateSuggestionsWithDebug(
                 );
               }
             }
+          }
+
+          const ledgerSizeAfterSubsections = Array.from((ledger as any).sections.values()).length;
+
+          // DEBUG ASSERTION: Log ledger state after adding subsections
+          if (finalConfig.enable_debug) {
+            console.log('[TOPIC_ISOLATION_DEBUG] Ledger state after subsections:', {
+              ledgerSizeBeforeSubsections,
+              ledgerSizeAfterSubsections,
+              subsectionsAdded: ledgerSizeAfterSubsections - ledgerSizeBeforeSubsections,
+              allSectionIds: Array.from((ledger as any).sections.keys()),
+            });
           }
         }
       } else {
@@ -677,6 +711,31 @@ export function generateSuggestionsWithDebug(
     // Finalize debug run (reconciles emitted flags with final suggestion IDs)
     if (ledger) {
       ledger.finalize(finalSuggestions.map((s) => s.suggestion_id));
+
+      // DEBUG ASSERTION: Log final debugRun sections
+      if (finalConfig.enable_debug) {
+        const debugRun = ledger.buildDebugRun();
+
+        // INVARIANT: Check that all ledger sections appear in debugRun
+        const ledgerSectionIds = new Set(Array.from((ledger as any).sections.keys()));
+        const debugRunSectionIds = new Set(debugRun.sections.map(s => s.sectionId));
+        const missingSectionIds = Array.from(ledgerSectionIds).filter(id => !debugRunSectionIds.has(id));
+
+        if (missingSectionIds.length > 0) {
+          console.error('[TOPIC_ISOLATION_INVARIANT_VIOLATION] Sections in ledger but missing from debugRun:', {
+            missingSectionIds,
+            ledgerSize: ledgerSectionIds.size,
+            debugRunSize: debugRunSectionIds.size,
+          });
+        }
+
+        console.log('[TOPIC_ISOLATION_DEBUG] Final debugRun sections:', {
+          totalSections: debugRun.sections.length,
+          sectionIds: debugRun.sections.map(s => s.sectionId),
+          subsectionCount: debugRun.sections.filter(s => s.sectionId.includes('__topic_')).length,
+          ledgerConsistencyCheck: missingSectionIds.length === 0 ? 'PASS' : 'FAIL',
+        });
+      }
     }
 
     // INVARIANT CHECK: Ensure emitted candidates match final suggestions
