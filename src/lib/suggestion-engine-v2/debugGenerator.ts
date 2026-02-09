@@ -438,10 +438,45 @@ export function generateSuggestionsWithDebug(
           continue; // Skip fallback creation
         }
 
-        // FIX 2: Check if section is split-eligible (topic isolation should have run earlier but may have been missed)
-        // If split-eligible, DO NOT create fallback - split and process subsections instead
+        // FIX 2: Check if section meets criteria for normal synthesis (not fallback)
+        // Discussion details or long sections should get normal synthesis, not "Review:" fallback
         const debugInfo: { topicIsolation?: any; topicSplit?: any } = {};
         const isSplitEligible = shouldSplitByTopic(section, finalConfig.enable_debug ? debugInfo : undefined);
+
+        // Extract leaf heading for discussion details check
+        const fullHeadingText = section.heading_text || '';
+        const leafHeading = fullHeadingText.split('>').pop()?.trim() || '';
+        const normalizedLeaf = leafHeading.toLowerCase().trim();
+        const leafWithoutEmoji = normalizedLeaf.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim();
+
+        const isDiscussionDetails = ['discussion details', 'discussion', 'details'].some(h =>
+          leafWithoutEmoji === h ||
+          normalizedLeaf === h ||
+          leafWithoutEmoji.startsWith(h + ':') ||
+          normalizedLeaf.startsWith(h + ':')
+        );
+
+        const bulletCount = section.structural_features?.num_list_items ??
+          section.body_lines.filter(l => l.line_type === 'list_item').length;
+        const charCount = section.raw_text.length;
+        const isLongSection = bulletCount >= 5 || charCount >= 500;
+
+        // CRITICAL: Discussion details or long sections should NEVER get fallback
+        if (isDiscussionDetails || isLongSection) {
+          // These sections should get normal synthesis, not fallback
+          // If synthesis produced 0 candidates, that's fine - emit nothing, don't fallback
+          if (ledger) {
+            console.warn('[FALLBACK_SKIP] Section eligible for normal synthesis, not fallback:', {
+              sectionId: section.section_id,
+              heading: section.heading_text,
+              isDiscussionDetails,
+              isLongSection,
+              bulletCount,
+              charCount,
+            });
+          }
+          continue; // Skip fallback creation
+        }
 
         if (isSplitEligible) {
           // Split the section and add subsections to expanded list for synthesis
