@@ -630,6 +630,348 @@ Propose meeting-free Wednesdays for focused work.
       expect(aresSuggestion.suggestion?.body.toLowerCase()).toMatch(/on track/);
     }
   });
+
+  it('REGRESSION: split-eligible sections never emit "Review:" fallback', () => {
+    // User-visible invariant: when a section is split by topic isolation,
+    // we NEVER emit a "Review: [heading]" fallback. Instead, subsections
+    // emit real synthesized suggestions.
+    const note: NoteInput = {
+      note_id: 'test-no-fallback-for-split',
+      raw_markdown: `# Gemini Launch Retrospective
+
+## 🔍 Discussion details
+
+Project Timelines:
+* Project Ares: Migration delayed by 2 weeks due to infra dependencies
+* Project Zenith: On track for Q2 delivery
+
+New Feature Requests:
+* Launch offline mode for mobile app to support disconnected users in the field
+
+Internal Operations:
+* Standardize deployment scripts across all environments
+
+Cultural Shift:
+* Propose meeting-free Wednesdays for focused work
+`,
+      authored_at: new Date().toISOString(),
+    };
+
+    const result = generateSuggestions(note, DEFAULT_CONFIG);
+
+    // CRITICAL: No "Review: 🔍 Discussion details" fallback
+    const fallbackSuggestion = result.suggestions.find(s =>
+      (s.title.toLowerCase().includes('review') && s.title.toLowerCase().includes('discussion')) ||
+      s.title.toLowerCase().startsWith('review:')
+    );
+    expect(fallbackSuggestion).toBeUndefined();
+
+    // CRITICAL: At least 2 real suggestions emitted from subsections
+    expect(result.suggestions.length).toBeGreaterThanOrEqual(2);
+
+    // Verify Ares slip suggestion
+    const aresSuggestion = result.suggestions.find(s =>
+      (s.title.toLowerCase().includes('ares') || s.title.toLowerCase().includes('migration')) &&
+      s.type === 'project_update'
+    );
+    expect(aresSuggestion).toBeDefined();
+
+    // Verify offline mode suggestion
+    const offlineSuggestion = result.suggestions.find(s =>
+      s.title.toLowerCase().includes('offline') ||
+      s.suggestion?.body.toLowerCase().includes('offline mode')
+    );
+    expect(offlineSuggestion).toBeDefined();
+  });
+
+  it('FIX C: Gemini note with topic anchors on same line as bullets', () => {
+    // This test reproduces the exact production scenario from runId=991c4213...
+    // where anchors like "Project Timelines:" appear on the same line as bullets
+    const note: NoteInput = {
+      note_id: 'test-gemini-format',
+      raw_markdown: `# Gemini Launch Retrospective
+
+## 🔍 Discussion details
+
+Project Timelines:
+* Project Ares: Migration delayed by 2 weeks due to infra dependencies
+* Project Zenith: On track for Q2 delivery
+
+New Feature Requests:
+* Launch offline mode for mobile app to support disconnected users in the field
+
+Internal Operations:
+* Standardize deployment scripts across all environments
+
+Cultural Shift:
+* Propose meeting-free Wednesdays for focused work
+`,
+      authored_at: new Date().toISOString(),
+    };
+
+    const result = generateSuggestionsWithDebug(
+      note,
+      undefined,
+      { ...DEFAULT_CONFIG, enable_debug: true },
+      { verbosity: 'REDACTED' }
+    );
+
+    expect(result.debugRun).toBeDefined();
+    if (!result.debugRun) return;
+
+    // Verify parent section exists and is marked as split
+    const parentSection = result.debugRun.sections.find(s =>
+      s.headingTextPreview.includes('Discussion details') && !s.sectionId.includes('__topic_')
+    );
+    expect(parentSection).toBeDefined();
+    expect(parentSection?.dropStage).toBe('TOPIC_ISOLATION');
+    expect(parentSection?.dropReason).toBe('SPLIT_INTO_SUBSECTIONS');
+    expect(parentSection?.emitted).toBe(false);
+
+    // CRITICAL: Verify subsections appear in debugRun.sections[]
+    const subsections = result.debugRun.sections.filter(s => s.sectionId.includes('__topic_'));
+    expect(subsections.length).toBe(4);
+
+    // Verify subsection IDs and headings
+    const subsectionHeadings = subsections.map(s => {
+      const match = s.headingTextPreview.match(/: ([^:]+)$/);
+      return match ? match[1].trim() : '';
+    });
+    expect(subsectionHeadings).toContain('project timelines');
+    expect(subsectionHeadings).toContain('new feature requests');
+    expect(subsectionHeadings).toContain('internal operations');
+    expect(subsectionHeadings).toContain('cultural shift');
+
+    // Verify suggestions emitted from subsections
+    expect(result.suggestions.length).toBeGreaterThanOrEqual(2);
+
+    // Verify specific suggestions
+    const aresSuggestion = result.suggestions.find(s =>
+      s.title.toLowerCase().includes('ares') || s.title.toLowerCase().includes('migration')
+    );
+    expect(aresSuggestion).toBeDefined();
+    expect(aresSuggestion?.section_id).toMatch(/__topic_project_timelines/);
+
+    const offlineSuggestion = result.suggestions.find(s =>
+      s.title.toLowerCase().includes('offline')
+    );
+    expect(offlineSuggestion).toBeDefined();
+    expect(offlineSuggestion?.section_id).toMatch(/__topic_new_feature_requests/);
+
+    // Verify no "Review: Discussion details" fallback
+    const fallbackSuggestion = result.suggestions.find(s =>
+      s.title.toLowerCase().includes('review') &&
+      s.title.toLowerCase().includes('discussion')
+    );
+    expect(fallbackSuggestion).toBeUndefined();
+  });
+
+  it('FIX C: subsections appear in debug output with full metadata and candidates', () => {
+    const note: NoteInput = {
+      note_id: 'test-subsections-debug-output',
+      raw_markdown: `# Meeting Notes
+
+## 🔍 Discussion details
+
+New Feature Requests:
+Launch offline mode for mobile app to support disconnected users in the field.
+
+Project Timelines:
+Project Ares migration will slip by 2 weeks due to infrastructure dependencies.
+Project Zenith remains on track for Q2 delivery.
+
+Internal Operations:
+Standardize deployment scripts across all environments.
+
+Cultural Shift:
+Propose meeting-free Wednesdays for focused work.
+`,
+      authored_at: new Date().toISOString(),
+    };
+
+    // Use enable_debug=true to get full metadata
+    const result = generateSuggestionsWithDebug(
+      note,
+      undefined,
+      { ...DEFAULT_CONFIG, enable_debug: true },
+      { verbosity: 'REDACTED' }
+    );
+
+    expect(result.debugRun).toBeDefined();
+    if (!result.debugRun) return;
+
+    // Requirement 1: Parent section must have proper metadata
+    const parentSection = result.debugRun.sections.find(s =>
+      s.headingTextPreview.includes('Discussion details') && !s.sectionId.includes('__topic_')
+    );
+    expect(parentSection).toBeDefined();
+    expect(parentSection?.emitted).toBe(false);
+    expect(parentSection?.dropStage).toBe('TOPIC_ISOLATION');
+    expect(parentSection?.dropReason).toBe('SPLIT_INTO_SUBSECTIONS');
+
+    // Check topicIsolation metadata
+    expect(parentSection?.metadata?.topicIsolation).toBeDefined();
+    expect(parentSection?.metadata?.topicIsolation?.eligible).toBe(true);
+    expect(parentSection?.metadata?.topicIsolation?.reason).toMatch(/heading_match|bulletCount>=5|charCount>=500/);
+    expect(parentSection?.metadata?.topicIsolation?.hasTopicAnchors).toBe(true);
+
+    // Check topicSplit metadata
+    expect(parentSection?.metadata?.topicSplit).toBeDefined();
+    expect(parentSection?.metadata?.topicSplit?.topicsFound).toBeInstanceOf(Array);
+    expect(parentSection?.metadata?.topicSplit?.subSectionIds).toBeInstanceOf(Array);
+    expect(parentSection?.metadata?.topicSplit?.topicsFound).toEqual([
+      'new feature requests',
+      'project timelines',
+      'internal operations',
+      'cultural shift',
+    ]);
+
+    // Requirement 2: Subsections must appear in sections array
+    const subsections = result.debugRun.sections.filter(s => s.sectionId.includes('__topic_'));
+    expect(subsections.length).toBeGreaterThanOrEqual(2);
+    expect(subsections.length).toBe(4); // Should be exactly 4 for this test
+
+    // Verify subsection structure
+    subsections.forEach(sub => {
+      // sectionId format
+      expect(sub.sectionId).toMatch(/__topic_/);
+
+      // headingTextPreview format: "Parent: Topic"
+      expect(sub.headingTextPreview).toMatch(/Discussion details:/);
+
+      // Should not have INTERNAL_ERROR
+      expect(sub.dropReason).not.toBe('INTERNAL_ERROR');
+      expect(sub.dropStage).not.toBe('VALIDATION');
+    });
+
+    // Requirement 3: Subsections must emit real candidates (not fallbacks)
+    const emittedCandidates = result.debugRun.sections
+      .flatMap(s => s.candidates)
+      .filter(c => c.emitted);
+
+    // Should have at least offline + Ares candidates
+    expect(emittedCandidates.length).toBeGreaterThanOrEqual(2);
+
+    // Verify no "Review: Discussion details" fallback
+    const fallbackCandidate = emittedCandidates.find(c =>
+      c.suggestion?.title?.toLowerCase().includes('review') &&
+      c.suggestion?.title?.toLowerCase().includes('discussion details')
+    );
+    expect(fallbackCandidate).toBeUndefined();
+
+    // Requirement 4: Verify specific candidates
+    // a) Offline mode candidate
+    const offlineCandidate = emittedCandidates.find(c =>
+      c.suggestion?.body?.toLowerCase().includes('offline mode') ||
+      c.suggestion?.title?.toLowerCase().includes('offline')
+    );
+    expect(offlineCandidate).toBeDefined();
+    expect(offlineCandidate?.suggestion?.title).not.toMatch(/^Review:/);
+    expect(offlineCandidate?.metadata?.type).toBe('project_update');
+
+    // b) Ares candidate
+    const aresCandidate = emittedCandidates.find(c => {
+      const body = c.suggestion?.body?.toLowerCase() || '';
+      const title = c.suggestion?.title?.toLowerCase() || '';
+      return (body.includes('ares') || title.includes('ares')) &&
+             (body.includes('2 week') || body.includes('2-week') || body.includes('2 weeks'));
+    });
+    expect(aresCandidate).toBeDefined();
+    expect(aresCandidate?.suggestion?.title).not.toMatch(/^Review:/);
+    expect(aresCandidate?.metadata?.type).toBe('project_update');
+
+    // c) Zenith candidate (optional but should be present in body)
+    // Zenith and Ares are in the same "Project Timelines" topic, so check Ares candidate includes Zenith
+    if (aresCandidate) {
+      const aresBody = aresCandidate.suggestion?.body?.toLowerCase() || '';
+      expect(aresBody).toMatch(/zenith/);
+      expect(aresBody).toMatch(/on track/);
+    }
+
+    // Verify subsections have evidence
+    const subsectionsWithCandidates = subsections.filter(s => s.candidates.length > 0);
+    expect(subsectionsWithCandidates.length).toBeGreaterThanOrEqual(2);
+
+    // Verify evidence spans are present for emitted candidates
+    emittedCandidates.forEach(candidate => {
+      expect(candidate.evidence).toBeDefined();
+      expect(candidate.evidence?.spans).toBeInstanceOf(Array);
+      if (candidate.evidence?.spans) {
+        expect(candidate.evidence.spans.length).toBeGreaterThan(0);
+      }
+    });
+  });
+
+  it('STRESS TEST: Discussion details WITHOUT topic anchors should emit useful suggestion (not "Review:")', () => {
+    // When "Discussion details" section has NO explicit topic anchors,
+    // it should NOT be split, but synthesis should still produce a useful
+    // suggestion (not fall back to "Review: ...").
+    const note: NoteInput = {
+      note_id: 'test-discussion-no-anchors',
+      raw_markdown: `# Product Sync
+
+## 🔍 Discussion details
+
+We talked about several things:
+- Offline mode for mobile app to support disconnected users in the field
+- Project Ares migration delayed by 2 weeks due to infrastructure dependencies
+- Project Zenith remains on track for Q2 delivery
+- Standardize deployment scripts across all environments
+- Propose meeting-free Wednesdays for focused work
+
+The team agreed these are all important priorities.
+`,
+      authored_at: new Date().toISOString(),
+    };
+
+    const result = generateSuggestions(note, DEFAULT_CONFIG);
+
+    // Should NOT be split (no topic anchors found)
+    // Should emit at least ONE useful suggestion (likely project_update for Ares delay)
+    expect(result.suggestions.length).toBeGreaterThan(0);
+
+    // Should NOT emit "Review: Discussion details" fallback
+    const fallbackSuggestion = result.suggestions.find(s =>
+      (s.title.toLowerCase().includes('review') && s.title.toLowerCase().includes('discussion')) ||
+      s.title.toLowerCase().startsWith('review:')
+    );
+    expect(fallbackSuggestion).toBeUndefined();
+
+    // Should emit real synthesized suggestion (e.g., Ares delay)
+    const realSuggestion = result.suggestions.find(s =>
+      s.type === 'project_update' &&
+      !s.title.toLowerCase().startsWith('review:')
+    );
+    expect(realSuggestion).toBeDefined();
+
+    // Check with debug to verify it wasn't split
+    const debugResult = generateSuggestionsWithDebug(
+      note,
+      undefined,
+      { ...DEFAULT_CONFIG, enable_debug: true },
+      { verbosity: 'REDACTED' }
+    );
+
+    if (debugResult.debugRun) {
+      // Should have only 1 section (not split)
+      const discussionSection = debugResult.debugRun.sections.find(s =>
+        s.headingTextPreview.toLowerCase().includes('discussion')
+      );
+      expect(discussionSection).toBeDefined();
+
+      // Should NOT be marked as TOPIC_ISOLATION (because no anchors found)
+      expect(discussionSection?.dropStage).not.toBe('TOPIC_ISOLATION');
+
+      // Should have emitted at least one candidate
+      expect(discussionSection?.emitted).toBe(true);
+
+      // Should have NO subsections with __topic_
+      const subsections = debugResult.debugRun.sections.filter(s =>
+        s.sectionId.includes('__topic_')
+      );
+      expect(subsections.length).toBe(0);
+    }
+  });
 });
 
 describe('Combined: Suppression + Topic Isolation', () => {
