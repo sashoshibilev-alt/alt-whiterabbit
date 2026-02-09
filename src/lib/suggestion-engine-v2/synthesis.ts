@@ -1621,6 +1621,24 @@ const TOPIC_ANCHORS = [
 ];
 
 /**
+ * Check if section body contains topic anchors that are extractable
+ * (i.e., anchors that appear at the start of lines, not just as substrings)
+ *
+ * IMPORTANT: This must use the SAME logic as splitSectionByTopic() to avoid
+ * eligibility/execution disagreement
+ */
+function hasExtractableTopicAnchors(lines: Line[]): boolean {
+  for (const line of lines) {
+    const trimmedText = line.text.trim().toLowerCase();
+    const matchedAnchor = TOPIC_ANCHORS.find(anchor => trimmedText.startsWith(anchor));
+    if (matchedAnchor) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Debug information for topic isolation decision
  */
 export interface TopicIsolationDebug {
@@ -1667,9 +1685,9 @@ export function shouldSplitByTopic(
 
   const isLongSection = bulletCountSeen >= 5 || charCountSeen >= 500;
 
-  // Check for topic anchors in body
-  const bodyText = section.raw_text.toLowerCase();
-  const hasTopicAnchors = TOPIC_ANCHORS.some(anchor => bodyText.includes(anchor));
+  // Check for topic anchors in body using SAME logic as splitSectionByTopic
+  // (line-start match, not substring match, to avoid eligibility/execution disagreement)
+  const hasTopicAnchors = hasExtractableTopicAnchors(section.body_lines);
 
   // Determine eligibility and reason
   let eligible = false;

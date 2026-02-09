@@ -542,6 +542,9 @@ export class DebugLedger {
   finalize(emittedSuggestionIds: string[]): void {
     const emittedSet = new Set(emittedSuggestionIds);
 
+    // HARD INVARIANT CHECK: Validate topic isolation integrity before finalizing
+    this.validateTopicIsolationIntegrity();
+
     for (const section of this.sections.values()) {
       let hasEmitted = false;
 
@@ -581,6 +584,65 @@ export class DebugLedger {
         section.dropStage = isPlanChangeSection
           ? DropStage.VALIDATION
           : DropStage.THRESHOLD;
+      }
+    }
+  }
+
+  /**
+   * Validate topic isolation integrity
+   * Ensures that if a parent section is marked SPLIT_INTO_SUBSECTIONS,
+   * then subsections exist in the ledger and parent has topicSplit metadata
+   */
+  private validateTopicIsolationIntegrity(): void {
+    for (const section of this.sections.values()) {
+      // Check if section is marked as split
+      if (section.dropReason === DropReason.SPLIT_INTO_SUBSECTIONS) {
+        // Verify topicSplit metadata exists
+        const hasTopicSplitMetadata = section.metadata?.topicSplit !== undefined;
+
+        if (!hasTopicSplitMetadata) {
+          console.error('[TOPIC_ISOLATION_INVARIANT_VIOLATION] Parent marked as SPLIT but missing topicSplit metadata:', {
+            sectionId: section.sectionId,
+            dropReason: section.dropReason,
+            metadata: section.metadata,
+          });
+
+          // RECOVERY: Mark as INTERNAL_ERROR to prevent silent success
+          section.dropReason = DropReason.INTERNAL_ERROR;
+          section.dropStage = DropStage.TOPIC_ISOLATION;
+          section.metadata = {
+            ...section.metadata,
+            topicIsolationFailure: {
+              reason: 'missing_topicSplit_metadata',
+            },
+          };
+          continue;
+        }
+
+        // Verify subsections exist in ledger
+        const topicSplitMetadata = section.metadata.topicSplit as any;
+        const expectedSubsectionIds: string[] = topicSplitMetadata.subSectionIds || [];
+        const actualSubsections = expectedSubsectionIds.filter(id => this.sections.has(id));
+
+        if (actualSubsections.length === 0) {
+          console.error('[TOPIC_ISOLATION_INVARIANT_VIOLATION] Parent marked as SPLIT but no subsections found in ledger:', {
+            sectionId: section.sectionId,
+            expectedSubsectionIds,
+            actualSubsections,
+          });
+
+          // RECOVERY: Mark as INTERNAL_ERROR
+          section.dropReason = DropReason.INTERNAL_ERROR;
+          section.dropStage = DropStage.TOPIC_ISOLATION;
+          section.metadata = {
+            ...section.metadata,
+            topicIsolationFailure: {
+              reason: 'subsections_not_in_ledger',
+              expectedSubsectionIds,
+              actualSubsectionCount: actualSubsections.length,
+            },
+          };
+        }
       }
     }
   }

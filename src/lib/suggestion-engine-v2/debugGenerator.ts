@@ -191,6 +191,44 @@ export function generateSuggestionsWithDebug(
 
       if (shouldSplit) {
         const subsections = splitSectionByTopic(section, finalConfig.enable_debug ? debugInfo : undefined);
+
+        // CRITICAL CHECK: Verify actual subsections were created
+        // If splitSectionByTopic returns [section] (no split), DO NOT mark as SPLIT_INTO_SUBSECTIONS
+        const actuallyCreatedSubsections = subsections.length > 1 ||
+          (subsections.length === 1 && subsections[0].section_id !== section.section_id);
+
+        if (!actuallyCreatedSubsections) {
+          // Split was eligible but no actual subsections created (e.g., anchors not at line start)
+          // Add to expanded sections as-is, do NOT mark as split
+          expandedSections.push(section);
+
+          if (finalConfig.enable_debug && ledger) {
+            console.warn('[TOPIC_ISOLATION_NO_OP] Split eligible but no subsections created:', {
+              sectionId: section.section_id,
+              heading: section.heading_text,
+              subsectionsReturned: subsections.length,
+              firstSubsectionId: subsections[0]?.section_id,
+              debugInfo,
+            });
+
+            // Record debug info to explain why no split happened
+            const sectionDebug = ledger.getSection(section.section_id);
+            if (sectionDebug) {
+              sectionDebug.metadata = {
+                ...sectionDebug.metadata,
+                topicIsolation: debugInfo.topicIsolation,
+                topicIsolationNoOp: {
+                  reason: 'no_subsections_created',
+                  eligibilityReason: debugInfo.topicIsolation?.reason,
+                  topicsFound: debugInfo.topicSplit?.topicsFound || [],
+                },
+              };
+            }
+          }
+          continue; // Skip split handling
+        }
+
+        // Actual subsections created - proceed with split
         expandedSections.push(...subsections);
 
         // DEBUG ASSERTION: Log subsection creation (only in dev/test)
@@ -209,19 +247,33 @@ export function generateSuggestionsWithDebug(
         if (ledger) {
           const parentDebug = ledger.getSection(section.section_id);
           if (parentDebug) {
-            parentDebug.emitted = false;
-            parentDebug.dropStage = DropStage.TOPIC_ISOLATION;
-            parentDebug.dropReason = DropReason.SPLIT_INTO_SUBSECTIONS;
-            parentDebug.synthesisRan = false;
+            // INVARIANT: Always attach topicSplit metadata before marking as SPLIT_INTO_SUBSECTIONS
+            // This ensures parent.metadata contains subsection info even if debug is OFF
+            const topicSplitMetadata = {
+              topicsFound: debugInfo.topicSplit?.topicsFound || [],
+              subSectionIds: subsections.map(s => s.section_id),
+              subsectionCount: subsections.length,
+              reason: 'split by topic anchors',
+            };
 
-            // Store topic isolation debug info if available
+            parentDebug.metadata = {
+              ...parentDebug.metadata,
+              topicSplit: topicSplitMetadata,
+            };
+
+            // Add full debug info if enable_debug is true
             if (finalConfig.enable_debug && debugInfo.topicIsolation) {
               parentDebug.metadata = {
                 ...parentDebug.metadata,
                 topicIsolation: debugInfo.topicIsolation,
-                topicSplit: debugInfo.topicSplit,
               };
             }
+
+            // Now mark parent as split (after metadata is attached)
+            parentDebug.emitted = false;
+            parentDebug.dropStage = DropStage.TOPIC_ISOLATION;
+            parentDebug.dropReason = DropReason.SPLIT_INTO_SUBSECTIONS;
+            parentDebug.synthesisRan = false;
           }
         }
 
@@ -265,12 +317,41 @@ export function generateSuggestionsWithDebug(
 
           const ledgerSizeAfterSubsections = Array.from((ledger as any).sections.values()).length;
 
+          // HARD INVARIANT CHECK: Verify all subsections were added to ledger
+          const expectedSubsectionCount = subsections.length;
+          const actualSubsectionsAdded = ledgerSizeAfterSubsections - ledgerSizeBeforeSubsections;
+
+          if (actualSubsectionsAdded !== expectedSubsectionCount) {
+            // INVARIANT VIOLATION: Not all subsections were added to ledger
+            console.error('[TOPIC_ISOLATION_INVARIANT_VIOLATION] Subsections missing from ledger:', {
+              parentSectionId: section.section_id,
+              expectedSubsectionCount,
+              actualSubsectionsAdded,
+              subsectionIds: subsections.map(s => s.section_id),
+            });
+
+            // RECOVERY: Mark parent with TOPIC_ISOLATION_FAILED instead of SPLIT_INTO_SUBSECTIONS
+            const parentDebug = ledger.getSection(section.section_id);
+            if (parentDebug) {
+              parentDebug.dropReason = DropReason.INTERNAL_ERROR;
+              parentDebug.dropStage = DropStage.TOPIC_ISOLATION;
+              parentDebug.metadata = {
+                ...parentDebug.metadata,
+                topicIsolationFailure: {
+                  reason: 'subsections_missing_from_ledger',
+                  expectedCount: expectedSubsectionCount,
+                  actualCount: actualSubsectionsAdded,
+                },
+              };
+            }
+          }
+
           // DEBUG ASSERTION: Log ledger state after adding subsections (dev/test only)
           if (finalConfig.enable_debug && process.env.DEBUG_TOPIC_ISOLATION_TRACE === 'true') {
             console.log('[TOPIC_ISOLATION_DEBUG] Ledger state after subsections:', {
               ledgerSizeBeforeSubsections,
               ledgerSizeAfterSubsections,
-              subsectionsAdded: ledgerSizeAfterSubsections - ledgerSizeBeforeSubsections,
+              subsectionsAdded: actualSubsectionsAdded,
               allSectionIds: Array.from((ledger as any).sections.keys()),
             });
           }
@@ -366,67 +447,108 @@ export function generateSuggestionsWithDebug(
           // Split the section and add subsections to expanded list for synthesis
           const subsections = splitSectionByTopic(section, finalConfig.enable_debug ? debugInfo : undefined);
 
-          if (finalConfig.enable_debug && ledger) {
-            console.warn('[TOPIC_ISOLATION_FALLBACK_PATH] Section was split-eligible but reached fallback path:', {
-              sectionId: section.section_id,
-              heading: section.heading_text,
-              subsectionCount: subsections.length,
-              debugInfo,
-            });
+          // CRITICAL CHECK: Verify actual subsections were created
+          const actuallyCreatedSubsections = subsections.length > 1 ||
+            (subsections.length === 1 && subsections[0].section_id !== section.section_id);
 
-            // Record topic isolation info in parent section debug
-            const parentDebug = ledger.getSection(section.section_id);
-            if (parentDebug && debugInfo.topicIsolation) {
-              parentDebug.emitted = false;
-              parentDebug.dropStage = DropStage.TOPIC_ISOLATION;
-              parentDebug.dropReason = DropReason.SPLIT_INTO_SUBSECTIONS;
-            }
-          }
-
-          // Process subsections through normal synthesis (retry synthesis for them)
-          for (const subsection of subsections) {
-            // Skip original section (parent)
-            if (subsection.section_id === section.section_id) continue;
-
-            // Create debug entry for subsection
+          if (!actuallyCreatedSubsections) {
+            // Split was eligible but no actual subsections created
+            // Create fallback suggestion instead
             if (ledger) {
-              sectionToDebug(ledger, subsection);
-              const subsectionDebug = ledger.getSection(subsection.section_id);
-              if (subsectionDebug) {
-                // Inherit parent classification
-                ledger.afterIntentClassification(
-                  subsectionDebug,
-                  subsection.intent,
-                  subsection.is_actionable,
-                  subsection.actionability_reason,
-                  undefined
-                );
-                if (subsection.suggested_type) {
-                  ledger.afterTypeClassification(
-                    subsectionDebug,
-                    subsection.suggested_type,
-                    subsection.type_confidence || 0
-                  );
+              console.warn('[TOPIC_ISOLATION_FALLBACK_NO_OP] Split eligible but no subsections, creating fallback:', {
+                sectionId: section.section_id,
+                heading: section.heading_text,
+                subsectionsReturned: subsections.length,
+                debugInfo,
+              });
+            }
+            // Fall through to fallback creation below (do NOT continue)
+          } else {
+            // Actual subsections created in fallback path
+            if (ledger) {
+              console.warn('[TOPIC_ISOLATION_FALLBACK_PATH] Section was split-eligible but reached fallback path:', {
+                sectionId: section.section_id,
+                heading: section.heading_text,
+                subsectionCount: subsections.length,
+                debugInfo,
+              });
+
+              // Record topic isolation info in parent section debug
+              const parentDebug = ledger.getSection(section.section_id);
+              if (parentDebug) {
+                // INVARIANT: Always attach topicSplit metadata before marking as SPLIT_INTO_SUBSECTIONS
+                const topicSplitMetadata = {
+                  topicsFound: debugInfo.topicSplit?.topicsFound || [],
+                  subSectionIds: subsections.map(s => s.section_id),
+                  subsectionCount: subsections.length,
+                  reason: 'split by topic anchors (fallback path)',
+                };
+
+                parentDebug.metadata = {
+                  ...parentDebug.metadata,
+                  topicSplit: topicSplitMetadata,
+                };
+
+                // Add full debug info if enable_debug is true
+                if (finalConfig.enable_debug && debugInfo.topicIsolation) {
+                  parentDebug.metadata = {
+                    ...parentDebug.metadata,
+                    topicIsolation: debugInfo.topicIsolation,
+                  };
                 }
+
+                parentDebug.emitted = false;
+                parentDebug.dropStage = DropStage.TOPIC_ISOLATION;
+                parentDebug.dropReason = DropReason.SPLIT_INTO_SUBSECTIONS;
               }
             }
 
-            // Synthesize subsection
-            const subsectionSuggestions = synthesizeSuggestions([subsection]);
-            for (const suggestion of subsectionSuggestions) {
-              synthesizedSuggestions.push(suggestion);
-              sectionIdsWithSuggestions.add(subsection.section_id);
+            // Process subsections through normal synthesis (retry synthesis for them)
+            for (const subsection of subsections) {
+              // Skip original section (parent)
+              if (subsection.section_id === section.section_id) continue;
 
+              // Create debug entry for subsection
               if (ledger) {
+                sectionToDebug(ledger, subsection);
                 const subsectionDebug = ledger.getSection(subsection.section_id);
                 if (subsectionDebug) {
-                  ledger.afterSynthesis(subsectionDebug, suggestion);
+                  // Inherit parent classification
+                  ledger.afterIntentClassification(
+                    subsectionDebug,
+                    subsection.intent,
+                    subsection.is_actionable,
+                    subsection.actionability_reason,
+                    undefined
+                  );
+                  if (subsection.suggested_type) {
+                    ledger.afterTypeClassification(
+                      subsectionDebug,
+                      subsection.suggested_type,
+                      subsection.type_confidence || 0
+                    );
+                  }
+                }
+              }
+
+              // Synthesize subsection
+              const subsectionSuggestions = synthesizeSuggestions([subsection]);
+              for (const suggestion of subsectionSuggestions) {
+                synthesizedSuggestions.push(suggestion);
+                sectionIdsWithSuggestions.add(subsection.section_id);
+
+                if (ledger) {
+                  const subsectionDebug = ledger.getSection(subsection.section_id);
+                  if (subsectionDebug) {
+                    ledger.afterSynthesis(subsectionDebug, suggestion);
+                  }
                 }
               }
             }
-          }
 
-          continue; // Skip fallback creation
+            continue; // Skip fallback creation
+          }
+          // If actuallyCreatedSubsections is false, fall through to fallback creation
         }
 
         // Create fallback suggestion for plan_change section with 0 candidates
