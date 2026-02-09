@@ -193,8 +193,8 @@ export function generateSuggestionsWithDebug(
         const subsections = splitSectionByTopic(section, finalConfig.enable_debug ? debugInfo : undefined);
         expandedSections.push(...subsections);
 
-        // DEBUG ASSERTION: Log subsection creation
-        if (finalConfig.enable_debug) {
+        // DEBUG ASSERTION: Log subsection creation (only in dev/test)
+        if (finalConfig.enable_debug && process.env.DEBUG_TOPIC_ISOLATION_TRACE === 'true') {
           console.log('[TOPIC_ISOLATION_DEBUG] Created subsections:', {
             parentSectionId: section.section_id,
             subsectionCount: subsections.length,
@@ -229,8 +229,8 @@ export function generateSuggestionsWithDebug(
         if (ledger) {
           const ledgerSizeBeforeSubsections = Array.from((ledger as any).sections.values()).length;
 
-          // DEBUG ASSERTION: Check if splitSectionByTopic returned actual subsections or just parent
-          if (finalConfig.enable_debug && subsections.length > 0) {
+          // DEBUG ASSERTION: Check if splitSectionByTopic returned actual subsections or just parent (dev/test only)
+          if (finalConfig.enable_debug && process.env.DEBUG_TOPIC_ISOLATION_TRACE === 'true' && subsections.length > 0) {
             const hasActualSubsections = subsections.some(s => s.section_id.includes('__topic_'));
             console.log('[TOPIC_ISOLATION_DEBUG] Subsection type check:', {
               parentSectionId: section.section_id,
@@ -265,8 +265,8 @@ export function generateSuggestionsWithDebug(
 
           const ledgerSizeAfterSubsections = Array.from((ledger as any).sections.values()).length;
 
-          // DEBUG ASSERTION: Log ledger state after adding subsections
-          if (finalConfig.enable_debug) {
+          // DEBUG ASSERTION: Log ledger state after adding subsections (dev/test only)
+          if (finalConfig.enable_debug && process.env.DEBUG_TOPIC_ISOLATION_TRACE === 'true') {
             console.log('[TOPIC_ISOLATION_DEBUG] Ledger state after subsections:', {
               ledgerSizeBeforeSubsections,
               ledgerSizeAfterSubsections,
@@ -712,11 +712,11 @@ export function generateSuggestionsWithDebug(
     if (ledger) {
       ledger.finalize(finalSuggestions.map((s) => s.suggestion_id));
 
-      // DEBUG ASSERTION: Log final debugRun sections
+      // INVARIANT CHECK: Verify all ledger sections appear in debugRun (always runs when enable_debug=true)
       if (finalConfig.enable_debug) {
         const debugRun = ledger.buildDebugRun();
 
-        // INVARIANT: Check that all ledger sections appear in debugRun
+        // Check ledger consistency
         const ledgerSectionIds = new Set(Array.from((ledger as any).sections.keys()));
         const debugRunSectionIds = new Set(debugRun.sections.map(s => s.sectionId));
         const missingSectionIds = Array.from(ledgerSectionIds).filter(id => !debugRunSectionIds.has(id));
@@ -729,12 +729,15 @@ export function generateSuggestionsWithDebug(
           });
         }
 
-        console.log('[TOPIC_ISOLATION_DEBUG] Final debugRun sections:', {
-          totalSections: debugRun.sections.length,
-          sectionIds: debugRun.sections.map(s => s.sectionId),
-          subsectionCount: debugRun.sections.filter(s => s.sectionId.includes('__topic_')).length,
-          ledgerConsistencyCheck: missingSectionIds.length === 0 ? 'PASS' : 'FAIL',
-        });
+        // Detailed logging only in trace mode
+        if (process.env.DEBUG_TOPIC_ISOLATION_TRACE === 'true') {
+          console.log('[TOPIC_ISOLATION_DEBUG] Final debugRun sections:', {
+            totalSections: debugRun.sections.length,
+            sectionIds: debugRun.sections.map(s => s.sectionId),
+            subsectionCount: debugRun.sections.filter(s => s.sectionId.includes('__topic_')).length,
+            ledgerConsistencyCheck: missingSectionIds.length === 0 ? 'PASS' : 'FAIL',
+          });
+        }
       }
     }
 

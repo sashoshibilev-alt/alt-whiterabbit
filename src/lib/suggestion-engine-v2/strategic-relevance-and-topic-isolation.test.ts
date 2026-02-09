@@ -631,6 +631,59 @@ Propose meeting-free Wednesdays for focused work.
     }
   });
 
+  it('REGRESSION: split-eligible sections never emit "Review:" fallback', () => {
+    // User-visible invariant: when a section is split by topic isolation,
+    // we NEVER emit a "Review: [heading]" fallback. Instead, subsections
+    // emit real synthesized suggestions.
+    const note: NoteInput = {
+      note_id: 'test-no-fallback-for-split',
+      raw_markdown: `# Gemini Launch Retrospective
+
+## 🔍 Discussion details
+
+Project Timelines:
+* Project Ares: Migration delayed by 2 weeks due to infra dependencies
+* Project Zenith: On track for Q2 delivery
+
+New Feature Requests:
+* Launch offline mode for mobile app to support disconnected users in the field
+
+Internal Operations:
+* Standardize deployment scripts across all environments
+
+Cultural Shift:
+* Propose meeting-free Wednesdays for focused work
+`,
+      authored_at: new Date().toISOString(),
+    };
+
+    const result = generateSuggestions(note, DEFAULT_CONFIG);
+
+    // CRITICAL: No "Review: 🔍 Discussion details" fallback
+    const fallbackSuggestion = result.suggestions.find(s =>
+      (s.title.toLowerCase().includes('review') && s.title.toLowerCase().includes('discussion')) ||
+      s.title.toLowerCase().startsWith('review:')
+    );
+    expect(fallbackSuggestion).toBeUndefined();
+
+    // CRITICAL: At least 2 real suggestions emitted from subsections
+    expect(result.suggestions.length).toBeGreaterThanOrEqual(2);
+
+    // Verify Ares slip suggestion
+    const aresSuggestion = result.suggestions.find(s =>
+      (s.title.toLowerCase().includes('ares') || s.title.toLowerCase().includes('migration')) &&
+      s.type === 'project_update'
+    );
+    expect(aresSuggestion).toBeDefined();
+
+    // Verify offline mode suggestion
+    const offlineSuggestion = result.suggestions.find(s =>
+      s.title.toLowerCase().includes('offline') ||
+      s.suggestion?.body.toLowerCase().includes('offline mode')
+    );
+    expect(offlineSuggestion).toBeDefined();
+  });
+
   it('FIX C: Gemini note with topic anchors on same line as bullets', () => {
     // This test reproduces the exact production scenario from runId=991c4213...
     // where anchors like "Project Timelines:" appear on the same line as bullets
@@ -847,6 +900,77 @@ Propose meeting-free Wednesdays for focused work.
         expect(candidate.evidence.spans.length).toBeGreaterThan(0);
       }
     });
+  });
+
+  it('STRESS TEST: Discussion details WITHOUT topic anchors should emit useful suggestion (not "Review:")', () => {
+    // When "Discussion details" section has NO explicit topic anchors,
+    // it should NOT be split, but synthesis should still produce a useful
+    // suggestion (not fall back to "Review: ...").
+    const note: NoteInput = {
+      note_id: 'test-discussion-no-anchors',
+      raw_markdown: `# Product Sync
+
+## 🔍 Discussion details
+
+We talked about several things:
+- Offline mode for mobile app to support disconnected users in the field
+- Project Ares migration delayed by 2 weeks due to infrastructure dependencies
+- Project Zenith remains on track for Q2 delivery
+- Standardize deployment scripts across all environments
+- Propose meeting-free Wednesdays for focused work
+
+The team agreed these are all important priorities.
+`,
+      authored_at: new Date().toISOString(),
+    };
+
+    const result = generateSuggestions(note, DEFAULT_CONFIG);
+
+    // Should NOT be split (no topic anchors found)
+    // Should emit at least ONE useful suggestion (likely project_update for Ares delay)
+    expect(result.suggestions.length).toBeGreaterThan(0);
+
+    // Should NOT emit "Review: Discussion details" fallback
+    const fallbackSuggestion = result.suggestions.find(s =>
+      (s.title.toLowerCase().includes('review') && s.title.toLowerCase().includes('discussion')) ||
+      s.title.toLowerCase().startsWith('review:')
+    );
+    expect(fallbackSuggestion).toBeUndefined();
+
+    // Should emit real synthesized suggestion (e.g., Ares delay)
+    const realSuggestion = result.suggestions.find(s =>
+      s.type === 'project_update' &&
+      !s.title.toLowerCase().startsWith('review:')
+    );
+    expect(realSuggestion).toBeDefined();
+
+    // Check with debug to verify it wasn't split
+    const debugResult = generateSuggestionsWithDebug(
+      note,
+      undefined,
+      { ...DEFAULT_CONFIG, enable_debug: true },
+      { verbosity: 'REDACTED' }
+    );
+
+    if (debugResult.debugRun) {
+      // Should have only 1 section (not split)
+      const discussionSection = debugResult.debugRun.sections.find(s =>
+        s.headingTextPreview.toLowerCase().includes('discussion')
+      );
+      expect(discussionSection).toBeDefined();
+
+      // Should NOT be marked as TOPIC_ISOLATION (because no anchors found)
+      expect(discussionSection?.dropStage).not.toBe('TOPIC_ISOLATION');
+
+      // Should have emitted at least one candidate
+      expect(discussionSection?.emitted).toBe(true);
+
+      // Should have NO subsections with __topic_
+      const subsections = debugResult.debugRun.sections.filter(s =>
+        s.sectionId.includes('__topic_')
+      );
+      expect(subsections.length).toBe(0);
+    }
   });
 });
 
