@@ -1410,7 +1410,7 @@ function isSummaryHeading(headingText?: string): boolean {
 
 /**
  * Explicit request patterns that indicate actionable asks
- * Used for Discussion details sections with fallbackSkipped
+ * Used for B-lite synthesis across all section headings
  */
 const EXPLICIT_REQUEST_PATTERNS = [
   /\basksfor\b/i,
@@ -1421,6 +1421,10 @@ const EXPLICIT_REQUEST_PATTERNS = [
   /\bneed(?:s)?\s+(?:a|an|the)\b/i,
   /\bwant(?:s)?\s+to\b/i,
   /\bwant(?:s)?\s+(?:a|an|the)\b/i,
+  /\bwe\s+should\b/i,
+  /\bmaybe\s+we\s+could\b/i,
+  /\brequires\s+us\s+to\b/i,
+  /\bsuggestion:/i,
 ];
 
 /**
@@ -1432,33 +1436,34 @@ export function containsExplicitRequest(text: string): boolean {
 }
 
 /**
- * Check if section is a Discussion details section with explicit requests
- * Returns true only if ALL conditions met:
- * - Heading contains "Discussion details"
- * - hasTopicAnchors === false (no extractable topic anchors)
- * - Section text contains explicit request language
+ * Check if a heading is a "Discussion details" variant.
  */
-function isDiscussionDetailsWithExplicitAsk(
-  headingText: string,
-  bodyLines: Line[],
-  rawText: string
-): boolean {
-  // Extract leaf heading (handle hierarchical paths)
+function isDiscussionDetailsHeading(headingText: string): boolean {
   const leafHeading = headingText.split('>').pop()?.trim() || '';
   const normalizedLeaf = leafHeading.toLowerCase().trim();
   const leafWithoutEmoji = normalizedLeaf.replace(/[\u{1F300}-\u{1F9FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/gu, '').trim();
 
-  // Check if heading contains "Discussion details"
   const discussionHeadings = ['discussion details', 'discussion', 'details'];
-  const isDiscussionDetails = discussionHeadings.some(h =>
+  return discussionHeadings.some(h =>
     leafWithoutEmoji === h ||
     normalizedLeaf === h ||
     leafWithoutEmoji.startsWith(h + ':') ||
     normalizedLeaf.startsWith(h + ':')
   );
+}
 
-  if (!isDiscussionDetails) return false;
-
+/**
+ * Check if section contains explicit request language and is eligible for B-lite synthesis.
+ * Returns true only if ALL conditions met:
+ * - hasTopicAnchors === false (no extractable topic anchors — those go through topic isolation)
+ * - Section text contains explicit request language
+ *
+ * Heading-agnostic: fires for any section heading, not just "Discussion details".
+ */
+function isSectionWithExplicitAsk(
+  bodyLines: Line[],
+  rawText: string
+): boolean {
   // Check hasTopicAnchors === false (using same logic as shouldSplitByTopic)
   const hasTopicAnchors = hasExtractableTopicAnchors(bodyLines);
   if (hasTopicAnchors) return false;
@@ -1567,6 +1572,66 @@ export function generateTitleFromExplicitAsk(askText: string): string {
   }
 
   return title;
+}
+
+/**
+ * Build a B-lite suggestion from explicit ask language in a section.
+ * Returns null if no extractable ask is found.
+ */
+function buildBliteSuggestion(section: ClassifiedSection): Suggestion | null {
+  const explicitAsk = extractExplicitAsk(section.raw_text);
+  if (!explicitAsk || explicitAsk.length <= 10) return null;
+
+  const title = generateTitleFromExplicitAsk(explicitAsk);
+  const body = capitalizeFirst(explicitAsk);
+
+  const askLineObj = section.body_lines.find(l =>
+    normalizeLineForSynthesis(l.text).includes(explicitAsk.substring(0, 30))
+  );
+
+  const evidenceSpans: EvidenceSpan[] = askLineObj
+    ? [{ start_line: askLineObj.index, end_line: askLineObj.index, text: askLineObj.text }]
+    : [{
+        start_line: section.start_line,
+        end_line: Math.min(section.end_line, section.start_line + 2),
+        text: section.body_lines.slice(0, 2).map(l => l.text).join('\n'),
+      }];
+
+  return {
+    suggestion_id: generateSuggestionId(section.note_id),
+    note_id: section.note_id,
+    section_id: section.section_id,
+    type: 'idea',
+    title,
+    payload: {
+      draft_initiative: {
+        title: title.replace(/^New idea:\s*/i, '').trim(),
+        description: body,
+      },
+    },
+    evidence_spans: evidenceSpans,
+    scores: {
+      section_actionability: section.intent.new_workstream || 0.6,
+      type_choice_confidence: 0.7,
+      synthesis_confidence: 0.7,
+      overall: 0,
+    },
+    routing: { create_new: true },
+    suggestionKey: computeSuggestionKey({
+      noteId: section.note_id,
+      sourceSectionId: section.section_id,
+      type: 'idea',
+      title,
+    }),
+    structural_hint: 'explicit_ask',
+    suggestion: {
+      title,
+      body,
+      evidencePreview: [explicitAsk.substring(0, 150)],
+      sourceSectionId: section.section_id,
+      sourceHeading: section.heading_text || '',
+    },
+  };
 }
 
 // ============================================
@@ -1792,7 +1857,7 @@ const TOPIC_ANCHORS = [
  * IMPORTANT: This must use the SAME logic as splitSectionByTopic() to avoid
  * eligibility/execution disagreement
  */
-function hasExtractableTopicAnchors(lines: Line[]): boolean {
+export function hasExtractableTopicAnchors(lines: Line[]): boolean {
   for (const line of lines) {
     const trimmedText = line.text.trim().toLowerCase();
     const matchedAnchor = TOPIC_ANCHORS.find(anchor => trimmedText.startsWith(anchor));
@@ -2118,119 +2183,18 @@ export function synthesizeSuggestions(
       continue;
     }
 
-    // B-LITE FIX: Check if this is a Discussion details section with explicit asks
-    // These sections should emit at least one real suggestion, bypassing normal suppression
     const headingText = section.heading_text || '';
-    const isExplicitAskSection = isDiscussionDetailsWithExplicitAsk(
-      headingText,
-      section.body_lines,
-      section.raw_text
-    );
 
-    if (process.env.DEBUG_EXPLICIT_ASK === 'true' && headingText.toLowerCase().includes('discussion')) {
-      console.log('[DEBUG_EXPLICIT_ASK] Section check:', {
-        headingText,
-        isExplicitAskSection,
-        hasExplicitRequest: containsExplicitRequest(section.raw_text),
-        hasTopicAnchors: hasExtractableTopicAnchors(section.body_lines),
-      });
-    }
-
-    if (isExplicitAskSection) {
-      // Force synthesis of a real new_feature suggestion from explicit ask
-      const explicitAsk = extractExplicitAsk(section.raw_text);
-
-      if (process.env.DEBUG_EXPLICIT_ASK === 'true') {
-        console.log('[DEBUG_EXPLICIT_ASK] Explicit ask extracted:', {
-          explicitAsk: explicitAsk?.substring(0, 100),
-          length: explicitAsk?.length,
-        });
-      }
-
-      if (explicitAsk && explicitAsk.length > 10) {
-        // Generate a simple new_feature suggestion from the explicit ask
-        const title = generateTitleFromExplicitAsk(explicitAsk);
-        const body = capitalizeFirst(explicitAsk);
-
-        // Extract evidence from the ask line
-        const askLineObj = section.body_lines.find(l =>
-          normalizeLineForSynthesis(l.text).includes(explicitAsk.substring(0, 30))
-        );
-
-        const evidenceSpans: EvidenceSpan[] = askLineObj
-          ? [{
-              start_line: askLineObj.index,
-              end_line: askLineObj.index,
-              text: askLineObj.text,
-            }]
-          : [{
-              start_line: section.start_line,
-              end_line: Math.min(section.end_line, section.start_line + 2),
-              text: section.body_lines.slice(0, 2).map(l => l.text).join('\n'),
-            }];
-
-        const scores: SuggestionScores = {
-          section_actionability: section.intent.new_workstream || 0.6,
-          type_choice_confidence: 0.7,
-          synthesis_confidence: 0.7,
-          overall: 0, // Computed in scoring phase
-        };
-
-        const routing: SuggestionRouting = {
-          create_new: true,
-        };
-
-        const suggestionContext: SuggestionContext = {
-          title,
-          body,
-          evidencePreview: [explicitAsk.substring(0, 150)],
-          sourceSectionId: section.section_id,
-          sourceHeading: section.heading_text || '',
-        };
-
-        const suggestionKey = computeSuggestionKey({
-          noteId: section.note_id,
-          sourceSectionId: section.section_id,
-          type: 'idea',
-          title,
-        });
-
-        const suggestion: Suggestion = {
-          suggestion_id: generateSuggestionId(section.note_id),
-          note_id: section.note_id,
-          section_id: section.section_id,
-          type: 'idea',
-          title,
-          payload: {
-            draft_initiative: {
-              title: title.replace(/^New idea:\s*/i, '').trim(),
-              description: body,
-            },
-          },
-          evidence_spans: evidenceSpans,
-          scores,
-          routing,
-          suggestionKey,
-          structural_hint: 'explicit_ask',
-          suggestion: suggestionContext,
-        };
-
-        suggestions.push(suggestion);
-
-        if (process.env.DEBUG_EXPLICIT_ASK === 'true') {
-          console.log('[DEBUG_EXPLICIT_ASK] Created idea suggestion:', {
-            id: suggestion.suggestion_id,
-            type: suggestion.type,
-            title: suggestion.title.substring(0, 80),
-          });
-        }
-
-        // Track evidence for derivative detection
-        for (const span of suggestion.evidence_spans) {
+    // B-LITE PRE-EMPT: For "Discussion details" headings with explicit asks,
+    // bypass normal synthesis (preserves original B-lite behavior)
+    const isDiscDetails = isDiscussionDetailsHeading(headingText);
+    if (isDiscDetails && isSectionWithExplicitAsk(section.body_lines, section.raw_text)) {
+      const bliteSuggestion = buildBliteSuggestion(section);
+      if (bliteSuggestion) {
+        suggestions.push(bliteSuggestion);
+        for (const span of bliteSuggestion.evidence_spans) {
           emittedEvidenceTexts.push(span.text);
         }
-
-        // Skip normal synthesis path for this section
         continue;
       }
     }
@@ -2245,6 +2209,7 @@ export function synthesizeSuggestions(
     // Topic isolation now happens BEFORE synthesis in the main pipeline (index.ts and debugGenerator.ts)
     // Sections passed here are already split if needed, so just process them directly
     // Process section directly
+    let normalSynthesisEmitted = false;
     {
       const sectionToProcess = section;
       // Decision table normalization: extract clean decision statements
@@ -2291,28 +2256,33 @@ export function synthesizeSuggestions(
 
       const suggestion = synthesizeSuggestion(processedSection);
 
-      if (process.env.DEBUG_EXPLICIT_ASK === 'true' && processedSection.heading_text?.toLowerCase().includes('discussion')) {
-        console.log('[DEBUG_EXPLICIT_ASK] Normal synthesis ran for Discussion details:', {
-          suggestionCreated: !!suggestion,
-          suggestionType: suggestion?.type,
-          suggestionId: suggestion?.suggestion_id,
-        });
-      }
-
       if (suggestion) {
         // Post-synthesis suppression: check for low-relevance candidates
         if (shouldSuppressCandidate(suggestion, processedSection)) {
           // Mark as suppressed for debug explainability
           suggestion.dropStage = DropStage.POST_SYNTHESIS_SUPPRESS;
           suggestion.dropReason = DropReason.LOW_RELEVANCE;
-          // Skip emitting this candidate
-          continue;
+          // Skip emitting this candidate — but allow B-lite fallback below
+        } else {
+          suggestions.push(suggestion);
+          normalSynthesisEmitted = true;
+
+          // Track evidence text for derivative detection
+          for (const span of suggestion.evidence_spans) {
+            emittedEvidenceTexts.push(span.text);
+          }
         }
+      }
+    }
 
-        suggestions.push(suggestion);
-
-        // Track evidence text for derivative detection
-        for (const span of suggestion.evidence_spans) {
+    // B-LITE FALLBACK: If normal synthesis produced nothing, check for explicit ask language.
+    // This rescues sections where the ask is clear but normal synthesis missed it.
+    // Heading-agnostic: fires for any section heading (including non-Discussion headings).
+    if (!normalSynthesisEmitted && isSectionWithExplicitAsk(section.body_lines, section.raw_text)) {
+      const bliteSuggestion = buildBliteSuggestion(section);
+      if (bliteSuggestion) {
+        suggestions.push(bliteSuggestion);
+        for (const span of bliteSuggestion.evidence_spans) {
           emittedEvidenceTexts.push(span.text);
         }
       }
