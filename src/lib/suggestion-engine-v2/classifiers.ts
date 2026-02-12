@@ -289,6 +289,7 @@ const V3_ACTION_VERBS = [
  * generating idea suggestion bodies and evidence spans.
  */
 export const PROPOSAL_VERBS_IDEA_ONLY = [
+  'add',
   'reduce',
   'merge',
   'streamline',
@@ -752,14 +753,15 @@ function matchDecisionMarker(line: string): number {
  * user pain, feature requests, or team obligations:
  * "Users need better error visibility"
  * "Request to add dark mode support"
+ * "The PM requests a better onboarding flow"
  * "There is friction around the checkout process"
  *
  * Score of 0.76 ensures passing T_action (0.5) + short_section_penalty (0.15)
  * with margin >= 0.1 for borderline check.
  *
- * "request to" is guarded: it only fires when followed by a product action verb
- * (add, implement, build, etc.) to avoid false positives from reported-speech
- * contexts like "in response to a request to review the timeline".
+ * Guarded patterns ("request to", "requests a/an/for/that"):
+ * - "request to" requires a nearby action verb to avoid reported-speech false positives
+ * - "requests a/an/for/that" requires action verb OR product noun to ensure genuine feature requests
  */
 function matchPMRequestLanguage(line: string): number {
   // Check unconditional patterns first
@@ -772,6 +774,21 @@ function matchPMRequestLanguage(line: string): number {
     const afterRequest = line.slice(line.indexOf('request to') + 'request to'.length);
     if (V3_ACTION_VERBS.some(verb => new RegExp(`\\b${verb}\\b`, 'i').test(afterRequest))) {
       return 0.76;
+    }
+  }
+
+  // Guarded: "requests a/an/for/that" requires action verb OR product noun after it
+  // Matches: "PM requests a dark mode feature", "team requests an API endpoint"
+  // Avoids: reported-speech contexts without clear product objects
+  const requestsPatterns = ['requests a ', 'requests an ', 'requests for ', 'requests that '];
+  for (const pattern of requestsPatterns) {
+    if (line.includes(pattern)) {
+      const afterRequest = line.slice(line.indexOf(pattern) + pattern.length);
+      const hasVerb = V3_ACTION_VERBS.some(verb => new RegExp(`\\b${verb}\\b`, 'i').test(afterRequest));
+      const hasNoun = V3_PRODUCT_NOUNS.some(noun => new RegExp(`\\b${noun}\\b`, 'i').test(afterRequest));
+      if (hasVerb || hasNoun) {
+        return 0.76;
+      }
     }
   }
 
