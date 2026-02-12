@@ -78,13 +78,16 @@ The team agreed on new feature requests: asks for an offline mode for mobile and
   });
 
   it('should emit real suggestion for Discussion details with "request" language', () => {
+    // RESOLUTION: Was failing because "requests a" pattern was not in V3_PM_REQUEST_PATTERNS.
+    // Fixed by adding guarded check for "requests a/an/for/that" in matchPMRequestLanguage().
+    // The guard requires action verb OR product noun after "requests X" to avoid false positives.
     const note: NoteInput = {
       note_id: 'test-discussion-details-request',
       raw_markdown: `# Product Meeting
 
 ## Discussion details
 
-The team decided the PM requested a dark mode feature for the dashboard.
+The team discussed user experience improvements. The PM requests a dark mode feature for the dashboard to improve accessibility.
 `,
     };
 

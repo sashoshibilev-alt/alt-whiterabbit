@@ -333,4 +333,50 @@ This has been the top ask in the last three QBRs.`
     }
     expect(result.suggestions.length).toBeGreaterThanOrEqual(1);
   });
+
+  // ============================================
+  // "requests a/an/for/that" guard: requires action verb OR product noun
+  // ============================================
+
+  it('should detect "requests a" with product noun as actionable', () => {
+    const result = runNote(
+      'pm-requests-a-feature',
+      `# Product Meeting
+
+## Dashboard Improvements
+
+The PM requests a dark mode feature for the dashboard to improve accessibility.
+This has been a common request from enterprise users.`
+    );
+
+    const section = result.debugRun!.sections[0];
+    expect(section).toBeDefined();
+    expect(section.actionabilitySignals?.actionableSignal).toBeGreaterThanOrEqual(0.76);
+    expect(section.decisions.isActionable).toBe(true);
+    if (section.dropStage !== null) {
+      expect(section.dropStage).not.toBe('ACTIONABILITY');
+    }
+    expect(result.suggestions.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('should detect "requests for" with product noun as actionable', () => {
+    const result = runNote(
+      'pm-requests-for-improvement',
+      `# Customer Feedback
+
+## API Reliability
+
+The engineering team requests for better error handling in the API layer.
+Current error messages are too generic for debugging.`
+    );
+
+    const section = result.debugRun!.sections[0];
+    expect(section).toBeDefined();
+    expect(section.actionabilitySignals?.actionableSignal).toBeGreaterThanOrEqual(0.76);
+    expect(section.decisions.isActionable).toBe(true);
+    if (section.dropStage !== null) {
+      expect(section.dropStage).not.toBe('ACTIONABILITY');
+    }
+    expect(result.suggestions.length).toBeGreaterThanOrEqual(1);
+  });
 });
