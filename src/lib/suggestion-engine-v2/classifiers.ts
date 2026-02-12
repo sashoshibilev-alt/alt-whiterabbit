@@ -570,6 +570,29 @@ const V3_DECISION_MARKERS = [
 ];
 
 /**
+ * V3 PM request language patterns for actionability detection.
+ * These phrases are common in PM notes describing user pain, feature requests,
+ * or team obligations — all of which should produce actionable suggestions.
+ *
+ * Scored at +0.76 (same tier as implicit feature request) to clear
+ * T_action (0.5) + short_section_penalty (0.15) + borderline margin (0.1).
+ *
+ * NOTE: "request to" is handled separately in matchPMRequestLanguage() with
+ * a guard requiring a nearby action verb, to avoid false positives from
+ * reported-speech contexts like "in response to a request to review...".
+ */
+const V3_PM_REQUEST_PATTERNS = [
+  'users need',
+  'users struggle',
+  'requires us to',
+  'we should consider',
+  'maybe we could',
+  'suggestion:',
+  'this will require',
+  'friction around',
+];
+
+/**
  * Normalize smart quotes to ASCII equivalents
  * Ensures "don't" and "don't" behave identically in negation/imperative detection
  */
@@ -720,6 +743,39 @@ function matchRoleAssignment(line: string): number {
  */
 function matchDecisionMarker(line: string): number {
   return V3_DECISION_MARKERS.some(marker => line.includes(marker)) ? 0.70 : 0.0;
+}
+
+/**
+ * V3 Rule 12: PM request language = +0.76
+ *
+ * Maps to actionableSignal. Detects common PM phrasing that expresses
+ * user pain, feature requests, or team obligations:
+ * "Users need better error visibility"
+ * "Request to add dark mode support"
+ * "There is friction around the checkout process"
+ *
+ * Score of 0.76 ensures passing T_action (0.5) + short_section_penalty (0.15)
+ * with margin >= 0.1 for borderline check.
+ *
+ * "request to" is guarded: it only fires when followed by a product action verb
+ * (add, implement, build, etc.) to avoid false positives from reported-speech
+ * contexts like "in response to a request to review the timeline".
+ */
+function matchPMRequestLanguage(line: string): number {
+  // Check unconditional patterns first
+  if (V3_PM_REQUEST_PATTERNS.some(pattern => line.includes(pattern))) {
+    return 0.76;
+  }
+
+  // Guarded: "request to" requires a nearby action verb after it
+  if (line.includes('request to')) {
+    const afterRequest = line.slice(line.indexOf('request to') + 'request to'.length);
+    if (V3_ACTION_VERBS.some(verb => new RegExp(`\\b${verb}\\b`, 'i').test(afterRequest))) {
+      return 0.76;
+    }
+  }
+
+  return 0.0;
 }
 
 /**
@@ -917,6 +973,7 @@ export function classifyIntent(section: Section): IntentClassification {
   // 7. Implicit idea statement (need + capability + purpose): +0.61
   // 9. Role assignment pattern (ROLE to VERB): +0.85
   // 10. Decision marker (will be logged, no near-term): +0.70
+  // 12. PM request language (users need, request to, friction around): +0.76
   //
   // NEGATIVE SIGNALS:
   // - Negation override: if line has "don't" + verb → score = 0.0
@@ -1008,6 +1065,9 @@ export function classifyIntent(section: Section): IntentClassification {
       const decisionMarkerScore = matchDecisionMarker(sentence);
       if (decisionMarkerScore > 0) hasDecisionMarker = true;
       sentenceScore = Math.max(sentenceScore, decisionMarkerScore);
+
+      // Rule 12: PM request language
+      sentenceScore = Math.max(sentenceScore, matchPMRequestLanguage(sentence));
 
       // Snapshot non-hedged score before applying hedged directive rule
       const nonHedgedSentenceScore = sentenceScore;
