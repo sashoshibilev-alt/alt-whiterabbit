@@ -302,13 +302,23 @@ function generateTitleFromFriction(frictionType: string, target: string): string
 /**
  * Generate a title for an idea suggestion
  * Priority:
- * 1. Proposal line (if detected) → contentful title without "New idea:" prefix
- * 2. Friction complaint (if detected) → solution-shaped title without "New idea:" prefix
- * 3. Fallback → "New idea: <Heading>" or generic fallback
+ * 1. Explicit ask (if detected) → imperative title anchored on ask sentence
+ * 2. Proposal line (if detected) → contentful title without "New idea:" prefix
+ * 3. Friction complaint (if detected) → solution-shaped title without "New idea:" prefix
+ * 4. Fallback → "New idea: <Heading>" or generic fallback
  */
 function generateIdeaTitle(section: ClassifiedSection): string {
   const headingText = section.heading_text || '';
   const bodyText = section.raw_text;
+
+  // EXPLICIT-ASK FIRST: Check for explicit request language
+  // This anchors on the ask sentence rather than the heading
+  if (containsExplicitRequest(bodyText)) {
+    const explicitAsk = extractExplicitAsk(bodyText);
+    if (explicitAsk && explicitAsk.length > 10) {
+      return generateTitleFromExplicitAsk(explicitAsk);
+    }
+  }
 
   // PROPOSAL-FIRST: Check for proposal lines
   const lines = bodyText.split(/[.!?\n]+/).map(s => s.trim()).filter(s => s.length > 10);
@@ -712,13 +722,25 @@ function generateFrictionSolution(frictionType: string, target: string): string 
 /**
  * Generate standalone body for idea suggestions
  * Format: problem → proposed change → purpose (if present)
- * Prefers proposal lines (with proposal verbs or "by <verb+ing>") when available
+ * Priority:
+ * 1. Explicit ask (if detected) → focused 1-2 sentence body
+ * 2. Proposal lines (with proposal verbs or "by <verb+ing>")
+ * 3. Friction complaints
+ * 4. Pattern-based extraction
  */
 function generateIdeaBody(section: ClassifiedSection): string {
   const bodyText = section.raw_text;
   const parts: string[] = [];
 
-  // PROPOSAL-FIRST HEURISTIC: Check for proposal lines first
+  // EXPLICIT-ASK FIRST: Check for explicit request language
+  if (containsExplicitRequest(bodyText)) {
+    const explicitAsk = extractExplicitAsk(bodyText);
+    if (explicitAsk && explicitAsk.length > 10) {
+      return generateBodyFromExplicitAsk(explicitAsk, bodyText);
+    }
+  }
+
+  // PROPOSAL-FIRST HEURISTIC: Check for proposal lines
   const lines = bodyText.split(/[.!?\n]+/).map(s => s.trim()).filter(s => s.length > 10);
   const proposalLines = lines.filter(isProposalLine);
 
@@ -1415,16 +1437,38 @@ function isSummaryHeading(headingText?: string): boolean {
 const EXPLICIT_REQUEST_PATTERNS = [
   /\basksfor\b/i,
   /\basks?\s+for\b/i,
-  /\brequest(?:s|ed)?\b/i,
+  /\brequest(?:s|ed)?\s+(?:to|for|that|a|an)\b/i,  // "request to add", "request for X", "requests a feature"
   /\bwould\s+like\b/i,
-  /\bneed(?:s)?\s+to\b/i,
-  /\bneed(?:s)?\s+(?:a|an|the)\b/i,
-  /\bwant(?:s)?\s+to\b/i,
-  /\bwant(?:s)?\s+(?:a|an|the)\b/i,
+  /\b(?:we|users?|teams?)\s+needs?\s+to\b/i,  // Only match when "we/users/team need to"
+  /\b(?:we|users?|teams?)\s+needs?\s+(?:a|an|the|better|improved?|faster|more)\b/i,  // Only match when "we/users/team need X"
+  /\b(?:we|they|teams?)\s+wants?\s+to\b/i,
+  /\b(?:we|they|teams?)\s+wants?\s+(?:a|an|the|better|improved?|faster|more)\b/i,
   /\bwe\s+should\b/i,
   /\bmaybe\s+we\s+could\b/i,
   /\brequires\s+us\s+to\b/i,
   /\bsuggestion:/i,
+];
+
+/**
+ * Imperative work verbs for B-lite fallback detection.
+ * These trigger B-lite idea synthesis when they appear at sentence/bullet start,
+ * even without explicit subject phrases (we/users/team).
+ *
+ * Minimal fallback to restore recall for valid feature requests written as imperatives.
+ * Does NOT affect actionability thresholds or intent classification.
+ */
+const IMPERATIVE_WORK_VERBS = [
+  'add',
+  'implement',
+  'build',
+  'create',
+  'support',
+  'enable',
+  'integrate',
+  'remove',
+  'deprecate',
+  'fix',
+  'improve',
 ];
 
 /**
@@ -1433,6 +1477,44 @@ const EXPLICIT_REQUEST_PATTERNS = [
  */
 export function containsExplicitRequest(text: string): boolean {
   return EXPLICIT_REQUEST_PATTERNS.some(pattern => pattern.test(text));
+}
+
+/**
+ * Check if text contains imperative work verb at sentence/bullet start.
+ * Used as secondary fallback for B-lite synthesis when explicit subjects are absent.
+ *
+ * IMPORTANT: Only matches verbs at the START of sentences (after normalization).
+ * This prevents false positives from gerunds/participles mid-sentence.
+ *
+ * Examples that match:
+ * - "Add offline mode" → true
+ * - "• Support SSO for enterprise" → true
+ * - "Implement regional data hosting" → true
+ *
+ * Examples that DON'T match:
+ * - "Adding value is important" → false (gerund, not imperative)
+ * - "We are building a new feature" → false (progressive, not imperative)
+ *
+ * Exported for use in debugGenerator fallback path
+ */
+export function containsImperativeWorkVerb(text: string): boolean {
+  // Split into sentences to check each independently
+  const sentences = text.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 10);
+
+  for (const sentence of sentences) {
+    // Normalize: lowercase, strip list markers
+    const normalized = normalizeForProposal(sentence);
+
+    // Check if sentence starts with a work verb
+    for (const verb of IMPERATIVE_WORK_VERBS) {
+      const regex = new RegExp(`^${verb}\\b`, 'i');
+      if (regex.test(normalized)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 /**
@@ -1456,7 +1538,7 @@ function isDiscussionDetailsHeading(headingText: string): boolean {
  * Check if section contains explicit request language and is eligible for B-lite synthesis.
  * Returns true only if ALL conditions met:
  * - hasTopicAnchors === false (no extractable topic anchors — those go through topic isolation)
- * - Section text contains explicit request language
+ * - Section text contains explicit request language OR imperative work verb
  *
  * Heading-agnostic: fires for any section heading, not just "Discussion details".
  */
@@ -1468,28 +1550,21 @@ function isSectionWithExplicitAsk(
   const hasTopicAnchors = hasExtractableTopicAnchors(bodyLines);
   if (hasTopicAnchors) return false;
 
-  // Check for explicit request language in section text
-  return containsExplicitRequest(rawText);
+  // Check for explicit request language OR imperative work verb in section text
+  return containsExplicitRequest(rawText) || containsImperativeWorkVerb(rawText);
 }
 
 /**
  * Extract first explicit ask from section text for new_feature suggestion
- * Returns the line/sentence containing the explicit request
+ * Returns ONLY the sentence containing the explicit request (not trailing commentary)
  * Exported for use in debugGenerator fallback path
  */
 export function extractExplicitAsk(text: string): string | null {
-  const lines = text.split(/[\n]/);
-
-  // Find first line with explicit request
-  for (const line of lines) {
-    if (containsExplicitRequest(line) && line.trim().length > 20) {
-      // Strip list markers and return
-      return normalizeLineForSynthesis(line.trim());
-    }
-  }
-
-  // Fallback: find first sentence with explicit request
+  // Split into sentences first (more granular than lines)
+  // This ensures we extract just the ask sentence, not trailing commentary
   const sentences = text.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 10);
+
+  // Find first sentence with explicit request
   for (const sentence of sentences) {
     if (containsExplicitRequest(sentence)) {
       return normalizeLineForSynthesis(sentence);
@@ -1500,21 +1575,93 @@ export function extractExplicitAsk(text: string): string | null {
 }
 
 /**
+ * Extract first imperative work verb statement from section text.
+ * Returns ONLY the sentence starting with an imperative work verb.
+ * Used as fallback when explicit request language is not present.
+ *
+ * Exported for use in debugGenerator fallback path
+ */
+export function extractImperativeStatement(text: string): string | null {
+  const sentences = text.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 10);
+
+  // Find first sentence starting with imperative work verb
+  for (const sentence of sentences) {
+    const normalized = normalizeForProposal(sentence);
+
+    for (const verb of IMPERATIVE_WORK_VERBS) {
+      const regex = new RegExp(`^${verb}\\b`, 'i');
+      if (regex.test(normalized)) {
+        return normalizeLineForSynthesis(sentence);
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Convert statement to imperative form
+ * Examples:
+ * - "we should explore X" -> "Explore X"
+ * - "users need better X" -> "Improve X"
+ * - "request to add X" -> "Add X"
+ * - "there is a request to add X" -> "Add X"
+ */
+function convertToImperative(text: string): string {
+  let cleaned = text.trim();
+
+  // Remove leading phrases: "we should", "users need", "team wants", etc.
+  const subjectPhrases = [
+    /^we\s+should\s+/i,
+    /^users?\s+needs?\s+/i,
+    /^(?:the\s+)?teams?\s+(?:wants?|needs?)\s+/i,
+    /^(?:there\s+is\s+)?(?:a\s+)?requests?\s+to\s+/i,
+    /^(?:the\s+)?(?:pm|product\s+manager|engineering|design(?:er)?)\s+(?:requested|asks?(?:\s+for)?|wants?|needs?)\s+/i,
+  ];
+
+  for (const phrase of subjectPhrases) {
+    cleaned = cleaned.replace(phrase, '');
+  }
+
+  // Convert "to <verb>" patterns to imperative
+  cleaned = cleaned.replace(/^to\s+/i, '');
+
+  // Handle "better/improved/faster X" -> "Improve X"
+  const qualityPatterns = [
+    { pattern: /^(?:a\s+)?better\s+(.+)/i, replacement: 'Improve $1' },
+    { pattern: /^(?:an?\s+)?improved\s+(.+)/i, replacement: 'Improve $1' },
+    { pattern: /^(?:a\s+)?faster\s+(.+)/i, replacement: 'Improve $1' },
+  ];
+
+  for (const { pattern, replacement } of qualityPatterns) {
+    const match = cleaned.match(pattern);
+    if (match) {
+      cleaned = cleaned.replace(pattern, replacement);
+      break;
+    }
+  }
+
+  return cleaned.trim();
+}
+
+/**
  * Generate title from explicit ask text
- * Extracts the main ask after request markers like "asks for", "request", etc.
+ * Extracts the main ask after request markers and converts to imperative form
  * Exported for use in debugGenerator fallback path
  */
 export function generateTitleFromExplicitAsk(askText: string): string {
   let title = askText;
 
   // Try to extract the core ask after request markers
-  // Fixed pattern: properly match articles (a|an|the) followed by space as a unit
+  // DON'T strip quality adjectives here - let convertToImperative handle them
   const requestMarkerPatterns = [
     /asks?\s+for\s+(?:(?:a|an|the)\s+)?(.+)/i,
-    /requests?\s+(?:(?:a|an|the)\s+)?(.+)/i,
+    /requests?(?:ed)?\s+(?:(?:a|an|the)\s+)?(.+)/i,
     /would\s+like\s+(?:(?:a|an|the)\s+)?(.+)/i,
     /needs?\s+(?:to\s+)?(?:(?:a|an|the)\s+)?(.+)/i,
     /wants?\s+(?:to\s+)?(?:(?:a|an|the)\s+)?(.+)/i,
+    /(?:we|users?|teams?)\s+should\s+(.+)/i,
+    /requires\s+us\s+to\s+(.+)/i,
   ];
 
   for (const pattern of requestMarkerPatterns) {
@@ -1526,16 +1673,19 @@ export function generateTitleFromExplicitAsk(askText: string): string {
   }
 
   // Stop at contextual clauses (but, however, noted, etc.) or sentence breaks
-  // IMPORTANT: Check sentence break (period) FIRST before checking contextual clauses
-  // so we don't accidentally include trailing text like ". Leo" when there's ". Leo noted"
+  // These patterns help truncate the title to just the core ask
+  // IMPORTANT: Check contextual clauses BEFORE final period
+  // so we extract "audit logging" from "audit logging so they can track data."
   const contextualBreaks = [
-    /\./,  // sentence break (check first!)
     /\s+but\s+/i,
     /\s+however\s+/i,
     /\s+noted\s+/i,
     /\s+said\s+/i,
     /\s+mentioned\s+/i,
     /\s+explained\s+/i,
+    /\s+so\s+(?:that|they|we|you)\b/i,
+    /\s+to\s+(?:allow|enable|help|improve|ensure)\b/i,
+    /\./,  // sentence break (check last!)
   ];
 
   for (const breakPattern of contextualBreaks) {
@@ -1547,15 +1697,24 @@ export function generateTitleFromExplicitAsk(askText: string): string {
     }
   }
 
+  // Convert to imperative form
+  title = convertToImperative(title);
+
   // Capitalize first letter
   title = capitalizeFirst(title);
 
-  // Truncate if needed
+  // Truncate if needed (max 12 words per requirements)
+  const words = title.split(/\s+/);
+  if (words.length > 12) {
+    title = words.slice(0, 12).join(' ');
+  }
+
+  // Truncate by character length if still too long
   if (title.length > 80) {
     title = truncateTitle(title, 80);
   }
 
-  // Ensure title is not just the heading
+  // Ensure title is meaningful
   if (title.length < 10) {
     title = capitalizeFirst(askText);
     // Apply same contextual break logic to fallback
@@ -1566,6 +1725,8 @@ export function generateTitleFromExplicitAsk(askText: string): string {
         break;
       }
     }
+    title = convertToImperative(title);
+    title = capitalizeFirst(title);
     if (title.length > 80) {
       title = truncateTitle(title, 80);
     }
@@ -1575,15 +1736,63 @@ export function generateTitleFromExplicitAsk(askText: string): string {
 }
 
 /**
+ * Generate body from explicit ask
+ * Returns 1-2 sentences max, focused on the ask and any explicit constraints
+ */
+function generateBodyFromExplicitAsk(askSentence: string, fullText: string): string {
+  // Start with the ask sentence itself
+  let body = capitalizeFirst(normalizeLineForSynthesis(askSentence));
+
+  // Look for explicit constraints in the same sentence or adjacent sentences
+  // Constraint patterns: "to under 100ms", "for compliance tracking", "within 2 weeks"
+  const constraintPatterns = [
+    /(?:to|within|under|over|above|below)\s+[\d]+\s*(?:ms|seconds?|minutes?|hours?|days?|weeks?|months?)/i,
+    /(?:for|to)\s+(?:compliance|security|performance|audit(?:ing)?|tracking|monitoring)\b/i,
+    /(?:by|before)\s+(?:Q[1-4]|\w+\s+\d{1,2})/i,
+  ];
+
+  // Extract constraint from ask sentence if present
+  for (const pattern of constraintPatterns) {
+    const match = askSentence.match(pattern);
+    if (match) {
+      // Constraint already in ask sentence, no need to add
+      break;
+    }
+  }
+
+  // Ensure body ends with period
+  if (!body.endsWith('.') && !body.endsWith('!') && !body.endsWith('?')) {
+    body += '.';
+  }
+
+  // Truncate to max 300 chars (per existing logic elsewhere)
+  if (body.length > 300) {
+    body = body.substring(0, 297) + '...';
+  }
+
+  return body;
+}
+
+/**
  * Build a B-lite suggestion from explicit ask language in a section.
+ * Tries explicit request patterns first, then falls back to imperative work verbs.
  * Returns null if no extractable ask is found.
  */
 function buildBliteSuggestion(section: ClassifiedSection): Suggestion | null {
-  const explicitAsk = extractExplicitAsk(section.raw_text);
+  // Try explicit ask first (with subject phrases)
+  let explicitAsk = extractExplicitAsk(section.raw_text);
+  let isImperativeFallback = false;
+
+  // Fallback to imperative work verb if no explicit ask found
+  if (!explicitAsk || explicitAsk.length <= 10) {
+    explicitAsk = extractImperativeStatement(section.raw_text);
+    isImperativeFallback = true;
+  }
+
   if (!explicitAsk || explicitAsk.length <= 10) return null;
 
   const title = generateTitleFromExplicitAsk(explicitAsk);
-  const body = capitalizeFirst(explicitAsk);
+  const body = generateBodyFromExplicitAsk(explicitAsk, section.raw_text);
 
   const askLineObj = section.body_lines.find(l =>
     normalizeLineForSynthesis(l.text).includes(explicitAsk.substring(0, 30))
@@ -1623,7 +1832,7 @@ function buildBliteSuggestion(section: ClassifiedSection): Suggestion | null {
       type: 'idea',
       title,
     }),
-    structural_hint: 'explicit_ask',
+    structural_hint: 'idea',  // B-lite suggestions are always idea type
     suggestion: {
       title,
       body,
@@ -2185,10 +2394,21 @@ export function synthesizeSuggestions(
 
     const headingText = section.heading_text || '';
 
-    // B-LITE PRE-EMPT: For "Discussion details" headings with explicit asks,
-    // bypass normal synthesis (preserves original B-lite behavior)
+    // B-LITE PRE-EMPT: For "Discussion details" headings OR any section with explicit asks/imperatives,
+    // bypass normal synthesis to ensure clean titles from the ask sentence.
+    // (preserves original B-lite behavior + extends to imperative-form feature requests)
+    //
+    // IMPORTANT: For non-discussion sections, only apply B-lite to idea-type sections (not plan_change).
+    // Plan_change sections must preserve project_update typing and timeline-focused synthesis.
+    // Discussion details sections ALWAYS get B-lite treatment when they have explicit asks,
+    // regardless of typeLabel (to preserve original B-lite behavior).
     const isDiscDetails = isDiscussionDetailsHeading(headingText);
-    if (isDiscDetails && isSectionWithExplicitAsk(section.body_lines, section.raw_text)) {
+    const hasExplicitAsk = isSectionWithExplicitAsk(section.body_lines, section.raw_text);
+    const isPlanChange = section.typeLabel === 'project_update';
+
+    if (isDiscDetails && hasExplicitAsk) {
+      // Discussion details with explicit ask - use B-lite (original behavior)
+      // Override typeLabel to 'idea' for Discussion details with explicit asks
       const bliteSuggestion = buildBliteSuggestion(section);
       if (bliteSuggestion) {
         suggestions.push(bliteSuggestion);
@@ -2197,6 +2417,18 @@ export function synthesizeSuggestions(
         }
         continue;
       }
+    } else if (!isDiscDetails && hasExplicitAsk && !isPlanChange) {
+      // Non-discussion section with explicit ask/imperative - try B-lite first
+      // Only bypass normal synthesis if B-lite succeeds AND section is idea-type
+      const bliteSuggestion = buildBliteSuggestion(section);
+      if (bliteSuggestion) {
+        suggestions.push(bliteSuggestion);
+        for (const span of bliteSuggestion.evidence_spans) {
+          emittedEvidenceTexts.push(span.text);
+        }
+        continue;
+      }
+      // If B-lite fails, fall through to normal synthesis
     }
 
     // Derivative content suppression: check if section is mostly redundant

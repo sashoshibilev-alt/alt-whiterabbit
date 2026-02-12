@@ -46,7 +46,9 @@ describe('List Marker Normalization', () => {
 
     const suggestion = result.suggestions[0];
     expect(suggestion).toBeDefined();
-    expect(suggestion.title).toContain('Improve User Flow');
+    // Now that "Add" is in PROPOSAL_VERBS_IDEA_ONLY, it anchors on the proposal line
+    expect(suggestion.title.toLowerCase()).toMatch(/^add/);
+    expect(suggestion.title.toLowerCase()).toContain('required steps');
   });
 
   it('should detect imperative verb with numbered list marker in non-suppressed sections', () => {
@@ -161,7 +163,9 @@ We need to improve our error handling:
 
     const suggestion = result.suggestions[0];
     expect(suggestion).toBeDefined();
-    expect(suggestion.title).toContain('Enhancements');
+    // After imperative fallback, title should be imperative-anchored
+    // Since multiple imperatives, should pick one (likely first)
+    expect(suggestion.title.toLowerCase()).toMatch(/^add|^remove|^update|^implement/);
   });
 
   it('should handle numbered list with different formats', () => {
@@ -198,7 +202,7 @@ Here's our plan for the next release:
 
 ## Authentication
 
-Add boundary detection to catch edge cases. Users need better visibility.
+Add boundary detection to catch edge cases. This improves reliability for production workloads.
 `,
     };
 
@@ -210,7 +214,9 @@ Add boundary detection to catch edge cases. Users need better visibility.
 
     const suggestion = result.suggestions[0];
     expect(suggestion).toBeDefined();
-    expect(suggestion.title).toContain('Authentication');
+    // Since "Add" is now in PROPOSAL_VERBS_IDEA_ONLY, it should anchor on the proposal line
+    expect(suggestion.title.toLowerCase()).toMatch(/^add/);
+    expect(suggestion.title.toLowerCase()).toContain('boundary detection');
   });
 
   it('should handle indented list markers', () => {
@@ -233,7 +239,9 @@ Add boundary detection to catch edge cases. Users need better visibility.
 
     const suggestion = result.suggestions[0];
     expect(suggestion).toBeDefined();
-    expect(suggestion.title).toContain('User Experience');
+    // Now that "Add" is in PROPOSAL_VERBS_IDEA_ONLY, it anchors on the proposal line
+    expect(suggestion.title.toLowerCase()).toMatch(/^add/);
+    expect(suggestion.title.toLowerCase()).toContain('required steps');
   });
 
   it('should respect out-of-scope markers even with list normalization', () => {
@@ -273,7 +281,9 @@ Add dashboard for monitoring errors and improve visibility.
 
     const suggestion = result.suggestions[0];
     expect(suggestion).toBeDefined();
-    expect(suggestion.title).toContain('Notifications');
+    // Now that "Add" is in PROPOSAL_VERBS_IDEA_ONLY, it anchors on the proposal line
+    expect(suggestion.title.toLowerCase()).toMatch(/^add/);
+    expect(suggestion.title.toLowerCase()).toContain('dashboard');
   });
 
   it('should prefer proposal line over complaint line in idea body and evidence', () => {

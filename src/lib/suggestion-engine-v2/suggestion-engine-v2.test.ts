@@ -463,10 +463,21 @@ describe('Synthesis', () => {
       (s) => s.type === 'idea'
     );
 
+    // Should have at least one idea suggestion
+    expect(artifactSuggestions.length).toBeGreaterThan(0);
+
     for (const suggestion of artifactSuggestions) {
-      expect(suggestion.title).toMatch(/new|initiative|launch/i);
+      // Titles should be meaningful (either imperative from explicit-ask
+      // or proposal-based, or heading-derived as fallback)
+      expect(suggestion.title.length).toBeGreaterThan(10);
       expect(suggestion.payload.draft_initiative).toBeDefined();
     }
+
+    // At least one suggestion should be about customer success or partner platform
+    const hasRelevantContent = artifactSuggestions.some(s =>
+      s.title.toLowerCase().match(/customer success|partner|platform|integration/)
+    );
+    expect(hasRelevantContent).toBe(true);
   });
 
   it('should emit suggestions from Next Steps sections with role assignments', () => {
