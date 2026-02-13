@@ -158,6 +158,81 @@ describe('normalizeSuggestionTitle', () => {
     });
   });
 
+  describe('FIX: Implement + hedge phrase artifacts (Issue A)', () => {
+    it('should clean "Implement Maybe we could launch..." artifact', () => {
+      const input = 'Implement Maybe we could launch a 5-minute weekly email summary of global climate policy changes';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toMatch(/^Launch /);
+      expect(result).not.toContain('Maybe we could');
+      expect(result).not.toMatch(/^Implement /);
+    });
+
+    it('should clean "Implement consider a Checklist UI..." artifact', () => {
+      const input = 'Implement consider a "Checklist" UI that guides users through their first three reports';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toMatch(/^Add /);
+      expect(result).not.toContain('consider');
+      expect(result).not.toMatch(/^Implement /);
+    });
+
+    it('should clean "Implement for more Templates..." artifact', () => {
+      const input = 'Implement for more "Templates"; users are unsure what a "good" ESG report looks like...';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toMatch(/^Add (?:more )?[Tt]emplates/);
+      expect(result).not.toContain('for more "Templates"');
+      expect(result).not.toMatch(/^Implement for more/);
+    });
+
+    it('should enforce hard rule: no titles matching forbidden pattern', () => {
+      const inputs = [
+        'Implement Maybe we could add feature X',
+        'Implement We should consider Y',
+        'Implement consider Z',
+        'Implement for more A',
+        'Implement There is a request for B',
+        'Implement Request to add C',
+      ];
+
+      for (const input of inputs) {
+        const result = normalizeSuggestionTitle(input);
+        // Hard rule: no emitted title may match this pattern
+        expect(result).not.toMatch(/^Implement\s+(Maybe we could|We should|consider|for more|There is|Request)/i);
+      }
+    });
+
+    it('should handle "Implement We should consider" with UI artifact', () => {
+      const input = 'Implement We should consider a checklist UI for task management';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toMatch(/^Add /);
+      expect(result).toContain('checklist');
+    });
+
+    it('should handle "Implement We should explore" correctly', () => {
+      const input = 'Implement We should explore new authentication methods';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toMatch(/^Evaluate /);
+      expect(result).not.toContain('We should');
+      expect(result).not.toMatch(/^Implement /);
+    });
+
+    it('should handle "Implement There is an indirect request for more..." correctly', () => {
+      const input = 'Implement There is an indirect request for more Templates for customer onboarding';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toMatch(/^Add (?:more )?[Tt]emplates/);
+      expect(result).not.toContain('There is');
+      expect(result).not.toMatch(/^Implement /);
+    });
+
+    it('should handle "Implement Request to add..." correctly', () => {
+      const input = 'Implement Request to add reporting dashboard';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toMatch(/^Add /);
+      expect(result).toContain('reporting dashboard');
+      expect(result).not.toContain('Request');
+      expect(result).not.toMatch(/^Implement /);
+    });
+  });
+
   describe('real-world examples from requirements', () => {
     it('should transform "Maybe we could..." into clean title', () => {
       const input = 'Maybe we could add a keyboard shortcut system so power users can navigate faster';
