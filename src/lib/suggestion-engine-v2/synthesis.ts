@@ -19,6 +19,7 @@ import { normalizeForComparison } from './preprocessing';
 import { computeSuggestionKey } from '../suggestion-keys';
 import { PROPOSAL_VERBS_IDEA_ONLY } from './classifiers';
 import { DropStage, DropReason } from './debugTypes';
+import { normalizeSuggestionTitle } from './title-normalization';
 
 // ============================================
 // ID Generation
@@ -306,8 +307,10 @@ function generateTitleFromFriction(frictionType: string, target: string): string
  * 2. Proposal line (if detected) → contentful title without "New idea:" prefix
  * 3. Friction complaint (if detected) → solution-shaped title without "New idea:" prefix
  * 4. Fallback → "New idea: <Heading>" or generic fallback
+ *
+ * Returns tuple of [title, source] for validation and debugging
  */
-function generateIdeaTitle(section: ClassifiedSection): string {
+function generateIdeaTitle(section: ClassifiedSection): [string, import('./types').TitleSource] {
   const headingText = section.heading_text || '';
   const bodyText = section.raw_text;
 
@@ -316,7 +319,7 @@ function generateIdeaTitle(section: ClassifiedSection): string {
   if (containsExplicitRequest(bodyText)) {
     const explicitAsk = extractExplicitAsk(bodyText);
     if (explicitAsk && explicitAsk.length > 10) {
-      return generateTitleFromExplicitAsk(explicitAsk);
+      return [generateTitleFromExplicitAsk(explicitAsk), 'explicit-ask'];
     }
   }
 
@@ -326,24 +329,24 @@ function generateIdeaTitle(section: ClassifiedSection): string {
 
   if (proposalLines.length > 0) {
     // Generate title from first proposal line
-    return generateTitleFromProposal(proposalLines[0]);
+    return [generateTitleFromProposal(proposalLines[0]), 'proposal'];
   }
 
   // FRICTION HEURISTIC: Check for friction complaint
   const frictionComplaint = detectFrictionComplaint(bodyText);
   if (frictionComplaint) {
     // Generate solution-shaped title from friction complaint
-    return generateTitleFromFriction(
+    return [generateTitleFromFriction(
       frictionComplaint.frictionType,
       frictionComplaint.target
-    );
+    ), 'friction'];
   }
 
   // FALLBACK: Try to use heading if it names a workstream
   if (headingText && headingText.length > 3 && headingText.length < 60) {
     const normalized = headingText.toLowerCase();
     if (!isGenericHeading(normalized)) {
-      return `New idea: ${headingText}`;
+      return [`New idea: ${headingText}`, 'heading'];
     }
   }
 
@@ -358,7 +361,7 @@ function generateIdeaTitle(section: ClassifiedSection): string {
     if (match) {
       const target = match[2];
       if (target && target.length < 50 && target.length > 3) {
-        return `New idea: ${capitalizeFirst(target.trim())}`;
+        return [`New idea: ${capitalizeFirst(target.trim())}`, 'heading'];
       }
     }
   }
@@ -366,11 +369,11 @@ function generateIdeaTitle(section: ClassifiedSection): string {
   // Extract key nouns
   const keyNouns = extractKeyNouns(bodyText);
   if (keyNouns.length > 0) {
-    return `New ${keyNouns.slice(0, 2).join(' ')} idea`;
+    return [`New ${keyNouns.slice(0, 2).join(' ')} idea`, 'generic'];
   }
 
   // Last resort
-  return `New idea from section`;
+  return [`New idea from section`, 'generic'];
 }
 
 /**
@@ -2151,6 +2154,7 @@ function buildBliteSuggestions(section: ClassifiedSection): Suggestion[] {
         title,
       }),
       structural_hint: 'idea',  // B-lite suggestions are always idea type
+      titleSource: 'explicit-ask',  // B-lite uses explicit ask anchors
       suggestion: {
         title,
         body,
@@ -2207,6 +2211,7 @@ function buildBliteSuggestions(section: ClassifiedSection): Suggestion[] {
           title,
         }),
         structural_hint: 'idea',
+        titleSource: 'explicit-ask',  // B-lite fallback uses imperative work verb
         suggestion: {
           title,
           body,
@@ -2679,11 +2684,20 @@ export function synthesizeSuggestion(section: ClassifiedSection): Suggestion | n
     return null;
   }
 
-  // Generate title
-  const title =
-    type === 'project_update'
-      ? generateProjectUpdateTitle(section)
-      : generateIdeaTitle(section);
+  // Generate title (with source tracking for ideas)
+  let title: string;
+  let titleSource: import('./types').TitleSource | undefined;
+  if (type === 'project_update') {
+    title = generateProjectUpdateTitle(section);
+  } else {
+    const [ideaTitle, source] = generateIdeaTitle(section);
+    title = ideaTitle;
+    titleSource = source;
+  }
+
+  // Normalize title: strip filler phrases, map weak verbs, ensure strong imperative
+  // Applied after extraction, before scoring/emit to clean up artifacts
+  title = normalizeSuggestionTitle(title);
 
   // Generate payload
   let payload: SuggestionPayload;
@@ -2756,6 +2770,7 @@ export function synthesizeSuggestion(section: ClassifiedSection): Suggestion | n
     routing,
     suggestionKey,
     structural_hint: section.typeLabel,
+    titleSource,
     suggestion: suggestionContext,
   };
 }
