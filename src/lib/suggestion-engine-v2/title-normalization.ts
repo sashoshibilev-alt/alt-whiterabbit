@@ -9,18 +9,21 @@
 
 /**
  * Strong imperative verbs we want titles to start with
+ * Per requirements: add|build|create|enable|launch|evaluate|investigate|improve|reduce|transition
  */
 const STRONG_VERBS = [
-  'implement',
   'add',
   'build',
   'create',
   'enable',
-  'investigate',
-  'evaluate',
   'launch',
-  'develop',
+  'evaluate',
+  'investigate',
   'improve',
+  'reduce',
+  'transition',
+  'implement',
+  'develop',
   'update',
   'fix',
   'remove',
@@ -31,23 +34,28 @@ const STRONG_VERBS = [
   'deploy',
   'configure',
   'establish',
-  'reduce',
   'streamline',
 ];
 
 /**
  * Leading markers to strip (case-insensitive)
  * Order matters: more specific patterns first
+ * NOTE: "Explore" and "Consider" alone are NOT stripped here
+ * because they might be valid imperative verbs that will be mapped later
+ *
+ * Special handling for "we should explore" and "we should consider":
+ * These are converted to just "explore" or "consider" (preserving the verb)
+ * so that weak verb mapping can kick in later
  */
 const LEADING_MARKERS = [
   /^suggestion:\s*/i,
+  /^there\s+is\s+an\s+indirect\s+request\s+for\s+/i,
+  /^there\s+is\s+a\s+request\s+to\s+/i,
   /^request\s+for\s+/i,
   /^request\s+to\s+/i,
   /^it\s+would\s+be\s+good\s+to\s+/i,
   /^maybe\s+we\s+could\s+/i,
-  /^we\s+should\s+consider\s+/i,
   /^we\s+could\s+consider\s+/i,
-  /^consider\s+/i,
   /^could\s+we\s+/i,
   /^should\s+we\s+/i,
 ];
@@ -79,7 +87,7 @@ const TRAILING_DEADLINES = [
  * Map weak verbs to strong alternatives
  */
 const WEAK_VERB_MAPPINGS: Record<string, string> = {
-  explore: 'investigate',
+  explore: 'evaluate',
   research: 'investigate',
   'look into': 'investigate',
   'check out': 'evaluate',
@@ -107,6 +115,44 @@ export function normalizeSuggestionTitle(rawTitle: string): string {
 
   let title = rawTitle.trim();
 
+  // Special handling for "we should explore" → "explore" (preserve verb)
+  // So that weak verb mapping can map explore → evaluate
+  if (title.match(/^we\s+should\s+explore\s+/i)) {
+    title = title.replace(/^we\s+should\s+explore\s+/i, 'explore ');
+  }
+
+  // Special handling for "we should consider" → check for UI artifacts OR gerunds
+  if (title.match(/^we\s+should\s+consider\s+/i)) {
+    const rest = title.replace(/^we\s+should\s+consider\s+/i, '');
+    const firstWord = rest.split(/\s+/)[0];
+    const isGerund = firstWord.match(/ing$/i) && firstWord.length > 4;
+
+    if (containsUIArtifactNoun(rest)) {
+      // "we should consider a checklist UI" → "Add a checklist UI"
+      title = `Add ${rest}`;
+    } else if (isGerund) {
+      // "we should consider implementing X" → "implementing X" (preserve gerund)
+      title = rest;
+    } else {
+      // "we should consider X" without UI noun → "evaluate X"
+      title = `evaluate ${rest}`;
+    }
+  }
+
+  // Special handling for standalone "consider" + UI artifact → "Add"
+  // Must check BEFORE stripping leading markers
+  const considerMatch = title.match(/^consider\s+(.+)/i);
+  if (considerMatch) {
+    const rest = considerMatch[1];
+    if (containsUIArtifactNoun(rest)) {
+      // "consider a checklist UI" → "Add a checklist UI"
+      title = `Add ${rest}`;
+    } else {
+      // "consider X" without UI noun → strip "consider"
+      title = rest;
+    }
+  }
+
   // Step 1: Strip leading markers
   for (const pattern of LEADING_MARKERS) {
     title = title.replace(pattern, '');
@@ -119,6 +165,22 @@ export function normalizeSuggestionTitle(rawTitle: string): string {
     title = title.replace(pattern, ' ');
   }
   title = title.replace(/\s+/g, ' ').trim();
+
+  // Step 2b: Check for duplicate verbs (artifact from filler removal)
+  // "Implement add X" → "Add X" (keep the more specific verb)
+  // "Implement launch X" → "Launch X"
+  // BUT: "Implement caching" → keep (caching is the object, not a verb)
+  const words = title.split(/\s+/);
+  if (words.length >= 2) {
+    const firstWord = words[0].toLowerCase();
+    const secondWord = words[1].toLowerCase();
+
+    // Only remove first verb if BOTH are in STRONG_VERBS list
+    // (This handles artifacts like "Implement add X")
+    if (STRONG_VERBS.includes(firstWord) && STRONG_VERBS.includes(secondWord)) {
+      title = words.slice(1).join(' ');
+    }
+  }
 
   // Step 3: Map weak verbs to strong alternatives
   // Check if title starts with a weak verb and the rest is clearly a concrete object
@@ -168,6 +230,95 @@ export function normalizeSuggestionTitle(rawTitle: string): string {
   }
 
   return title;
+}
+
+/**
+ * UI/artifact nouns that imply creation
+ */
+const UI_ARTIFACT_NOUNS = [
+  'checklist',
+  'template',
+  'integration',
+  'dashboard',
+  'report',
+  'ui',
+  'component',
+  'system',
+  'tool',
+  'feature',
+  'service',
+  'module',
+  'panel',
+  'widget',
+  'form',
+  'modal',
+  'dialog',
+];
+
+/**
+ * Check if text contains UI/artifact nouns
+ */
+function containsUIArtifactNoun(text: string): boolean {
+  const lowerText = text.toLowerCase();
+  return UI_ARTIFACT_NOUNS.some(noun =>
+    lowerText.match(new RegExp(`\\b${noun}s?\\b`))
+  );
+}
+
+/**
+ * Smart title truncation that preserves meaning
+ * Truncates at clause/punctuation/word boundaries, adds ellipsis
+ *
+ * @param title - The title to truncate
+ * @param maxLen - Maximum length (default 80)
+ * @returns Truncated title with ellipsis if needed
+ */
+export function truncateTitleSmart(title: string, maxLen: number = 80): string {
+  if (title.length <= maxLen) {
+    return title;
+  }
+
+  // Try to find good break points in order of preference
+  const breakPoints = [
+    // Clause boundaries
+    { pattern: /[,;—–-]\s+/g, name: 'clause' },
+    // Sentence boundaries (period, but be careful with abbreviations)
+    { pattern: /\.\s+/g, name: 'sentence' },
+    // Parenthetical boundaries
+    { pattern: /[()]\s*/g, name: 'paren' },
+    // Word boundaries
+    { pattern: /\s+/g, name: 'word' },
+  ];
+
+  for (const { pattern } of breakPoints) {
+    const matches = [...title.matchAll(pattern)];
+    if (matches.length === 0) continue;
+
+    // Find the last break point before maxLen - 3 (for "...")
+    for (let i = matches.length - 1; i >= 0; i--) {
+      const match = matches[i];
+      const breakPos = match.index! + match[0].length;
+
+      if (breakPos <= maxLen - 3) {
+        // Good break point found
+        const truncated = title.substring(0, breakPos).trim();
+        // Remove trailing punctuation before ellipsis
+        return truncated.replace(/[,;—–-]+$/, '') + '...';
+      }
+    }
+  }
+
+  // No good break point found, hard truncate at word boundary
+  const hardLimit = maxLen - 3;
+  const truncated = title.substring(0, hardLimit);
+  const lastSpace = truncated.lastIndexOf(' ');
+
+  if (lastSpace > hardLimit * 0.6) {
+    return truncated.substring(0, lastSpace).trim() + '...';
+  }
+
+  // Last resort: hard truncate
+  return truncated.trim() + '...';
 }
 
 /**

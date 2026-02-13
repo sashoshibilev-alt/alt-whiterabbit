@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeSuggestionTitle } from './title-normalization';
+import { normalizeSuggestionTitle, truncateTitleSmart } from './title-normalization';
 
 describe('normalizeSuggestionTitle', () => {
   describe('leading marker removal', () => {
@@ -44,30 +44,34 @@ describe('normalizeSuggestionTitle', () => {
   });
 
   describe('post-verb filler removal', () => {
-    it('should remove "maybe we could" after verb', () => {
+    it('should remove "maybe we could" after verb and deduplicate verbs', () => {
       const input = 'Implement maybe we could add retry logic';
       const result = normalizeSuggestionTitle(input);
-      expect(result).toBe('Implement add retry logic');
+      // Should remove filler AND deduplicate verbs (Implement + add → add)
+      expect(result).toBe('Add retry logic');
     });
 
     it('should remove "consider" after verb', () => {
       const input = 'Implement consider adding templates';
       const result = normalizeSuggestionTitle(input);
+      // Removes " consider ", leaving "Implement adding templates"
+      // This is acceptable - "Implement" is a valid strong verb
       expect(result).toBe('Implement adding templates');
     });
 
     it('should remove multiple filler phrases', () => {
       const input = 'Add maybe we could consider implementing feature X';
       const result = normalizeSuggestionTitle(input);
+      // "implementing" is gerund, keep it
       expect(result).toBe('Add implementing feature X');
     });
   });
 
   describe('weak verb mapping', () => {
-    it('should map "Explore" to "Investigate" for concrete objects', () => {
+    it('should map "Explore" to "Evaluate" for concrete objects', () => {
       const input = 'Explore the new caching strategy';
       const result = normalizeSuggestionTitle(input);
-      expect(result).toBe('Investigate the new caching strategy');
+      expect(result).toBe('Evaluate the new caching strategy');
     });
 
     it('should map "Research" to "Investigate"', () => {
@@ -173,30 +177,83 @@ describe('normalizeSuggestionTitle', () => {
       expect(result).toBe('Add more templates for common workflows');
     });
 
-    it('should transform "Explore..." to "Investigate..." for concrete objects', () => {
+    it('should transform "Explore..." to "Evaluate..." for concrete objects', () => {
+      const input = 'Explore database sharding options';
+      const result = normalizeSuggestionTitle(input);
+      // "Explore" without "what/whether/if" gets mapped to "Evaluate"
+      expect(result).toBe('Evaluate database sharding options');
+    });
+
+    it('should keep "Explore" for abstract questions', () => {
       const input = 'Explore what settings users need';
       const result = normalizeSuggestionTitle(input);
       // "what" is abstract, so keep Explore
       expect(result).toBe('Explore what settings users need');
     });
 
-    it('should transform "Consider..." into clean title', () => {
-      const input = 'Consider adding dark mode to the app';
+    it('should transform "Consider..." with UI noun into "Add"', () => {
+      const input = 'Consider a checklist UI for task management';
       const result = normalizeSuggestionTitle(input);
-      // "Adding" is a gerund, keep it
-      expect(result).toBe('Adding dark mode to the app');
+      expect(result).toBe('Add a checklist UI for task management');
+    });
+
+    it('should transform "We should consider..." with template into "Add"', () => {
+      const input = 'We should consider a template for onboarding';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toBe('Add a template for onboarding');
     });
 
     it('should clean "Implement maybe we could..." artifact', () => {
       const input = 'Implement maybe we could add checklist UI';
       const result = normalizeSuggestionTitle(input);
-      expect(result).toBe('Implement add checklist UI');
+      // Should remove filler AND deduplicate verbs
+      expect(result).toBe('Add checklist UI');
     });
 
     it('should clean "Implement consider..." artifact', () => {
       const input = 'Implement consider adding templates';
       const result = normalizeSuggestionTitle(input);
+      // Removes " consider ", leaving "Implement adding templates"
+      // This is acceptable - "Implement" is a valid strong verb
       expect(result).toBe('Implement adding templates');
+    });
+
+    it('should not contain "Implement Maybe we could"', () => {
+      const input = 'Implement Maybe we could launch a new feature';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).not.toContain('Maybe we could');
+      expect(result).not.toContain('Implement Maybe');
+    });
+
+    it('should not contain "for more" at start', () => {
+      const input = 'There is an indirect request for more templates for workflow automation';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toBe('Add more templates for workflow automation');
+      expect(result).not.toMatch(/^for more/i);
+    });
+
+    it('should handle "Maybe we could launch..." correctly', () => {
+      const input = 'Maybe we could launch a 5-minute weekly email summary';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toBe('Launch a 5-minute weekly email summary');
+    });
+
+    it('should handle "There is an indirect request for more Templates..."', () => {
+      const input = 'There is an indirect request for more Templates for customer onboarding';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toBe('Add more Templates for customer onboarding');
+    });
+
+    it('should handle "There is a request to add..."', () => {
+      const input = 'There is a request to add reporting dashboard';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toBe('Add reporting dashboard');
+    });
+
+    it('should handle "We should explore..." -> "Evaluate"', () => {
+      const input = 'We should explore new authentication methods';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toBe('Evaluate new authentication methods');
     });
   });
 
@@ -259,5 +316,83 @@ describe('normalizeSuggestionTitle', () => {
         'Building Z',  // "Building" is a gerund, valid verb form
       ]);
     });
+  });
+});
+
+describe('truncateTitleSmart', () => {
+  it('should not truncate titles shorter than max length', () => {
+    const input = 'Add a new feature';
+    const result = truncateTitleSmart(input, 50);
+    expect(result).toBe('Add a new feature');
+    expect(result).not.toContain('...');
+  });
+
+  it('should truncate at word boundary and add ellipsis', () => {
+    const input = 'Add a comprehensive testing framework for automated regression tests in the backend';
+    const result = truncateTitleSmart(input, 50);
+    expect(result).toContain('...');
+    expect(result.length).toBeLessThanOrEqual(50);
+    // Should not end with a partial word
+    const withoutEllipsis = result.replace('...', '').trim();
+    expect(withoutEllipsis).toMatch(/\w+$/); // ends with complete word
+  });
+
+  it('should truncate at clause boundary when possible', () => {
+    const input = 'Add offline mode for mobile, improve sync performance, and enable batch operations';
+    const result = truncateTitleSmart(input, 40);
+    expect(result).toContain('...');
+    // Should break at comma
+    expect(result).toMatch(/^Add offline mode for mobile\.\.\.$/);
+  });
+
+  it('should handle titles with parenthetical content', () => {
+    const input = 'Add authentication system (OAuth and JWT) for secure user access';
+    const result = truncateTitleSmart(input, 40);
+    expect(result).toContain('...');
+    expect(result.length).toBeLessThanOrEqual(40);
+  });
+
+  it('should remove trailing punctuation before ellipsis', () => {
+    const input = 'Add feature X, improve feature Y, and remove feature Z';
+    const result = truncateTitleSmart(input, 20);
+    expect(result).toContain('...');
+    // Should not have comma right before ellipsis
+    expect(result).not.toMatch(/,\.\.\.$/);
+  });
+
+  it('should handle very long words gracefully', () => {
+    const input = 'Add supercalifragilisticexpialidocious functionality';
+    const result = truncateTitleSmart(input, 20);
+    expect(result).toContain('...');
+    expect(result.length).toBeLessThanOrEqual(20);
+  });
+
+  it('should be deterministic', () => {
+    const input = 'Add a comprehensive testing framework for automated regression tests';
+    const result1 = truncateTitleSmart(input, 50);
+    const result2 = truncateTitleSmart(input, 50);
+    expect(result1).toBe(result2);
+  });
+
+  it('should handle default maxLen of 80', () => {
+    const input = 'A'.repeat(100);
+    const result = truncateTitleSmart(input);
+    expect(result.length).toBeLessThanOrEqual(80);
+    expect(result).toContain('...');
+  });
+
+  it('should end with ellipsis when truncated', () => {
+    const input = 'Add a very long title that needs to be truncated at some reasonable point';
+    const result = truncateTitleSmart(input, 40);
+    expect(result).toMatch(/\.\.\.$/);
+  });
+
+  it('should not cut mid-word', () => {
+    const input = 'Add authentication functionality to the platform';
+    const result = truncateTitleSmart(input, 30);
+    const withoutEllipsis = result.replace('...', '').trim();
+    // Check that the last word is complete (not "authentica" or similar)
+    const lastWord = withoutEllipsis.split(' ').pop();
+    expect(lastWord).toMatch(/^[a-zA-Z]+$/); // complete word
   });
 });

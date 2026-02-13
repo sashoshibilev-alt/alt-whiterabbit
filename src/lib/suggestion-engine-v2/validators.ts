@@ -278,7 +278,7 @@ export function validateV4HeadingOnly(
 ): ValidationResult {
   // Only applies to idea-type suggestions
   if (suggestion.type !== 'idea') {
-    return { passed: true, validator: 'V3_evidence_sanity' };
+    return { passed: true, validator: 'V4_heading_only' };
   }
 
   const hasExplicitAsk = suggestion.titleSource === 'explicit-ask';
@@ -290,12 +290,12 @@ export function validateV4HeadingOnly(
   if (isHeadingDerived && !hasExplicitAsk) {
     return {
       passed: false,
-      validator: 'V3_evidence_sanity',
+      validator: 'V4_heading_only',
       reason: `Heading-only suggestion without explicit ask anchor (titleSource: ${suggestion.titleSource || 'unknown'})`,
     };
   }
 
-  return { passed: true, validator: 'V3_evidence_sanity' };
+  return { passed: true, validator: 'V4_heading_only' };
 }
 
 // ============================================
@@ -350,7 +350,7 @@ export function runQualityValidators(
     return {
       passed: false,
       results,
-      failedValidator: 'V3_evidence_sanity',  // Use V3 label for consistency
+      failedValidator: 'V4_heading_only',
       failureReason: v4Result.reason,
     };
   }
