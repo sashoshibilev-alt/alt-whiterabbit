@@ -1733,6 +1733,71 @@ function isStatusPriorityWithoutAction(sentence: string): boolean {
 }
 
 /**
+ * Concern/risk phrasing patterns that indicate internal worries/concerns
+ * rather than feature requests.
+ */
+const CONCERN_RISK_PATTERNS = [
+  /\bconcern\s+that\b/i,
+  /\brisk\s+that\b/i,
+  /\bworried\s+that\b/i,
+  /\bmight\s+churn\b/i,
+  /\bcould\s+churn\b/i,
+  /\bmight\s+impact\b/i,
+  /\bcould\s+cause\b/i,
+];
+
+/**
+ * Explicit ask markers that indicate a concrete request
+ */
+const EXPLICIT_ASK_MARKERS = [
+  /\brequirement(?:s)?\s+to\b/i,
+  /\brequest(?:s|ed)?\s+to\b/i,
+  /\b(?:we|users?|teams?)\s+needs?\b/i,
+  /\basks?\s+for\b/i,
+];
+
+/**
+ * Check if a sentence is a concern/risk statement without an explicit ask or action verb.
+ * Returns true if the sentence contains concern/risk phrasing but lacks concrete work markers.
+ *
+ * Examples that should be suppressed:
+ * - "Some internal concern that aggressive gating might churn existing users."
+ * - "Risk that this could cause performance issues."
+ * - "Worried that rapid changes might impact stability."
+ *
+ * Examples that should NOT be suppressed (have explicit ask or action verb):
+ * - "Requirement to implement granular feature gating..." (has explicit ask marker)
+ * - "We need to add monitoring to address the concern that..." (has action verb)
+ * - "Concern that we should implement better logging" (has action verb "implement")
+ */
+function isConcernRiskStatement(sentence: string): boolean {
+  const lower = sentence.toLowerCase();
+
+  // Check if sentence contains concern/risk phrasing
+  const hasConcernRisk = CONCERN_RISK_PATTERNS.some(pattern => pattern.test(lower));
+  if (!hasConcernRisk) {
+    // No concern/risk phrasing found
+    return false;
+  }
+
+  // Check if sentence also contains an explicit ask marker
+  const hasExplicitAsk = EXPLICIT_ASK_MARKERS.some(pattern => pattern.test(lower));
+  if (hasExplicitAsk) {
+    // Has explicit ask marker, so it's a valid request despite concern phrasing
+    return false;
+  }
+
+  // Check if sentence contains concrete work verb from IMPERATIVE_WORK_VERBS
+  const hasActionVerb = IMPERATIVE_WORK_VERBS.some(verb => {
+    const regex = new RegExp(`\\b${verb}\\b`, 'i');
+    return regex.test(lower);
+  });
+
+  // Suppress if concern/risk phrasing is present BUT no explicit ask marker AND no action verb
+  return !hasActionVerb;
+}
+
+/**
  * Rank explicit ask patterns by priority (highest first):
  * 1. "requirement to implement"
  * 2. "request to add" / "request to"
@@ -1759,8 +1824,8 @@ function getAskPatternPriority(sentence: string): number {
  * Extract ALL explicit ask sentences from section text and rank them by priority.
  * Returns up to maxResults top-ranked distinct sentences.
  * Used for generating multiple B-lite ideas from a single section.
- * Filters out weak meta suggestions (e.g., "we need to review") and status/priority
- * statements without action verbs before ranking.
+ * Filters out weak meta suggestions (e.g., "we need to review"), status/priority
+ * statements without action verbs, and concern/risk statements before ranking.
  */
 function extractRankedExplicitAsks(text: string, maxResults: number = 2): string[] {
   const sentences = text.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 10);
@@ -1775,6 +1840,11 @@ function extractRankedExplicitAsks(text: string, maxResults: number = 2): string
 
       // Quality filter: skip status/priority statements without action verbs
       if (isStatusPriorityWithoutAction(sentence)) {
+        continue;
+      }
+
+      // Quality filter: skip concern/risk statements without explicit ask or action verb
+      if (isConcernRiskStatement(sentence)) {
         continue;
       }
 
