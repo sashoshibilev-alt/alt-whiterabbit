@@ -1726,12 +1726,22 @@ This has been blocking debugging efforts for weeks.`,
         { verbosity: 'FULL' }
       );
 
+      // DEBUG
+      console.log('Suggestions:', result.suggestions.length);
+      console.log('Debug info:', result.debug);
+
       // Check debug output
       const sections = result.debugRun?.sections || [];
       expect(sections.length).toBeGreaterThan(0);
 
       const section = sections[0];
       const candidates = section.candidates || [];
+      console.log('Candidates:', candidates.length, candidates.map((c: any) => ({
+        title: c.title,
+        titleSource: c.titleSource,
+        dropped: c.dropped,
+        dropReason: c.dropReason
+      })));
       expect(candidates.length).toBeGreaterThan(0);
 
       const candidate = candidates[0];
