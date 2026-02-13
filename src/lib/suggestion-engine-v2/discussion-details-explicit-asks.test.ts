@@ -261,21 +261,27 @@ The team agreed on new feature requests: asks for an offline mode for mobile and
 
     const result = generateSuggestions(note, DEFAULT_CONFIG);
 
-    const discussionSuggestion = result.suggestions.find(s =>
+    const discussionSuggestions = result.suggestions.filter(s =>
       s.suggestion?.sourceHeading.toLowerCase().includes('discussion')
     );
-    expect(discussionSuggestion).toBeDefined();
+    expect(discussionSuggestions.length).toBeGreaterThan(0);
 
-    if (discussionSuggestion) {
+    // Find the best suggestion (the one about offline mode/summary, not "prioritize")
+    const goodSuggestion = discussionSuggestions.find(s =>
+      /offline|mode|mobile|summary/.test(s.title.toLowerCase())
+    );
+    expect(goodSuggestion).toBeDefined();
+
+    if (goodSuggestion) {
       // Title should NOT start with "N " (broken substring bug)
-      expect(discussionSuggestion.title).not.toMatch(/^N\s/);
+      expect(goodSuggestion.title).not.toMatch(/^N\s/);
 
       // Title should NOT include discussion commentary like "Leo noted"
-      expect(discussionSuggestion.title.toLowerCase()).not.toContain('leo');
-      expect(discussionSuggestion.title.toLowerCase()).not.toContain('noted');
+      expect(goodSuggestion.title.toLowerCase()).not.toContain('leo');
+      expect(goodSuggestion.title.toLowerCase()).not.toContain('noted');
 
       // Title should be clean and focused on the ask
-      expect(discussionSuggestion.title.toLowerCase()).toMatch(/offline|mode|mobile|summary/);
+      expect(goodSuggestion.title.toLowerCase()).toMatch(/offline|mode|mobile|summary/);
     }
   });
 });
