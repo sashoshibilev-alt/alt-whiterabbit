@@ -19,7 +19,7 @@ import { normalizeForComparison } from './preprocessing';
 import { computeSuggestionKey } from '../suggestion-keys';
 import { PROPOSAL_VERBS_IDEA_ONLY } from './classifiers';
 import { DropStage, DropReason } from './debugTypes';
-import { normalizeSuggestionTitle } from './title-normalization';
+import { normalizeSuggestionTitle, truncateTitleSmart } from './title-normalization';
 
 // ============================================
 // ID Generation
@@ -238,23 +238,10 @@ function generateProjectUpdateTitle(section: ClassifiedSection): string {
 
 /**
  * Truncate title to max length safely (avoid cutting mid-word)
+ * @deprecated Use truncateTitleSmart from title-normalization instead
  */
 function truncateTitle(title: string, maxLength: number): string {
-  if (title.length <= maxLength) {
-    return title;
-  }
-
-  // Find last space before maxLength
-  const truncated = title.substring(0, maxLength);
-  const lastSpace = truncated.lastIndexOf(' ');
-
-  if (lastSpace > maxLength * 0.6) {
-    // If we have a reasonable break point, use it
-    return truncated.substring(0, lastSpace).trim();
-  }
-
-  // Otherwise, hard truncate
-  return truncated.trim();
+  return truncateTitleSmart(title, maxLength);
 }
 
 /**

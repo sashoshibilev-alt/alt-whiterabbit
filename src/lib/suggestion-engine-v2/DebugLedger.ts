@@ -381,11 +381,22 @@ export class DebugLedger {
     if (!candidate) return;
 
     // Map engine validation results to debug format
-    candidate.validatorResults = validationResults.map((r) => ({
+    const mappedResults = validationResults.map((r) => ({
       name: r.validator.replace("_", "_").toUpperCase(),
       passed: r.passed,
       reason: r.reason,
     }));
+
+    // Deduplicate by (name, passed, reason)
+    const seen = new Set<string>();
+    candidate.validatorResults = mappedResults.filter((r) => {
+      const key = `${r.name}|${r.passed}|${r.reason || ''}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
 
     // Build validator summary
     section.validatorSummary = {
