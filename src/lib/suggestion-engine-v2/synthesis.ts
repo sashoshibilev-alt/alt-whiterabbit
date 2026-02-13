@@ -1446,7 +1446,9 @@ const EXPLICIT_REQUEST_PATTERNS = [
   /\bwe\s+should\b/i,
   /\bmaybe\s+we\s+could\b/i,
   /\brequires\s+us\s+to\b/i,
+  /\bthis\s+will\s+require\b/i,
   /\bsuggestion:/i,
+  /\brequirement(?:s)?(?:\s+to|\s*:)?\s+implement\b/i,  // "requirement to implement", "requirement: implement", "requirements to implement"
 ];
 
 /**
@@ -1456,6 +1458,9 @@ const EXPLICIT_REQUEST_PATTERNS = [
  *
  * Minimal fallback to restore recall for valid feature requests written as imperatives.
  * Does NOT affect actionability thresholds or intent classification.
+ *
+ * ⚠️ Keep this list in sync with V3_ACTION_VERBS in classifiers.ts.
+ * These verb sets must remain aligned for idea detection consistency.
  */
 const IMPERATIVE_WORK_VERBS = [
   'add',
@@ -1469,6 +1474,10 @@ const IMPERATIVE_WORK_VERBS = [
   'deprecate',
   'fix',
   'improve',
+  'explore',  // "we should explore X"
+  'update',   // "we should update X"
+  'change',   // "we should change X"
+  'refactor', // "we should refactor X"
 ];
 
 /**
@@ -1477,6 +1486,18 @@ const IMPERATIVE_WORK_VERBS = [
  */
 export function containsExplicitRequest(text: string): boolean {
   return EXPLICIT_REQUEST_PATTERNS.some(pattern => pattern.test(text));
+}
+
+/**
+ * Check if text contains PM request patterns that should trigger type override.
+ * These patterns (like "Requirement to implement") indicate a feature request
+ * even when the section intent is plan_change/project_update.
+ */
+function containsPMRequestPattern(text: string): boolean {
+  const pmRequestPatterns = [
+    /\brequirement(?:s)?(?:\s+to|\s*:)?\s+(implement|add|build|create|enable)\b/i,
+  ];
+  return pmRequestPatterns.some(pattern => pattern.test(text));
 }
 
 /**
@@ -1555,23 +1576,241 @@ function isSectionWithExplicitAsk(
 }
 
 /**
+ * Meta verbs that indicate planning/discussion rather than concrete work.
+ * These should be filtered out from explicit-ask anchor candidates.
+ */
+const META_VERBS = [
+  'prioritize',
+  'review',
+  'discuss',
+  'align',
+  'evaluate',
+  'assess',
+  'revisit',
+  'brainstorm',
+  'sync',
+  'follow up',
+  'consider',
+  'coordinate',
+  'validate',
+  'confirm',
+];
+
+/**
+ * Concrete work verbs that indicate real implementation work.
+ */
+const CONCRETE_WORK_VERBS = [
+  'add',
+  'implement',
+  'build',
+  'create',
+  'enable',
+  'support',
+  'integrate',
+  'remove',
+  'deprecate',
+  'fix',
+  'improve',
+  'migrate',
+  'launch',
+  'ship',
+];
+
+/**
+ * Concrete artifact nouns that indicate tangible product work.
+ */
+const CONCRETE_ARTIFACT_NOUNS = [
+  'feature',
+  'integration',
+  'ui',
+  'api',
+  'role',
+  'permission',
+  'dashboard',
+  'report',
+  'export',
+  'onboarding',
+  'workflow',
+  'portal',
+  'gating',
+  'schema',
+  'mapper',
+  'endpoint',
+  'component',
+  'service',
+  'migration',
+  'webhook',
+];
+
+/**
+ * Check if a sentence is a weak/meta suggestion (e.g., "we need to review").
+ * Returns true if the sentence contains only meta verbs without concrete work verbs or artifact nouns.
+ */
+function isWeakMetaSuggestion(sentence: string): boolean {
+  const lower = sentence.toLowerCase();
+
+  // Check if sentence contains any meta verb
+  const hasMetaVerb = META_VERBS.some(verb => {
+    const regex = new RegExp(`\\b${verb}\\b`, 'i');
+    return regex.test(lower);
+  });
+
+  if (!hasMetaVerb) {
+    // No meta verb found, so it's not a meta suggestion
+    return false;
+  }
+
+  // Check if sentence also contains concrete work verb
+  const hasConcreteVerb = CONCRETE_WORK_VERBS.some(verb => {
+    const regex = new RegExp(`\\b${verb}\\b`, 'i');
+    return regex.test(lower);
+  });
+
+  if (hasConcreteVerb) {
+    // Has both meta verb and concrete verb, so it's concrete enough
+    return false;
+  }
+
+  // Check if sentence contains concrete artifact noun
+  const hasConcreteNoun = CONCRETE_ARTIFACT_NOUNS.some(noun => {
+    const regex = new RegExp(`\\b${noun}\\b`, 'i');
+    return regex.test(lower);
+  });
+
+  if (hasConcreteNoun) {
+    // Has both meta verb and concrete noun, so it's concrete enough
+    return false;
+  }
+
+  // Has meta verb but no concrete verb or noun → weak meta suggestion
+  return true;
+}
+
+/**
+ * Status/priority phrasing patterns that indicate informational statements
+ * rather than actionable requests (e.g., "is now a high-priority item for the H2 roadmap").
+ */
+const STATUS_PRIORITY_PATTERNS = [
+  /\bis\s+(?:now\s+)?(?:a\s+)?high-priority(?:\s+item)?(?:\s+for)?\b/i,
+  /\bis\s+(?:a\s+)?(?:high|top|low)\s+priority\b/i,
+  /\bfor\s+the\s+(?:h\d|q\d)\s+roadmap\b/i,
+  /\bfor\s+the\s+roadmap\b/i,
+  /\btop\s+priority\s+for\b/i,
+  /\bpriority\s+item\b/i,
+];
+
+/**
+ * Check if a sentence is a status/priority statement without an action verb.
+ * Returns true if the sentence describes priority/roadmap status without requesting concrete work.
+ *
+ * Examples that should be suppressed:
+ * - "The 'Supplier Portal' is now a high-priority item for the H2 roadmap."
+ * - "Feature X is a high priority for Q3."
+ * - "This is top priority for the team."
+ *
+ * Examples that should NOT be suppressed (have action verbs):
+ * - "The 'Supplier Portal' is now a high-priority item. Implement onboarding flow."
+ * - "Feature X is a high priority. Add dark mode support."
+ */
+function isStatusPriorityWithoutAction(sentence: string): boolean {
+  const lower = sentence.toLowerCase();
+
+  // Check if sentence contains status/priority phrasing
+  const hasStatusPriority = STATUS_PRIORITY_PATTERNS.some(pattern => pattern.test(lower));
+  if (!hasStatusPriority) {
+    // No status/priority phrasing found
+    return false;
+  }
+
+  // Check if sentence also contains an action verb from IMPERATIVE_WORK_VERBS
+  const hasActionVerb = IMPERATIVE_WORK_VERBS.some(verb => {
+    const regex = new RegExp(`\\b${verb}\\b`, 'i');
+    return regex.test(lower);
+  });
+
+  // Suppress if status/priority phrasing is present BUT no action verb
+  return !hasActionVerb;
+}
+
+/**
+ * Rank explicit ask patterns by priority (highest first):
+ * 1. "requirement to implement"
+ * 2. "request to add" / "request to"
+ * 3. "users need"
+ * 4. "asks for"
+ * 5. "this will require"
+ * 6. "suggestion:"
+ * 7. "maybe we could"
+ * 8. other patterns (default)
+ */
+function getAskPatternPriority(sentence: string): number {
+  const lower = sentence.toLowerCase();
+  if (/\brequirement(?:s)?(?:\s+to|\s*:)?\s+implement\b/.test(lower)) return 1;
+  if (/\brequest(?:s|ed)?\s+(?:to\s+add|to\b)/.test(lower)) return 2;
+  if (/\b(?:we|users?|teams?)\s+needs?\s+/.test(lower)) return 3;
+  if (/\basks?\s+for\b/.test(lower)) return 4;
+  if (/\bthis\s+will\s+require\b/.test(lower)) return 5;
+  if (/\bsuggestion:/.test(lower)) return 6;
+  if (/\bmaybe\s+we\s+could\b/.test(lower)) return 7;
+  return 8; // other patterns
+}
+
+/**
+ * Extract ALL explicit ask sentences from section text and rank them by priority.
+ * Returns up to maxResults top-ranked distinct sentences.
+ * Used for generating multiple B-lite ideas from a single section.
+ * Filters out weak meta suggestions (e.g., "we need to review") and status/priority
+ * statements without action verbs before ranking.
+ */
+function extractRankedExplicitAsks(text: string, maxResults: number = 2): string[] {
+  const sentences = text.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 10);
+  const candidateAsks: Array<{ sentence: string; priority: number }> = [];
+
+  for (const sentence of sentences) {
+    if (containsExplicitRequest(sentence)) {
+      // Quality filter: skip weak meta suggestions
+      if (isWeakMetaSuggestion(sentence)) {
+        continue;
+      }
+
+      // Quality filter: skip status/priority statements without action verbs
+      if (isStatusPriorityWithoutAction(sentence)) {
+        continue;
+      }
+
+      candidateAsks.push({
+        sentence: normalizeLineForSynthesis(sentence),
+        priority: getAskPatternPriority(sentence),
+      });
+    }
+  }
+
+  // Sort by priority (lower number = higher priority)
+  candidateAsks.sort((a, b) => a.priority - b.priority);
+
+  // Return top N distinct sentences
+  const seen = new Set<string>();
+  const results: string[] = [];
+  for (const ask of candidateAsks) {
+    if (!seen.has(ask.sentence)) {
+      seen.add(ask.sentence);
+      results.push(ask.sentence);
+      if (results.length >= maxResults) break;
+    }
+  }
+
+  return results;
+}
+
+/**
  * Extract first explicit ask from section text for new_feature suggestion
  * Returns ONLY the sentence containing the explicit request (not trailing commentary)
  * Exported for use in debugGenerator fallback path
  */
 export function extractExplicitAsk(text: string): string | null {
-  // Split into sentences first (more granular than lines)
-  // This ensures we extract just the ask sentence, not trailing commentary
-  const sentences = text.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 10);
-
-  // Find first sentence with explicit request
-  for (const sentence of sentences) {
-    if (containsExplicitRequest(sentence)) {
-      return normalizeLineForSynthesis(sentence);
-    }
-  }
-
-  return null;
+  // Use new ranked extraction but return only the first (highest priority) result
+  const ranked = extractRankedExplicitAsks(text, 1);
+  return ranked.length > 0 ? ranked[0] : null;
 }
 
 /**
@@ -1641,6 +1880,15 @@ function convertToImperative(text: string): string {
     }
   }
 
+  // If text doesn't start with an imperative verb after cleanup, prepend "Implement"
+  // This handles cases like "Requirement to implement X" -> "X" -> "Implement X"
+  const startsWithVerb = IMPERATIVE_WORK_VERBS.some(verb =>
+    new RegExp(`^${verb}\\b`, 'i').test(cleaned)
+  );
+  if (!startsWithVerb && cleaned.length > 0) {
+    cleaned = `Implement ${cleaned}`;
+  }
+
   return cleaned.trim();
 }
 
@@ -1662,6 +1910,8 @@ export function generateTitleFromExplicitAsk(askText: string): string {
     /wants?\s+(?:to\s+)?(?:(?:a|an|the)\s+)?(.+)/i,
     /(?:we|users?|teams?)\s+should\s+(.+)/i,
     /requires\s+us\s+to\s+(.+)/i,
+    /(?:this\s+)?will\s+require\s+(?:(?:a|an|the)\s+)?(.+)/i,  // "will require X", "this will require a new X"
+    /requirement(?:s)?(?:\s+to|\s*:)?\s+implement\s+(.+)/i,  // "requirement to implement X", "requirement: implement X"
   ];
 
   for (const pattern of requestMarkerPatterns) {
@@ -1685,6 +1935,7 @@ export function generateTitleFromExplicitAsk(askText: string): string {
     /\s+explained\s+/i,
     /\s+so\s+(?:that|they|we|you)\b/i,
     /\s+to\s+(?:allow|enable|help|improve|ensure)\b/i,
+    /\s+by\s+(?:(?:the\s+)?end\s+of\s+[A-Z][a-z]+|[A-Z][a-z]+\s+\d+|Q\d)/i,  // timeline phrases: "by the end of March", "by end of March", "by March 15", "by Q2"
     /\./,  // sentence break (check last!)
   ];
 
@@ -1774,73 +2025,140 @@ function generateBodyFromExplicitAsk(askSentence: string, fullText: string): str
 }
 
 /**
- * Build a B-lite suggestion from explicit ask language in a section.
+ * Build B-lite suggestions from explicit ask language in a section.
+ * Returns up to 2 idea suggestions from top-ranked anchor lines.
  * Tries explicit request patterns first, then falls back to imperative work verbs.
- * Returns null if no extractable ask is found.
+ * Returns empty array if no extractable asks are found.
  */
-function buildBliteSuggestion(section: ClassifiedSection): Suggestion | null {
-  // Try explicit ask first (with subject phrases)
-  let explicitAsk = extractExplicitAsk(section.raw_text);
-  let isImperativeFallback = false;
+function buildBliteSuggestions(section: ClassifiedSection): Suggestion[] {
+  const suggestions: Suggestion[] = [];
 
-  // Fallback to imperative work verb if no explicit ask found
-  if (!explicitAsk || explicitAsk.length <= 10) {
-    explicitAsk = extractImperativeStatement(section.raw_text);
-    isImperativeFallback = true;
-  }
+  // Try ranked explicit asks first (up to 2)
+  const rankedAsks = extractRankedExplicitAsks(section.raw_text, 2);
 
-  if (!explicitAsk || explicitAsk.length <= 10) return null;
+  for (const explicitAsk of rankedAsks) {
+    if (explicitAsk.length <= 10) continue;
 
-  const title = generateTitleFromExplicitAsk(explicitAsk);
-  const body = generateBodyFromExplicitAsk(explicitAsk, section.raw_text);
+    const title = generateTitleFromExplicitAsk(explicitAsk);
+    const body = generateBodyFromExplicitAsk(explicitAsk, section.raw_text);
 
-  const askLineObj = section.body_lines.find(l =>
-    normalizeLineForSynthesis(l.text).includes(explicitAsk.substring(0, 30))
-  );
+    const askLineObj = section.body_lines.find(l =>
+      normalizeLineForSynthesis(l.text).includes(explicitAsk.substring(0, 30))
+    );
 
-  const evidenceSpans: EvidenceSpan[] = askLineObj
-    ? [{ start_line: askLineObj.index, end_line: askLineObj.index, text: askLineObj.text }]
-    : [{
-        start_line: section.start_line,
-        end_line: Math.min(section.end_line, section.start_line + 2),
-        text: section.body_lines.slice(0, 2).map(l => l.text).join('\n'),
-      }];
+    const evidenceSpans: EvidenceSpan[] = askLineObj
+      ? [{ start_line: askLineObj.index, end_line: askLineObj.index, text: askLineObj.text }]
+      : [{
+          start_line: section.start_line,
+          end_line: Math.min(section.end_line, section.start_line + 2),
+          text: section.body_lines.slice(0, 2).map(l => l.text).join('\n'),
+        }];
 
-  return {
-    suggestion_id: generateSuggestionId(section.note_id),
-    note_id: section.note_id,
-    section_id: section.section_id,
-    type: 'idea',
-    title,
-    payload: {
-      draft_initiative: {
-        title: title.replace(/^New idea:\s*/i, '').trim(),
-        description: body,
-      },
-    },
-    evidence_spans: evidenceSpans,
-    scores: {
-      section_actionability: section.intent.new_workstream || 0.6,
-      type_choice_confidence: 0.7,
-      synthesis_confidence: 0.7,
-      overall: 0,
-    },
-    routing: { create_new: true },
-    suggestionKey: computeSuggestionKey({
-      noteId: section.note_id,
-      sourceSectionId: section.section_id,
+    suggestions.push({
+      suggestion_id: generateSuggestionId(section.note_id),
+      note_id: section.note_id,
+      section_id: section.section_id,
       type: 'idea',
       title,
-    }),
-    structural_hint: 'idea',  // B-lite suggestions are always idea type
-    suggestion: {
-      title,
-      body,
-      evidencePreview: [explicitAsk.substring(0, 150)],
-      sourceSectionId: section.section_id,
-      sourceHeading: section.heading_text || '',
-    },
-  };
+      payload: {
+        draft_initiative: {
+          title: title.replace(/^New idea:\s*/i, '').trim(),
+          description: body,
+        },
+      },
+      evidence_spans: evidenceSpans,
+      scores: {
+        section_actionability: section.intent.new_workstream || 0.6,
+        type_choice_confidence: 0.7,
+        synthesis_confidence: 0.7,
+        overall: 0,
+      },
+      routing: { create_new: true },
+      suggestionKey: computeSuggestionKey({
+        noteId: section.note_id,
+        sourceSectionId: section.section_id,
+        type: 'idea',
+        title,
+      }),
+      structural_hint: 'idea',  // B-lite suggestions are always idea type
+      suggestion: {
+        title,
+        body,
+        evidencePreview: [explicitAsk.substring(0, 150)],
+        sourceSectionId: section.section_id,
+        sourceHeading: section.heading_text || '',
+      },
+    });
+  }
+
+  // Fallback to imperative work verb if no explicit asks found
+  if (suggestions.length === 0) {
+    const imperativeAsk = extractImperativeStatement(section.raw_text);
+    if (imperativeAsk && imperativeAsk.length > 10) {
+      const title = generateTitleFromExplicitAsk(imperativeAsk);
+      const body = generateBodyFromExplicitAsk(imperativeAsk, section.raw_text);
+
+      const askLineObj = section.body_lines.find(l =>
+        normalizeLineForSynthesis(l.text).includes(imperativeAsk.substring(0, 30))
+      );
+
+      const evidenceSpans: EvidenceSpan[] = askLineObj
+        ? [{ start_line: askLineObj.index, end_line: askLineObj.index, text: askLineObj.text }]
+        : [{
+            start_line: section.start_line,
+            end_line: Math.min(section.end_line, section.start_line + 2),
+            text: section.body_lines.slice(0, 2).map(l => l.text).join('\n'),
+          }];
+
+      suggestions.push({
+        suggestion_id: generateSuggestionId(section.note_id),
+        note_id: section.note_id,
+        section_id: section.section_id,
+        type: 'idea',
+        title,
+        payload: {
+          draft_initiative: {
+            title: title.replace(/^New idea:\s*/i, '').trim(),
+            description: body,
+          },
+        },
+        evidence_spans: evidenceSpans,
+        scores: {
+          section_actionability: section.intent.new_workstream || 0.6,
+          type_choice_confidence: 0.7,
+          synthesis_confidence: 0.7,
+          overall: 0,
+        },
+        routing: { create_new: true },
+        suggestionKey: computeSuggestionKey({
+          noteId: section.note_id,
+          sourceSectionId: section.section_id,
+          type: 'idea',
+          title,
+        }),
+        structural_hint: 'idea',
+        suggestion: {
+          title,
+          body,
+          evidencePreview: [imperativeAsk.substring(0, 150)],
+          sourceSectionId: section.section_id,
+          sourceHeading: section.heading_text || '',
+        },
+      });
+    }
+  }
+
+  return suggestions;
+}
+
+/**
+ * Build a single B-lite suggestion from explicit ask language in a section.
+ * Wrapper for backwards compatibility - returns the first suggestion from buildBliteSuggestions.
+ * Used in fallback paths where only one suggestion is expected.
+ */
+function buildBliteSuggestion(section: ClassifiedSection): Suggestion | null {
+  const suggestions = buildBliteSuggestions(section);
+  return suggestions.length > 0 ? suggestions[0] : null;
 }
 
 // ============================================
@@ -2400,31 +2718,39 @@ export function synthesizeSuggestions(
     //
     // IMPORTANT: For non-discussion sections, only apply B-lite to idea-type sections (not plan_change).
     // Plan_change sections must preserve project_update typing and timeline-focused synthesis.
+    // EXCEPTION: PM request patterns (e.g., "Requirement to implement") trigger B-lite with type override
+    // to idea, even in plan_change sections.
     // Discussion details sections ALWAYS get B-lite treatment when they have explicit asks,
     // regardless of typeLabel (to preserve original B-lite behavior).
     const isDiscDetails = isDiscussionDetailsHeading(headingText);
     const hasExplicitAsk = isSectionWithExplicitAsk(section.body_lines, section.raw_text);
     const isPlanChange = section.typeLabel === 'project_update';
+    const hasPMRequestPattern = containsPMRequestPattern(section.raw_text);
 
     if (isDiscDetails && hasExplicitAsk) {
       // Discussion details with explicit ask - use B-lite (original behavior)
       // Override typeLabel to 'idea' for Discussion details with explicit asks
-      const bliteSuggestion = buildBliteSuggestion(section);
-      if (bliteSuggestion) {
-        suggestions.push(bliteSuggestion);
-        for (const span of bliteSuggestion.evidence_spans) {
-          emittedEvidenceTexts.push(span.text);
+      const bliteSuggestions = buildBliteSuggestions(section);
+      if (bliteSuggestions.length > 0) {
+        for (const bliteSuggestion of bliteSuggestions) {
+          suggestions.push(bliteSuggestion);
+          for (const span of bliteSuggestion.evidence_spans) {
+            emittedEvidenceTexts.push(span.text);
+          }
         }
         continue;
       }
-    } else if (!isDiscDetails && hasExplicitAsk && !isPlanChange) {
+    } else if (!isDiscDetails && hasExplicitAsk && (!isPlanChange || hasPMRequestPattern)) {
       // Non-discussion section with explicit ask/imperative - try B-lite first
       // Only bypass normal synthesis if B-lite succeeds AND section is idea-type
-      const bliteSuggestion = buildBliteSuggestion(section);
-      if (bliteSuggestion) {
-        suggestions.push(bliteSuggestion);
-        for (const span of bliteSuggestion.evidence_spans) {
-          emittedEvidenceTexts.push(span.text);
+      // EXCEPTION: If PM request pattern is present, apply B-lite even for plan_change sections
+      const bliteSuggestions = buildBliteSuggestions(section);
+      if (bliteSuggestions.length > 0) {
+        for (const bliteSuggestion of bliteSuggestions) {
+          suggestions.push(bliteSuggestion);
+          for (const span of bliteSuggestion.evidence_spans) {
+            emittedEvidenceTexts.push(span.text);
+          }
         }
         continue;
       }
@@ -2511,8 +2837,8 @@ export function synthesizeSuggestions(
     // This rescues sections where the ask is clear but normal synthesis missed it.
     // Heading-agnostic: fires for any section heading (including non-Discussion headings).
     if (!normalSynthesisEmitted && isSectionWithExplicitAsk(section.body_lines, section.raw_text)) {
-      const bliteSuggestion = buildBliteSuggestion(section);
-      if (bliteSuggestion) {
+      const bliteSuggestions = buildBliteSuggestions(section);
+      for (const bliteSuggestion of bliteSuggestions) {
         suggestions.push(bliteSuggestion);
         for (const span of bliteSuggestion.evidence_spans) {
           emittedEvidenceTexts.push(span.text);

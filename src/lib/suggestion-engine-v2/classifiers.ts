@@ -257,10 +257,14 @@ const V3_REQUEST_STEMS = [
   'requested',
   'want to',
   'would like',
+  'requirement',  // "requirement to implement" pattern
 ];
 
 /**
  * V3 Action verbs for directive detection
+ *
+ * ⚠️ Keep this list in sync with IMPERATIVE_WORK_VERBS in synthesis.ts.
+ * These verb sets must remain aligned for idea detection consistency.
  */
 const V3_ACTION_VERBS = [
   'add',
