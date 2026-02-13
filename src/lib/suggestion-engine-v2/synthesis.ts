@@ -19,7 +19,7 @@ import { normalizeForComparison } from './preprocessing';
 import { computeSuggestionKey } from '../suggestion-keys';
 import { PROPOSAL_VERBS_IDEA_ONLY } from './classifiers';
 import { DropStage, DropReason } from './debugTypes';
-import { normalizeSuggestionTitle, truncateTitleSmart } from './title-normalization';
+import { normalizeSuggestionTitle } from './title-normalization';
 
 // ============================================
 // ID Generation
@@ -129,7 +129,7 @@ function generateTitleFromImpactLine(impactLine: string): string {
 
   // Truncate to 60 chars if needed
   if (title.length > 60) {
-    title = truncateTitle(title, 60);
+    title = truncateTitleSmart(title, 60);
   }
 
   return title;
@@ -181,7 +181,7 @@ function generateProjectUpdateTitle(section: ClassifiedSection): string {
       let title = capitalizeFirst(sentences[0]);
       // Truncate if needed
       if (title.length > 70) {
-        title = truncateTitle(title, 70);
+        title = truncateTitleSmart(title, 70);
       }
       return title;
     }
@@ -237,11 +237,104 @@ function generateProjectUpdateTitle(section: ClassifiedSection): string {
 }
 
 /**
- * Truncate title to max length safely (avoid cutting mid-word)
- * @deprecated Use truncateTitleSmart from title-normalization instead
+ * Smart title truncation that prefers clause/punctuation/word boundaries
+ *
+ * Strategy:
+ * 1. Return as-is if under limit
+ * 2. Try truncating at last clause boundary (". ", "; ", " — ", ": ")
+ * 3. Fall back to comma boundary (", ")
+ * 4. Fall back to word boundary (" ")
+ * 5. Hard cut at maxLength (never break surrogate pairs)
+ * 6. Trim trailing punctuation/whitespace, add ellipsis "…"
+ *
+ * @param title - The title to truncate
+ * @param maxLen - Maximum character length (ellipsis counts toward this)
+ * @returns Truncated title with ellipsis if shortened
  */
-function truncateTitle(title: string, maxLength: number): string {
-  return truncateTitleSmart(title, maxLength);
+function truncateTitleSmart(title: string, maxLen: number): string {
+  if (!title) {
+    return title;
+  }
+
+  // Trim whitespace first
+  const trimmed = title.trim();
+  if (trimmed.length <= maxLen) {
+    return trimmed;
+  }
+
+  // Reserve space for ellipsis
+  const targetLen = maxLen - 1;
+
+  // Clause boundaries (strongest preference) - look for marker within range
+  const clauseMarkers = ['. ', '; ', ' — ', ': '];
+  for (const marker of clauseMarkers) {
+    let searchIdx = 0;
+    let lastGoodIdx = -1;
+
+    // Find all occurrences of the marker
+    while ((searchIdx = trimmed.indexOf(marker, searchIdx)) !== -1) {
+      if (searchIdx < targetLen) {
+        lastGoodIdx = searchIdx;
+        searchIdx += marker.length;
+      } else {
+        break;
+      }
+    }
+
+    // Use the last occurrence before targetLen if it's not too early
+    if (lastGoodIdx > 0 && lastGoodIdx >= targetLen * 0.3) {
+      return cleanAndAppendEllipsis(trimmed.substring(0, lastGoodIdx));
+    }
+  }
+
+  // Comma boundary (second preference)
+  const commaIdx = trimmed.lastIndexOf(', ', targetLen);
+  if (commaIdx > 0 && commaIdx >= targetLen * 0.4) {
+    return cleanAndAppendEllipsis(trimmed.substring(0, commaIdx));
+  }
+
+  // Word boundary (third preference) - stricter threshold
+  const spaceIdx = trimmed.lastIndexOf(' ', targetLen);
+  if (spaceIdx > 0 && spaceIdx >= targetLen * 0.7) {
+    return cleanAndAppendEllipsis(trimmed.substring(0, spaceIdx));
+  }
+
+  // Hard cut (ensure we don't break UTF-16 surrogate pairs)
+  let cutPoint = targetLen;
+  // Check if we're cutting a surrogate pair (high surrogate: 0xD800-0xDBFF)
+  const charCode = trimmed.charCodeAt(cutPoint - 1);
+  if (charCode >= 0xD800 && charCode <= 0xDBFF) {
+    cutPoint -= 1; // Step back to avoid breaking the pair
+  }
+
+  return cleanAndAppendEllipsis(trimmed.substring(0, cutPoint));
+}
+
+/**
+ * Clean up truncated text and append ellipsis
+ * - Trim whitespace
+ * - Remove trailing punctuation except closing quotes/parens
+ * - Remove unmatched opening quotes
+ * - Add ellipsis
+ */
+function cleanAndAppendEllipsis(text: string): string {
+  let cleaned = text.trim();
+
+  // Remove trailing punctuation (except closing markers)
+  cleaned = cleaned.replace(/[,;:\-]+$/, '');
+  cleaned = cleaned.trim();
+
+  // Handle unmatched quotes by removing incomplete quoted sections at the end
+  // Pattern: space followed by opening quote with no closing quote
+  if (cleaned.match(/\s+"[^"]*$/)) {
+    // Ends with opening quote and no closing - remove from opening quote onward
+    cleaned = cleaned.replace(/\s+"[^"]*$/, '').trim();
+  } else if (cleaned.match(/\s+'[^']*$/)) {
+    // Same for single quotes
+    cleaned = cleaned.replace(/\s+'[^']*$/, '').trim();
+  }
+
+  return cleaned + '…';
 }
 
 /**
@@ -256,9 +349,7 @@ function generateTitleFromProposal(proposalLine: string): string {
   title = capitalizeFirst(title);
 
   // Truncate if needed
-  if (title.length > 80) {
-    title = truncateTitle(title, 80);
-  }
+  title = truncateTitleSmart(title, 80);
 
   return title;
 }
@@ -280,9 +371,7 @@ function generateTitleFromFriction(frictionType: string, target: string): string
   }
 
   // Truncate if needed
-  if (title.length > 80) {
-    title = truncateTitle(title, 80);
-  }
+  title = truncateTitleSmart(title, 80);
 
   return title;
 }
@@ -2022,7 +2111,7 @@ export function generateTitleFromExplicitAsk(askText: string): string {
 
   // Truncate by character length if still too long
   if (title.length > 80) {
-    title = truncateTitle(title, 80);
+    title = truncateTitleSmart(title, 80);
   }
 
   // Ensure title is meaningful
@@ -2039,7 +2128,7 @@ export function generateTitleFromExplicitAsk(askText: string): string {
     title = convertToImperative(title);
     title = capitalizeFirst(title);
     if (title.length > 80) {
-      title = truncateTitle(title, 80);
+      title = truncateTitleSmart(title, 80);
     }
   }
 
