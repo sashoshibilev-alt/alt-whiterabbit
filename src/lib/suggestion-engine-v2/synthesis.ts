@@ -2100,7 +2100,11 @@ export function generateTitleFromExplicitAsk(askText: string): string {
   // Convert to imperative form
   title = convertToImperative(title);
 
-  // Capitalize first letter
+  // CRITICAL: Normalize title BEFORE truncation to fix artifacts like "Implement Maybe we could..."
+  // This must happen after convertToImperative but before truncation
+  title = normalizeSuggestionTitle(title);
+
+  // Capitalize first letter (normalization already does this, but be safe)
   title = capitalizeFirst(title);
 
   // Truncate if needed (max 12 words per requirements)
@@ -2126,6 +2130,7 @@ export function generateTitleFromExplicitAsk(askText: string): string {
       }
     }
     title = convertToImperative(title);
+    title = normalizeSuggestionTitle(title);
     title = capitalizeFirst(title);
     if (title.length > 80) {
       title = truncateTitleSmart(title, 80);
@@ -2774,6 +2779,9 @@ export function synthesizeSuggestion(section: ClassifiedSection): Suggestion | n
   // Normalize title: strip filler phrases, map weak verbs, ensure strong imperative
   // Applied after extraction, before scoring/emit to clean up artifacts
   title = normalizeSuggestionTitle(title);
+
+  // Truncate title after normalization (normalization may have cleaned up artifacts)
+  title = truncateTitleSmart(title, 80);
 
   // Generate payload
   let payload: SuggestionPayload;

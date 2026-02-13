@@ -1077,6 +1077,8 @@ function mapValidatorToDropReason(validator?: string): DropReason {
       return DropReason.VALIDATION_V2_TOO_GENERIC;
     case "V3_evidence_sanity":
       return DropReason.VALIDATION_V3_EVIDENCE_TOO_WEAK;
+    case "V4_heading_only":
+      return DropReason.VALIDATION_V4_HEADING_ONLY;
     default:
       return DropReason.INTERNAL_ERROR;
   }

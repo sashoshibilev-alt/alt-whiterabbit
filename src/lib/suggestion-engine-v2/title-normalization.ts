@@ -115,6 +115,107 @@ export function normalizeSuggestionTitle(rawTitle: string): string {
 
   let title = rawTitle.trim();
 
+  // CRITICAL FIX: Handle "Implement " followed by specific hedge phrases
+  // These are artifacts from extraction and must be cleaned deterministically
+  // Pattern: "Implement <hedge phrase> <rest>" → transform <rest>
+  // Note: Only match specific problematic patterns, not generic "Request" which may be valid
+
+  // Pattern 1: "Implement Maybe we could..."
+  if (title.match(/^Implement\s+Maybe we could\s+/i)) {
+    const rest = title.replace(/^Implement\s+Maybe we could\s+/i, '');
+    const nextWord = rest.split(/\s+/)[0].toLowerCase();
+    if (STRONG_VERBS.includes(nextWord)) {
+      // "Maybe we could launch X" → "launch X" (keep strong verb)
+      title = rest;
+    } else {
+      // "Maybe we could <noun phrase>" → "Add <noun phrase>"
+      title = `Add ${rest}`;
+    }
+  }
+
+  // Pattern 2: "Implement We should consider..." or "Implement We should explore..."
+  else if (title.match(/^Implement\s+We should\s+(consider|explore)\s+/i)) {
+    const match = title.match(/^Implement\s+We should\s+(consider|explore)\s+(.+)/i);
+    if (match) {
+      const verb = match[1].toLowerCase();
+      const remainder = match[2];
+      if (verb === 'consider' && containsUIArtifactNoun(remainder)) {
+        title = `Add ${remainder}`;
+      } else if (verb === 'explore') {
+        title = `Evaluate ${remainder}`;
+      } else {
+        title = `Evaluate ${remainder}`;
+      }
+    }
+  }
+
+  // Pattern 3: "Implement consider..." (without "We should")
+  else if (title.match(/^Implement\s+consider\s+/i)) {
+    const rest = title.replace(/^Implement\s+consider\s+/i, '');
+    const firstWord = rest.split(/\s+/)[0];
+    const isGerund = firstWord.match(/ing$/i) && firstWord.length > 4;
+
+    if (isGerund) {
+      // "Implement consider adding templates" → "Implement adding templates"
+      title = `Implement ${rest}`;
+    } else if (containsUIArtifactNoun(rest)) {
+      title = `Add ${rest}`;
+    } else {
+      title = `Evaluate ${rest}`;
+    }
+  }
+
+  // Pattern 4: "Implement for more..."
+  else if (title.match(/^Implement\s+for more\s+/i)) {
+    const rest = title.replace(/^Implement\s+for more\s+/i, '');
+    const cleanRest = rest.replace(/^["']([^"']+)["']/, '$1');
+    title = `Add more ${cleanRest}`;
+  }
+
+  // Pattern 5: "Implement There is (an indirect) request for/to..."
+  else if (title.match(/^Implement\s+There is\s+/i)) {
+    const match = title.match(/^Implement\s+There is\s+(?:an indirect )?request (?:for|to)\s+(.+)/i);
+    if (match) {
+      const requestRest = match[1];
+      const verbMatch = requestRest.match(/^(add|more)\s+(.+)/i);
+      if (verbMatch) {
+        const verb = verbMatch[1].toLowerCase();
+        const object = verbMatch[2];
+        if (verb === 'more') {
+          title = `Add more ${object}`;
+        } else {
+          title = `Add ${object}`;
+        }
+      } else {
+        title = `Add ${requestRest}`;
+      }
+    } else {
+      // Fallback: "Implement There is X" without request pattern
+      const rest = title.replace(/^Implement\s+There is\s+/i, '');
+      title = `Add ${rest}`;
+    }
+  }
+
+  // Pattern 6: "Implement Request to..." (only when followed by to/for, not "Requirement to")
+  else if (title.match(/^Implement\s+Request\s+(to|for)\s+/i)) {
+    const match = title.match(/^Implement\s+Request\s+(?:to|for)\s+(.+)/i);
+    if (match) {
+      const requestRest = match[1];
+      const verbMatch = requestRest.match(/^(add|more)\s+(.+)/i);
+      if (verbMatch) {
+        const verb = verbMatch[1].toLowerCase();
+        const object = verbMatch[2];
+        if (verb === 'more') {
+          title = `Add more ${object}`;
+        } else {
+          title = `Add ${object}`;
+        }
+      } else {
+        title = `Add ${requestRest}`;
+      }
+    }
+  }
+
   // Special handling for "we should explore" → "explore" (preserve verb)
   // So that weak verb mapping can map explore → evaluate
   if (title.match(/^we\s+should\s+explore\s+/i)) {
@@ -253,6 +354,9 @@ const UI_ARTIFACT_NOUNS = [
   'form',
   'modal',
   'dialog',
+  'badge',
+  'email',
+  'workflow',
 ];
 
 /**
