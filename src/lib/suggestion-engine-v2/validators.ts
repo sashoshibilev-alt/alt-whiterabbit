@@ -260,6 +260,45 @@ export function validateV3EvidenceSanity(
 }
 
 // ============================================
+// V4 - Heading-Only Suppression
+// ============================================
+
+/**
+ * V4: Heading-only suppression validator
+ *
+ * Drops suggestions where:
+ * - Title is derived from heading (titleSource = 'heading') OR starts with "New idea:"
+ * - AND there is no explicit-ask anchor evidence (titleSource !== 'explicit-ask')
+ *
+ * This prevents garbage "New idea: <Heading>" suggestions from heading-only sections.
+ * Preserves sections with explicit asks that may use heading as fallback title.
+ */
+export function validateV4HeadingOnly(
+  suggestion: Suggestion
+): ValidationResult {
+  // Only applies to idea-type suggestions
+  if (suggestion.type !== 'idea') {
+    return { passed: true, validator: 'V3_evidence_sanity' };
+  }
+
+  const hasExplicitAsk = suggestion.titleSource === 'explicit-ask';
+  const isHeadingDerived =
+    suggestion.titleSource === 'heading' ||
+    suggestion.title.startsWith('New idea:');
+
+  // If title is heading-derived and there's no explicit ask, drop it
+  if (isHeadingDerived && !hasExplicitAsk) {
+    return {
+      passed: false,
+      validator: 'V3_evidence_sanity',
+      reason: `Heading-only suggestion without explicit ask anchor (titleSource: ${suggestion.titleSource || 'unknown'})`,
+    };
+  }
+
+  return { passed: true, validator: 'V3_evidence_sanity' };
+}
+
+// ============================================
 // Combined Validator Pipeline
 // ============================================
 
@@ -301,6 +340,18 @@ export function runQualityValidators(
       results,
       failedValidator: 'V3_evidence_sanity',
       failureReason: v3Result.reason,
+    };
+  }
+
+  // V4: Heading-only suppression
+  const v4Result = validateV4HeadingOnly(suggestion);
+  results.push(v4Result);
+  if (!v4Result.passed) {
+    return {
+      passed: false,
+      results,
+      failedValidator: 'V3_evidence_sanity',  // Use V3 label for consistency
+      failureReason: v4Result.reason,
     };
   }
 

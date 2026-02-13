@@ -244,6 +244,11 @@ export interface SuggestionContext {
 }
 
 /**
+ * Title source for debugging and validation
+ */
+export type TitleSource = 'explicit-ask' | 'proposal' | 'friction' | 'heading' | 'generic';
+
+/**
  * Full suggestion representation
  */
 export interface Suggestion {
@@ -260,6 +265,8 @@ export interface Suggestion {
   suggestionKey: string;
   // Structural hint: idea (new work) or project_update (plan change)
   structural_hint?: 'idea' | 'project_update';
+  // Title source tracking (for validation and debugging)
+  titleSource?: TitleSource;
   // Clarification flags (per suggestion-suppression-fix plan)
   needs_clarification?: boolean;
   clarification_reasons?: ClarificationReason[];
