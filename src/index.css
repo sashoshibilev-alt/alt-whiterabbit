@@ -2,35 +2,35 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+/* Definition of the design system. All colors and fonts should be defined here.
 All colors MUST be HSL.
 */
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --background: 225 50% 97.6%;
+    --foreground: 288 30.4% 18.6%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 288 30.4% 18.6%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover-foreground: 288 30.4% 18.6%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    --primary: 288 30.4% 18.6%;
+    --primary-foreground: 0 0% 100%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 225 50% 97.6%;
+    --secondary-foreground: 288 30.4% 18.6%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    --muted: 225 50% 97.6%;
+    --muted-foreground: 211.6 17.4% 47.1%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --accent: 225 50% 97.6%;
+    --accent-foreground: 288 30.4% 18.6%;
 
     --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive-foreground: 0 0% 100%;
 
     --success: 142.1 76.2% 36.3%;
     --success-foreground: 355.7 100% 97.3%;
@@ -38,20 +38,34 @@ All colors MUST be HSL.
     --warning: 32 95% 44%;
     --warning-foreground: 26 83% 14%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    --border: 220 13% 91%;
+    --border-strong: 220 8.9% 84.1%;
+    --input: 220 13% 91%;
+    --ring: 288 30.4% 18.6%;
 
     --radius: 0.5rem;
 
-    --sidebar-background: 0 0% 98%;
-    --sidebar-foreground: 240 5.3% 26.1%;
-    --sidebar-primary: 240 5.9% 10%;
-    --sidebar-primary-foreground: 0 0% 98%;
-    --sidebar-accent: 240 4.8% 95.9%;
-    --sidebar-accent-foreground: 240 5.9% 10%;
-    --sidebar-border: 220 13% 91%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    /* Sidebar */
+    --sidebar-background: 238.6 24.7% 21.2%;
+    --sidebar-foreground: 0 0% 100% / 0.85;
+    --sidebar-primary: 0 0% 100%;
+    --sidebar-primary-foreground: 238.6 24.7% 21.2%;
+    --sidebar-accent: 238.6 24.7% 25.2%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-muted: 0 0% 100% / 0.6;
+    --sidebar-border: 238.6 24.7% 28%;
+    --sidebar-ring: 0 0% 100% / 0.3;
+
+    /* Coral accent scale (execution layer) */
+    --coral-500: 4.8 99.2% 64.3%;
+    --coral-600: 4.8 99.2% 58%;
+    --coral-700: 4.8 99.2% 50%;
+    --coral-800: 4.8 99.2% 42%;
+
+    /* AI identity (frosted blue) */
+    --ai-accent: 210 100% 65%;
+    --ai-accent-subtle: 210 100% 95%;
+    --ai-accent-foreground: 0 0% 100%;
   }
 
   .dark {
@@ -86,16 +100,28 @@ All colors MUST be HSL.
     --warning-foreground: 26 83% 14%;
 
     --border: 217.2 32.6% 17.5%;
+    --border-strong: 217.2 32.6% 22%;
     --input: 217.2 32.6% 17.5%;
     --ring: 212.7 26.8% 83.9%;
+
     --sidebar-background: 240 5.9% 10%;
     --sidebar-foreground: 240 4.8% 95.9%;
     --sidebar-primary: 224.3 76.3% 48%;
     --sidebar-primary-foreground: 0 0% 100%;
     --sidebar-accent: 240 3.7% 15.9%;
     --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-muted: 0 0% 100% / 0.5;
     --sidebar-border: 240 3.7% 15.9%;
     --sidebar-ring: 217.2 91.2% 59.8%;
+
+    --coral-500: 4.8 99.2% 64.3%;
+    --coral-600: 4.8 99.2% 58%;
+    --coral-700: 4.8 99.2% 50%;
+    --coral-800: 4.8 99.2% 42%;
+
+    --ai-accent: 210 100% 55%;
+    --ai-accent-subtle: 210 50% 15%;
+    --ai-accent-foreground: 0 0% 100%;
   }
 }
 
