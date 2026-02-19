@@ -433,6 +433,13 @@ export class DebugLedger {
       overallScore: scores.overall,
     };
 
+    // Reflect post-scoring type override in debug metadata.
+    // scoring.ts may have changed type (e.g., idea → project_update via
+    // isPlanChangeCandidate) AFTER synthesis recorded the original type.
+    if (candidate.metadata && suggestion.type !== candidate.metadata.type) {
+      candidate.metadata = { ...candidate.metadata, type: suggestion.type };
+    }
+
     // Update section summary
     section.scoreSummary = {
       actionabilityScore: scores.section_actionability,

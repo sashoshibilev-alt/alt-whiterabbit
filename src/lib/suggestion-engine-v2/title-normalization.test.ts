@@ -370,6 +370,99 @@ describe('normalizeSuggestionTitle', () => {
     });
   });
 
+  describe('hedge word removal after action verbs', () => {
+    it('should remove "probably" after "Implement" and deduplicate double verb', () => {
+      const input = 'Implement probably force a string conversion for money or decimal fields';
+      const result = normalizeSuggestionTitle(input);
+      // "Implement probably force..." → "Implement force..." → "Force a string..." (double verb dedup)
+      expect(result).toBe('Force a string conversion for money or decimal fields');
+      expect(result).not.toContain('probably');
+      expect(result).not.toMatch(/^Implement/);
+    });
+
+    it('should remove "maybe" after "Add"', () => {
+      const input = 'Add maybe a rollback command to undo bulk actions';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toBe('Add a rollback command to undo bulk actions');
+      expect(result).not.toContain('maybe');
+    });
+
+    it('should remove "likely" after "Create"', () => {
+      const input = 'Create likely a cache layer for repeated API calls';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toBe('Create a cache layer for repeated API calls');
+      expect(result).not.toContain('likely');
+    });
+
+    it('should remove "probably" after "Build"', () => {
+      const input = 'Build probably a notification system';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toBe('Build a notification system');
+      expect(result).not.toContain('probably');
+    });
+
+    it('should remove "likely" after "Enable"', () => {
+      const input = 'Enable likely dark mode support';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toBe('Enable dark mode support');
+      expect(result).not.toContain('likely');
+    });
+
+    it('should handle "sort of" as a hedge phrase', () => {
+      const input = 'Add sort of a retry mechanism';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toBe('Add a retry mechanism');
+      expect(result).not.toContain('sort of');
+    });
+
+    it('should handle "kind of" as a hedge phrase', () => {
+      const input = 'Create kind of a wizard UI flow';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toBe('Create a wizard UI flow');
+      expect(result).not.toContain('kind of');
+    });
+
+    it('acceptance: decimal precision example produces clean imperative', () => {
+      // Task spec: "Force string conversion for money or decimal fields" (or equivalent clean imperative)
+      const input = 'Implement probably force a string conversion for money or decimal fields';
+      const result = normalizeSuggestionTitle(input);
+      // Produces "Force a string conversion..." — clean imperative without "probably" or "Implement"
+      expect(result).toMatch(/^Force\s+a?\s*string conversion for money or decimal fields/);
+      expect(result).not.toContain('probably');
+      expect(result).not.toMatch(/^Implement/);
+    });
+
+    it('acceptance: no emitted title contains "probably"', () => {
+      const inputs = [
+        'Implement probably force a string conversion...',
+        'Add probably a new feature',
+        'Build probably better tooling',
+      ];
+      for (const input of inputs) {
+        const result = normalizeSuggestionTitle(input);
+        expect(result).not.toContain('probably');
+      }
+    });
+
+    it('acceptance: no emitted title contains "Implement maybe"', () => {
+      const inputs = [
+        'Implement maybe a rollback flow',
+        'Implement maybe we could add it',
+      ];
+      for (const input of inputs) {
+        const result = normalizeSuggestionTitle(input);
+        expect(result).not.toMatch(/^Implement maybe/i);
+      }
+    });
+
+    it('should not strip hedge when word is part of title content (not after verb)', () => {
+      // "probably" in the middle of a title (not right after a leading verb) stays
+      const input = 'Add logging for probably-failing requests';
+      const result = normalizeSuggestionTitle(input);
+      expect(result).toContain('probably');
+    });
+  });
+
   describe('determinism', () => {
     it('should produce identical results for same input', () => {
       const input = 'Maybe we could add keyboard shortcuts';
