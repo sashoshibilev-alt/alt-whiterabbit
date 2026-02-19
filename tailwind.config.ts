@@ -62,9 +62,23 @@ export default {
           "primary-foreground": "hsl(var(--sidebar-primary-foreground))",
           accent: "hsl(var(--sidebar-accent))",
           "accent-foreground": "hsl(var(--sidebar-accent-foreground))",
+          muted: "hsl(var(--sidebar-muted))",
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
+        coral: {
+          500: "hsl(var(--coral-500))",
+          600: "hsl(var(--coral-600))",
+          700: "hsl(var(--coral-700))",
+          800: "hsl(var(--coral-800))",
+          DEFAULT: "hsl(var(--coral-600))",
+        },
+        ai: {
+          DEFAULT: "hsl(var(--ai-accent))",
+          subtle: "hsl(var(--ai-accent-subtle))",
+          foreground: "hsl(var(--ai-accent-foreground))",
+        },
+        "border-strong": "hsl(var(--border-strong))",
       },
       borderRadius: {
         lg: "var(--radius)",
