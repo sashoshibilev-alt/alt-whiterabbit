@@ -8,120 +8,176 @@ All colors MUST be HSL.
 
 @layer base {
   :root {
-    --background: 225 50% 97.6%;
-    --foreground: 288 30.4% 18.6%;
+    /* ============================================
+       NEUTRAL FOUNDATION (Primary UI Layer)
+       ============================================ */
+    --background: 220 40% 98%; /* #F7F8FB */
+    --surface: 0 0% 100%; /* #FFFFFF */
+    --surface-subtle: 225 29% 96%; /* #F1F3F7 */
+    --foreground: 237 25% 15%; /* #1E1E2F */
 
+    /* Card system */
     --card: 0 0% 100%;
-    --card-foreground: 288 30.4% 18.6%;
+    --card-foreground: 237 25% 15%;
 
+    /* Popover system */
     --popover: 0 0% 100%;
-    --popover-foreground: 288 30.4% 18.6%;
+    --popover-foreground: 237 25% 15%;
 
-    --primary: 288 30.4% 18.6%;
+    /* ============================================
+       BORDERS
+       ============================================ */
+    --border: 228 17% 90%; /* #E6E8EE */
+    --border-strong: 222 12% 84%; /* #D1D5DE */
+    --input: 228 17% 90%;
+
+    /* ============================================
+       TEXT SYSTEM
+       ============================================ */
+    --text-primary: 237 25% 15%; /* #1E1E2F */
+    --text-secondary: 228 12% 34%; /* #4B4F63 */
+    --text-muted: 226 11% 58%; /* #8B90A5 */
+
+    /* ============================================
+       TEAL ACCENT SCALE (Functional Accent)
+       ============================================ */
+    --teal-100: 172 60% 95%; /* #E6F7F5 */
+    --teal-300: 174 58% 62%; /* #66D4C9 */
+    --teal-500: 177 100% 35%; /* #00B3A4 */
+    --teal-600: 174 100% 30%; /* #009688 */
+    --teal-700: 174 100% 24%; /* #007C73 */
+    --teal-800: 174 100% 20%; /* #00645D */
+
+    /* ============================================
+       SEMANTIC ACCENT MAPPINGS
+       ============================================ */
+    --accent: 174 100% 30%; /* var(--teal-600) */
+    --accent-hover: 174 100% 24%; /* var(--teal-700) */
+    --accent-pressed: 174 100% 20%; /* var(--teal-800) */
+    --accent-subtle-bg: 172 60% 95%; /* var(--teal-100) */
+    --accent-ring: 177 100% 35%; /* var(--teal-500) at 40% opacity */
+    --accent-foreground: 0 0% 100%;
+
+    /* Primary button uses accent */
+    --primary: 174 100% 30%;
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 225 50% 97.6%;
-    --secondary-foreground: 288 30.4% 18.6%;
+    /* Secondary uses neutral surface */
+    --secondary: 225 29% 96%;
+    --secondary-foreground: 237 25% 15%;
 
-    --muted: 225 50% 97.6%;
-    --muted-foreground: 211.6 17.4% 47.1%;
+    /* Muted uses neutral foundation */
+    --muted: 225 29% 96%;
+    --muted-foreground: 226 11% 58%;
 
-    --accent: 225 50% 97.6%;
-    --accent-foreground: 288 30.4% 18.6%;
+    /* ============================================
+       SEMANTIC COLORS (Independent of Brand)
+       ============================================ */
+    --success: 142 71% 35%; /* #16A34A */
+    --success-foreground: 0 0% 100%;
 
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 0 0% 100%;
-
-    --success: 142.1 76.2% 36.3%;
-    --success-foreground: 355.7 100% 97.3%;
-
-    --warning: 32 95% 44%;
+    --warning: 38 92% 50%; /* #F59E0B */
     --warning-foreground: 26 83% 14%;
 
-    --border: 220 13% 91%;
-    --border-strong: 220 8.9% 84.1%;
-    --input: 220 13% 91%;
-    --ring: 288 30.4% 18.6%;
+    --destructive: 0 72% 51%; /* #DC2626 */
+    --destructive-foreground: 0 0% 100%;
 
-    --radius: 0.5rem;
+    --info: 177 100% 35%; /* var(--teal-500) */
 
-    /* Sidebar */
-    --sidebar-background: 238.6 24.7% 21.2%;
-    --sidebar-foreground: 0 0% 100% / 0.85;
+    /* ============================================
+       SIDEBAR (Deep Violet Anchor)
+       ============================================ */
+    --sidebar-background: 288 77% 12%; /* #2C0735 */
+    --sidebar-text: 0 0% 100% / 0.9;
+    --sidebar-text-muted: 0 0% 100% / 0.65;
+    --sidebar-active-bg: 288 77% 16%; /* lighten(#2C0735, 4%) */
+    --sidebar-foreground: 0 0% 100% / 0.9;
     --sidebar-primary: 0 0% 100%;
-    --sidebar-primary-foreground: 238.6 24.7% 21.2%;
-    --sidebar-accent: 238.6 24.7% 25.2%;
+    --sidebar-primary-foreground: 288 77% 12%;
+    --sidebar-accent: 288 77% 16%;
     --sidebar-accent-foreground: 0 0% 100%;
-    --sidebar-muted: 0 0% 100% / 0.6;
-    --sidebar-border: 238.6 24.7% 28%;
+    --sidebar-muted: 0 0% 100% / 0.65;
+    --sidebar-border: 288 77% 18%;
     --sidebar-ring: 0 0% 100% / 0.3;
 
-    /* Coral accent scale (execution layer) */
-    --coral-500: 4.8 99.2% 64.3%;
-    --coral-600: 4.8 99.2% 58%;
-    --coral-700: 4.8 99.2% 50%;
-    --coral-800: 4.8 99.2% 42%;
-
-    /* AI identity (frosted blue) */
-    --ai-accent: 210 100% 65%;
-    --ai-accent-subtle: 210 100% 95%;
-    --ai-accent-foreground: 0 0% 100%;
+    /* ============================================
+       OTHER TOKENS
+       ============================================ */
+    --ring: 237 25% 15%;
+    --radius: 0.5rem;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
+    /* Dark mode tokens - keeping minimal for future implementation */
+    /* Light mode first priority per specification */
+    --background: 222 84% 5%;
+    --surface: 222 84% 5%;
+    --surface-subtle: 217 33% 18%;
     --foreground: 210 40% 98%;
 
-    --card: 222.2 84% 4.9%;
+    --card: 222 84% 5%;
     --card-foreground: 210 40% 98%;
 
-    --popover: 222.2 84% 4.9%;
+    --popover: 222 84% 5%;
     --popover-foreground: 210 40% 98%;
 
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
+    --border: 217 33% 18%;
+    --border-strong: 217 33% 22%;
+    --input: 217 33% 18%;
 
-    --secondary: 217.2 32.6% 17.5%;
+    --text-primary: 210 40% 98%;
+    --text-secondary: 215 20% 65%;
+    --text-muted: 215 15% 50%;
+
+    /* Teal scale remains same in dark mode */
+    --teal-100: 172 60% 95%;
+    --teal-300: 174 58% 62%;
+    --teal-500: 177 100% 35%;
+    --teal-600: 174 100% 30%;
+    --teal-700: 174 100% 24%;
+    --teal-800: 174 100% 20%;
+
+    --accent: 174 100% 30%;
+    --accent-hover: 174 100% 24%;
+    --accent-pressed: 174 100% 20%;
+    --accent-subtle-bg: 172 60% 15%;
+    --accent-ring: 177 100% 35%;
+    --accent-foreground: 0 0% 100%;
+
+    --primary: 174 100% 30%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 217 33% 18%;
     --secondary-foreground: 210 40% 98%;
 
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
+    --muted: 217 33% 18%;
+    --muted-foreground: 215 20% 65%;
 
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
 
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-
-    --success: 142.1 70.6% 45.3%;
-    --success-foreground: 144.9 80.4% 10%;
-
-    --warning: 32 95% 50%;
+    --warning: 38 92% 50%;
     --warning-foreground: 26 83% 14%;
 
-    --border: 217.2 32.6% 17.5%;
-    --border-strong: 217.2 32.6% 22%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 210 40% 98%;
 
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
+    --info: 177 100% 35%;
+
+    --sidebar-background: 240 6% 10%;
+    --sidebar-text: 240 5% 96% / 0.9;
+    --sidebar-text-muted: 240 5% 96% / 0.65;
+    --sidebar-active-bg: 240 4% 16%;
+    --sidebar-foreground: 240 5% 96%;
+    --sidebar-primary: 224 76% 48%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-accent: 240 4% 16%;
+    --sidebar-accent-foreground: 240 5% 96%;
     --sidebar-muted: 0 0% 100% / 0.5;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-border: 240 4% 16%;
+    --sidebar-ring: 217 91% 60%;
 
-    --coral-500: 4.8 99.2% 64.3%;
-    --coral-600: 4.8 99.2% 58%;
-    --coral-700: 4.8 99.2% 50%;
-    --coral-800: 4.8 99.2% 42%;
-
-    --ai-accent: 210 100% 55%;
-    --ai-accent-subtle: 210 50% 15%;
-    --ai-accent-foreground: 0 0% 100%;
+    --ring: 213 27% 84%;
   }
 }
 
