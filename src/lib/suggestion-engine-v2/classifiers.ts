@@ -1757,6 +1757,39 @@ export function filterActionableSections(
 }
 
 // ============================================
+// Candidate-Level Plan Change Detection
+// ============================================
+
+/**
+ * Conditional verbs that indicate scope removal/deferral decisions
+ */
+const PLAN_CHANGE_REMOVAL_VERBS = /\b(pull|remove|de-scope|descope|delay|postpone|exclude)\b/i;
+
+/**
+ * Go-to-market artifact keywords
+ */
+const GTM_ARTIFACT_KEYWORDS = /\b(marketing blast|launch|announcement|press|campaign|release)\b/i;
+
+/**
+ * Determine if an anchor line is a plan-change candidate.
+ *
+ * Returns true if the line:
+ *   - starts with a conditional "if" clause, AND
+ *   - contains a removal/deferral verb (pull, remove, de-scope, delay, postpone, exclude)
+ *   - OR contains a go-to-market artifact (marketing blast, launch, announcement, press, campaign, release)
+ *
+ * When true, the caller MUST force the candidate's type to "project_update" and
+ * override the section-level typeLabel for that candidate only.
+ */
+export function isPlanChangeCandidate(anchorLine: string): boolean {
+  const normalized = anchorLine.toLowerCase().trim();
+  if (!/^if\b/i.test(normalized)) {
+    return false;
+  }
+  return PLAN_CHANGE_REMOVAL_VERBS.test(normalized) || GTM_ARTIFACT_KEYWORDS.test(normalized);
+}
+
+// ============================================
 // LLM-Enhanced Classification (when enabled)
 // ============================================
 

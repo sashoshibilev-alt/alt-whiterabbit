@@ -19,11 +19,59 @@ import type {
   GeneratorConfig,
   ClarificationReason,
 } from './types';
-import { isPlanChangeIntentLabel } from './classifiers';
+import { isPlanChangeIntentLabel, isPlanChangeCandidate } from './classifiers';
 
 // ============================================
 // Score Computation
 // ============================================
+
+// ============================================
+// Anchor Ranking Signals
+// ============================================
+
+/**
+ * Engineering artifact keywords that boost ranking for concrete implementation work.
+ * +0.15 boost to section_actionability.
+ */
+const ENGINEERING_ARTIFACT_PATTERN = /\b(cache|command|conversion|integration|connector|schema|metadata|rollback|precision|migration)\b/i;
+
+/**
+ * Direct implementation verbs that boost ranking for concrete build work.
+ * +0.10 boost to section_actionability.
+ */
+const IMPLEMENTATION_VERB_PATTERN = /\b(force|add|build|create|implement|cache|convert)\b/i;
+
+/**
+ * Marketing/campaign keywords that apply a ranking penalty.
+ * -0.15 penalty to section_actionability.
+ * Applied to ranking only, NOT to actionability threshold.
+ */
+const MARKETING_CONDITIONAL_PATTERN = /\b(marketing blast|announcement|campaign|press)\b/i;
+
+/**
+ * Compute anchor ranking adjustment for a section's raw text.
+ * Returns a delta (positive or negative) to add to the base actionability score.
+ *
+ * This does NOT affect the actionability gate — only the ranking score used
+ * to select the top-N suggestions.
+ */
+function computeAnchorRankingDelta(anchorText: string): number {
+  let delta = 0;
+
+  if (ENGINEERING_ARTIFACT_PATTERN.test(anchorText)) {
+    delta += 0.15;
+  }
+
+  if (IMPLEMENTATION_VERB_PATTERN.test(anchorText)) {
+    delta += 0.10;
+  }
+
+  if (MARKETING_CONDITIONAL_PATTERN.test(anchorText)) {
+    delta -= 0.15;
+  }
+
+  return delta;
+}
 
 /**
  * Compute section actionability score
@@ -512,6 +560,20 @@ export function runScoringPipeline(
       return { ...s, type: 'project_update' as const };
     }
 
+    // Candidate-level plan_change override: if this candidate's own anchor text
+    // triggers isPlanChangeCandidate (conditional "if" + removal verb or GTM artifact),
+    // force this candidate to project_update regardless of section-level intent.
+    // Uses the candidate's evidence_spans[0].text (the anchor line) so that only the
+    // candidate whose anchor is the marketing conditional is affected — not every
+    // candidate in the same section.
+    // This does NOT propagate back to the section typeLabel.
+    if (s.type !== 'project_update') {
+      const anchorText = s.evidence_spans[0]?.text ?? s.suggestion?.evidencePreview?.[0] ?? '';
+      if (anchorText && isPlanChangeCandidate(anchorText)) {
+        return { ...s, type: 'project_update' as const };
+      }
+    }
+
     return s;
   });
 
@@ -532,14 +594,28 @@ export function runScoringPipeline(
   const projectUpdates = passed.filter(s => s.type === 'project_update');
   const ideas = passed.filter(s => s.type !== 'project_update');
 
-  // 5) Sort each group by score
-  const sortedProjectUpdates = sortByScore(projectUpdates);
-  const sortedIdeas = sortByScore(ideas);
+  // 5) Sort each group by score, applying anchor ranking delta during sort.
+  // computeAnchorRankingDelta is applied here (not in computeSectionActionability)
+  // so it influences candidate ordering but never affects actionability gating.
+  function rankingScore(s: Suggestion): number {
+    const anchorText = s.evidence_spans[0]?.text ?? s.suggestion?.evidencePreview?.[0] ?? '';
+    return s.scores.overall + computeAnchorRankingDelta(anchorText);
+  }
+  function sortByRankingScore(arr: Suggestion[]): Suggestion[] {
+    return [...arr].sort((a, b) => rankingScore(b) - rankingScore(a));
+  }
+
+  const sortedProjectUpdates = sortByRankingScore(projectUpdates);
+  const sortedIdeas = sortByRankingScore(ideas);
 
   // 6) Cap suggestions: always keep ALL plan_change (project_update) suggestions
   // Only idea suggestions can be capped if total exceeds max_suggestions
   const remainingSlots = Math.max(0, config.max_suggestions - sortedProjectUpdates.length);
   const keptIdeas = sortedIdeas.slice(0, remainingSlots);
+
+  // 7) Preserve output ordering contract: project_update suggestions first (sorted by
+  // ranking score), then idea suggestions (sorted by ranking score).
+  // Do NOT globally re-sort across types — this preserves the stable grouping contract.
   const capped = [...sortedProjectUpdates, ...keptIdeas];
 
   // Mark dropped idea suggestions beyond cap
