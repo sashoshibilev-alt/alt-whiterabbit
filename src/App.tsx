@@ -6,6 +6,7 @@ import { ConvexProvider } from "convex/react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Layout } from "@/components/layout/Layout";
 import { convex } from "@/lib/convex";
+import { ThemeProvider } from "@/hooks/use-theme";
 import Notes from "./pages/Notes";
 import AddNote from "./pages/AddNote";
 import NoteDetail from "./pages/NoteDetail";
@@ -18,6 +19,7 @@ import NotFound from "./pages/NotFound";
 const queryClient = new QueryClient();
 
 const App = () => (
+  <ThemeProvider>
   <ConvexProvider client={convex}>
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -52,6 +54,7 @@ const App = () => (
       </TooltipProvider>
     </QueryClientProvider>
   </ConvexProvider>
+  </ThemeProvider>
 );
 
 export default App;

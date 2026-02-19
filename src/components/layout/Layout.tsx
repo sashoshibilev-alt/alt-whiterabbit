@@ -6,7 +6,10 @@ import {
   Target,
   LayoutDashboard,
   User,
+  Sun,
+  Moon,
 } from 'lucide-react';
+import { useTheme } from '@/hooks/use-theme';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -19,6 +22,7 @@ const navItems = [
 ];
 
 export function Layout({ children }: LayoutProps) {
+  const { theme, toggleTheme } = useTheme();
   return (
     <div className="h-screen flex flex-row">
       {/* Sidebar */}
@@ -63,6 +67,14 @@ export function Layout({ children }: LayoutProps) {
             <User className="h-4 w-4" />
             <span>Profile</span>
           </div>
+          <button
+            onClick={toggleTheme}
+            className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors w-full"
+            aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          >
+            {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            {theme === "dark" ? "Light mode" : "Dark mode"}
+          </button>
         </div>
       </aside>
 

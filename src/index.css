@@ -14,6 +14,7 @@ All colors MUST be HSL.
     --background: 220 40% 98%; /* #F7F8FB */
     --surface: 0 0% 100%; /* #FFFFFF */
     --surface-subtle: 225 29% 96%; /* #F1F3F7 */
+    --surface-elevated: 0 0% 100%; /* white — same as surface in light mode */
     --foreground: 237 25% 15%; /* #1E1E2F */
 
     /* Card system */
@@ -108,28 +109,30 @@ All colors MUST be HSL.
   }
 
   .dark {
-    /* Dark mode tokens - keeping minimal for future implementation */
-    /* Light mode first priority per specification */
-    --background: 222 84% 5%;
-    --surface: 222 84% 5%;
-    --surface-subtle: 217 33% 18%;
-    --foreground: 210 40% 98%;
+    /* NEUTRAL FOUNDATION */
+    --background: 240 22% 7%;     /* #0B0B12 — app canvas */
+    --surface: 240 29% 11%;       /* #121222 — cards */
+    --surface-subtle: 240 29% 13%; /* #17172A — subtle elevated */
+    --surface-elevated: 240 29% 16%; /* #1D1D33 — modals / high elevation */
+    --foreground: 0 0% 100% / 0.90;
 
-    --card: 222 84% 5%;
-    --card-foreground: 210 40% 98%;
+    --card: 240 29% 11%;
+    --card-foreground: 0 0% 100% / 0.90;
 
-    --popover: 222 84% 5%;
-    --popover-foreground: 210 40% 98%;
+    --popover: 240 29% 16%;
+    --popover-foreground: 0 0% 100% / 0.90;
 
-    --border: 217 33% 18%;
-    --border-strong: 217 33% 22%;
-    --input: 217 33% 18%;
+    /* BORDERS */
+    --border: 0 0% 100% / 0.08;
+    --border-strong: 0 0% 100% / 0.14;
+    --input: 0 0% 100% / 0.08;
 
-    --text-primary: 210 40% 98%;
-    --text-secondary: 215 20% 65%;
-    --text-muted: 215 15% 50%;
+    /* TEXT */
+    --text-primary: 0 0% 100% / 0.90;
+    --text-secondary: 0 0% 100% / 0.72;
+    --text-muted: 0 0% 100% / 0.52;
 
-    /* Teal scale remains same in dark mode */
+    /* Teal scale — lighter range active for dark mode accent */
     --teal-100: 172 60% 95%;
     --teal-300: 174 58% 62%;
     --teal-500: 177 100% 35%;
@@ -137,47 +140,50 @@ All colors MUST be HSL.
     --teal-700: 174 100% 24%;
     --teal-800: 174 100% 20%;
 
-    --accent: 174 100% 30%;
-    --accent-hover: 174 100% 24%;
-    --accent-pressed: 174 100% 20%;
-    --accent-subtle-bg: 172 60% 15%;
-    --accent-ring: 177 100% 35%;
-    --accent-foreground: 0 0% 100%;
+    /* TEAL ACCENT — shifted lighter for dark mode visibility */
+    --accent: 174 58% 62%;        /* #66D4C9 — teal-300 */
+    --accent-hover: 175 56% 71%;  /* #8AE2D9 */
+    --accent-pressed: 174 53% 56%; /* #4FCABD */
+    --accent-subtle-bg: 174 58% 62% / 0.12;
+    --accent-ring: 174 58% 62% / 0.45;
+    --accent-foreground: 240 22% 7%; /* dark text on light teal */
 
-    --primary: 174 100% 30%;
-    --primary-foreground: 0 0% 100%;
+    --primary: 174 58% 62%;
+    --primary-foreground: 240 22% 7%;
 
-    --secondary: 217 33% 18%;
-    --secondary-foreground: 210 40% 98%;
+    --secondary: 240 29% 13%;
+    --secondary-foreground: 0 0% 100% / 0.90;
 
-    --muted: 217 33% 18%;
-    --muted-foreground: 215 20% 65%;
+    --muted: 240 29% 13%;
+    --muted-foreground: 0 0% 100% / 0.52;
 
-    --success: 142 71% 45%;
+    /* SEMANTIC COLORS */
+    --success: 142 71% 45%;       /* #22C55E */
     --success-foreground: 0 0% 100%;
 
-    --warning: 38 92% 50%;
+    --warning: 38 97% 56%;        /* #FBBF24 */
     --warning-foreground: 26 83% 14%;
 
-    --destructive: 0 63% 31%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 0 83% 71%;     /* #F87171 */
+    --destructive-foreground: 0 0% 100%;
 
-    --info: 177 100% 35%;
+    --info: 174 58% 62%;          /* teal-300 in dark */
 
-    --sidebar-background: 240 6% 10%;
-    --sidebar-text: 240 5% 96% / 0.9;
-    --sidebar-text-muted: 240 5% 96% / 0.65;
-    --sidebar-active-bg: 240 4% 16%;
-    --sidebar-foreground: 240 5% 96%;
-    --sidebar-primary: 224 76% 48%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 4% 16%;
-    --sidebar-accent-foreground: 240 5% 96%;
-    --sidebar-muted: 0 0% 100% / 0.5;
-    --sidebar-border: 240 4% 16%;
-    --sidebar-ring: 217 91% 60%;
+    /* SIDEBAR — same violet anchor, adjusted readability */
+    --sidebar-background: 288 77% 12%; /* #2C0735 — same as light */
+    --sidebar-text: 0 0% 100% / 0.92;
+    --sidebar-text-muted: 0 0% 100% / 0.62;
+    --sidebar-active-bg: 290 62% 16%; /* #35103F — ~4% lighter */
+    --sidebar-foreground: 0 0% 100% / 0.92;
+    --sidebar-primary: 0 0% 100%;
+    --sidebar-primary-foreground: 288 77% 12%;
+    --sidebar-accent: 290 62% 16%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-muted: 0 0% 100% / 0.62;
+    --sidebar-border: 288 77% 18%;
+    --sidebar-ring: 0 0% 100% / 0.3;
 
-    --ring: 213 27% 84%;
+    --ring: 174 58% 62% / 0.45;
   }
 }
 
