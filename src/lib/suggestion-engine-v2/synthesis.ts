@@ -17,7 +17,7 @@ import type {
 } from './types';
 import { normalizeForComparison } from './preprocessing';
 import { computeSuggestionKey } from '../suggestion-keys';
-import { PROPOSAL_VERBS_IDEA_ONLY } from './classifiers';
+import { PROPOSAL_VERBS_IDEA_ONLY, isPlanChangeCandidate } from './classifiers';
 import { DropStage, DropReason } from './debugTypes';
 import { normalizeSuggestionTitle } from './title-normalization';
 
@@ -1513,6 +1513,12 @@ function isSummaryHeading(headingText?: string): boolean {
  * Explicit request patterns that indicate actionable asks
  * Used for B-lite synthesis across all section headings
  */
+/**
+ * Whitelist of action verbs for the "we could <verb>" explicit-ask pattern.
+ * Kept intentionally narrow to avoid over-matching speculative language.
+ */
+const WE_COULD_VERBS = /\b(?:add|cache|implement|build|create|enable|convert|force|support|integrate|improve|expose|generate)\b/i;
+
 const EXPLICIT_REQUEST_PATTERNS = [
   /\basksfor\b/i,
   /\basks?\s+for\b/i,
@@ -1520,8 +1526,8 @@ const EXPLICIT_REQUEST_PATTERNS = [
   /\bwould\s+like\b/i,
   /\b(?:we|users?|teams?)\s+needs?\s+to\b/i,  // Only match when "we/users/team need to"
   /\b(?:we|users?|teams?)\s+needs?\s+(?:a|an|the|better|improved?|faster|more)\b/i,  // Only match when "we/users/team need X"
-  /\b(?:we|they|teams?)\s+wants?\s+to\b/i,
-  /\b(?:we|they|teams?)\s+wants?\s+(?:a|an|the|better|improved?|faster|more)\b/i,
+  /\b(?:we|they|users?|teams?)\s+wants?\s+to\b/i,  // Added users? to match "Users want to..."
+  /\b(?:we|they|users?|teams?)\s+wants?\s+(?:a|an|the|better|improved?|faster|more)\b/i,  // Added users? to match "Users want a..."
   /\bwe\s+should\b/i,
   /\bmaybe\s+we\s+could\b/i,
   /\brequires\s+us\s+to\b/i,
@@ -1560,11 +1566,28 @@ const IMPERATIVE_WORK_VERBS = [
 ];
 
 /**
+ * Concrete artifact nouns that qualify a "users want <thing>" sentence as an explicit ask.
+ * Narrow enough to avoid matching vague wants ("users want it to be better").
+ */
+const USERS_WANT_ARTIFACT_NOUNS = /\b(?:command|button|integration|cache|rollback|docs?|documentation|template|dashboard|report|export|workflow|api|endpoint|flag|option|feature|tool|view|page|screen|modal|tab)\b/i;
+
+/**
  * Check if text contains explicit request language
  * Exported for use in debugGenerator fallback path
  */
 export function containsExplicitRequest(text: string): boolean {
-  return EXPLICIT_REQUEST_PATTERNS.some(pattern => pattern.test(text));
+  if (EXPLICIT_REQUEST_PATTERNS.some(pattern => pattern.test(text))) {
+    return true;
+  }
+  // "We could <whitelist-verb> ..." — only when followed by a whitelisted action verb
+  if (/\bwe\s+could\b/i.test(text) && WE_COULD_VERBS.test(text)) {
+    return true;
+  }
+  // "Users want a <concrete artifact>" — only when a concrete artifact noun is present
+  if (/\busers?\s+wants?\s+/i.test(text) && USERS_WANT_ARTIFACT_NOUNS.test(text)) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -1880,22 +1903,28 @@ function isConcernRiskStatement(sentence: string): boolean {
  * Rank explicit ask patterns by priority (highest first):
  * 1. "requirement to implement"
  * 2. "request to add" / "request to"
- * 3. "users need"
+ * 3. "users need" / "users want <artifact>"
  * 4. "asks for"
  * 5. "this will require"
  * 6. "suggestion:"
- * 7. "maybe we could"
+ * 7. "maybe we could" / "we could <whitelist-verb>"
  * 8. other patterns (default)
+ * 9. plan_change candidate (conditional "if" + removal/GTM verb) — never displaces idea slots
  */
 function getAskPatternPriority(sentence: string): number {
+  // Plan-change candidates must always rank last so they never displace
+  // engineering idea sentences from the top-2 selection.
+  if (isPlanChangeCandidate(sentence)) return 9;
   const lower = sentence.toLowerCase();
   if (/\brequirement(?:s)?(?:\s+to|\s*:)?\s+implement\b/.test(lower)) return 1;
   if (/\brequest(?:s|ed)?\s+(?:to\s+add|to\b)/.test(lower)) return 2;
   if (/\b(?:we|users?|teams?)\s+needs?\s+/.test(lower)) return 3;
+  if (/\busers?\s+wants?\s+/.test(lower) && USERS_WANT_ARTIFACT_NOUNS.test(lower)) return 3;
   if (/\basks?\s+for\b/.test(lower)) return 4;
   if (/\bthis\s+will\s+require\b/.test(lower)) return 5;
   if (/\bsuggestion:/.test(lower)) return 6;
   if (/\bmaybe\s+we\s+could\b/.test(lower)) return 7;
+  if (/\bwe\s+could\b/.test(lower) && WE_COULD_VERBS.test(lower)) return 7;
   return 8; // other patterns
 }
 
@@ -1905,8 +1934,10 @@ function getAskPatternPriority(sentence: string): number {
  * Used for generating multiple B-lite ideas from a single section.
  * Filters out weak meta suggestions (e.g., "we need to review"), status/priority
  * statements without action verbs, and concern/risk statements before ranking.
+ *
+ * Pass Infinity as maxResults to collect all matching anchors (used for testing recall).
  */
-function extractRankedExplicitAsks(text: string, maxResults: number = 2): string[] {
+export function extractRankedExplicitAsks(text: string, maxResults: number = 2): string[] {
   const sentences = text.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 10);
   const candidateAsks: Array<{ sentence: string; priority: number }> = [];
 
@@ -2039,6 +2070,58 @@ function convertToImperative(text: string): string {
   }
 
   return cleaned.trim();
+}
+
+/**
+ * Action verbs that may appear at the start of a plan-change consequent clause.
+ * These are already imperative — no "Implement" prefix needed.
+ */
+const PLAN_CHANGE_ACTION_VERBS = /^(pull|remove|delay|postpone|exclude|descope|de-scope|push|defer|cancel|drop)\b/i;
+
+/**
+ * Generate title from a plan_change conditional line.
+ *
+ * For lines like "If we can't get X stable, we should pull Y from the marketing blast",
+ * extracts the consequent clause ("we should pull Y from the marketing blast") and
+ * converts it to an imperative title ("Pull Y from the marketing blast if X").
+ *
+ * Falls back to generateTitleFromExplicitAsk for lines that don't fit this pattern.
+ */
+function generateTitleFromPlanChangeCandidate(lineText: string): string {
+  // Match "If <condition>, <consequent>" pattern
+  const ifCommaMatch = lineText.match(/^if\s+(.+?),\s*(.+)$/i);
+  if (ifCommaMatch) {
+    const consequent = ifCommaMatch[2].trim();
+
+    // Strip hedges from consequent: "we should pull X" → "pull X"
+    const hedgeStripped = consequent
+      .replace(/^(?:we should|we need to|we must|you should|please)\s+/i, '')
+      .trim();
+
+    let title: string;
+    if (PLAN_CHANGE_ACTION_VERBS.test(hedgeStripped)) {
+      // Already imperative (e.g. "pull the product from the marketing blast")
+      // Just capitalize and normalize — no "Implement" prefix
+      title = normalizeSuggestionTitle(capitalizeFirst(hedgeStripped));
+    } else {
+      title = convertToImperative(hedgeStripped);
+      title = normalizeSuggestionTitle(title);
+      title = capitalizeFirst(title);
+    }
+
+    // Truncate if needed
+    const words = title.split(/\s+/);
+    if (words.length > 12) {
+      title = words.slice(0, 12).join(' ');
+    }
+    if (title.length > 80) {
+      title = truncateTitleSmart(title, 80);
+    }
+    return title;
+  }
+
+  // Fall back to standard title generation
+  return generateTitleFromExplicitAsk(lineText);
 }
 
 /**
@@ -2193,7 +2276,14 @@ function buildBliteSuggestions(section: ClassifiedSection): Suggestion[] {
   for (const explicitAsk of rankedAsks) {
     if (explicitAsk.length <= 10) continue;
 
-    const title = generateTitleFromExplicitAsk(explicitAsk);
+    // If this ranked ask is itself a plan_change conditional, generate a plan_change
+    // suggestion directly so the title comes from generateTitleFromPlanChangeCandidate
+    // (which correctly handles "If..., we should pull...") rather than
+    // generateTitleFromExplicitAsk (which would prepend "Implement" to plan-change verbs).
+    const isPlanChange = isPlanChangeCandidate(explicitAsk);
+    const title = isPlanChange
+      ? generateTitleFromPlanChangeCandidate(explicitAsk)
+      : generateTitleFromExplicitAsk(explicitAsk);
     const body = generateBodyFromExplicitAsk(explicitAsk, section.raw_text);
 
     const askLineObj = section.body_lines.find(l =>
@@ -2208,11 +2298,14 @@ function buildBliteSuggestions(section: ClassifiedSection): Suggestion[] {
           text: section.body_lines.slice(0, 2).map(l => l.text).join('\n'),
         }];
 
+    const sugType: SuggestionType = isPlanChange ? 'project_update' : 'idea';
+    const structuralHint = isPlanChange ? 'plan_change' : 'idea';
+
     suggestions.push({
       suggestion_id: generateSuggestionId(section.note_id),
       note_id: section.note_id,
       section_id: section.section_id,
-      type: 'idea',
+      type: sugType,
       title,
       payload: {
         draft_initiative: {
@@ -2231,10 +2324,10 @@ function buildBliteSuggestions(section: ClassifiedSection): Suggestion[] {
       suggestionKey: computeSuggestionKey({
         noteId: section.note_id,
         sourceSectionId: section.section_id,
-        type: 'idea',
+        type: sugType,
         title,
       }),
-      structural_hint: 'idea',  // B-lite suggestions are always idea type
+      structural_hint: structuralHint,
       titleSource: 'explicit-ask',  // B-lite uses explicit ask anchors
       suggestion: {
         title,
@@ -2301,6 +2394,71 @@ function buildBliteSuggestions(section: ClassifiedSection): Suggestion[] {
           sourceHeading: section.heading_text || '',
         },
       });
+    }
+  }
+
+  // Candidate-level plan_change emission: after selecting the idea slots, scan the
+  // section's body lines for any sentence that matches isPlanChangeCandidate.
+  // These lines are NOT caught by containsExplicitRequest (conditional "if" phrasing),
+  // so they would otherwise be silently dropped from B-lite output.
+  // Emit at most one project_update per mixed section to stay minimal.
+  {
+    const emittedPreviews = new Set(suggestions.map(s => s.suggestion?.evidencePreview?.[0] ?? ''));
+
+    for (const line of section.body_lines) {
+      const lineText = line.text.trim();
+      if (lineText.length <= 10) continue;
+
+      // Already emitted as an idea above?
+      const alreadyCovered = [...emittedPreviews].some(t => t.includes(lineText.substring(0, 30)));
+      if (alreadyCovered) continue;
+
+      if (!isPlanChangeCandidate(lineText)) continue;
+
+      const title = generateTitleFromPlanChangeCandidate(lineText);
+      const body = generateBodyFromExplicitAsk(lineText, section.raw_text);
+
+      const evidenceSpans: EvidenceSpan[] = [{
+        start_line: line.index,
+        end_line: line.index,
+        text: lineText,
+      }];
+
+      suggestions.push({
+        suggestion_id: generateSuggestionId(section.note_id),
+        note_id: section.note_id,
+        section_id: section.section_id,
+        type: 'project_update',
+        title,
+        payload: {
+          after_description: body,
+        },
+        evidence_spans: evidenceSpans,
+        scores: {
+          section_actionability: section.intent.plan_change || 0.6,
+          type_choice_confidence: 0.8,
+          synthesis_confidence: 0.7,
+          overall: 0,
+        },
+        routing: { create_new: false },
+        suggestionKey: computeSuggestionKey({
+          noteId: section.note_id,
+          sourceSectionId: section.section_id,
+          type: 'project_update',
+          title,
+        }),
+        structural_hint: 'plan_change',
+        titleSource: 'explicit-ask',
+        suggestion: {
+          title,
+          body,
+          evidencePreview: [lineText.substring(0, 150)],
+          sourceSectionId: section.section_id,
+          sourceHeading: section.heading_text || '',
+        },
+      });
+
+      break; // Only emit one plan_change candidate per mixed section to stay minimal
     }
   }
 

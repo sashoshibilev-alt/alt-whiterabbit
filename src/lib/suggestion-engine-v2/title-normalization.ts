@@ -35,6 +35,8 @@ const STRONG_VERBS = [
   'configure',
   'establish',
   'streamline',
+  'force',
+  'convert',
 ];
 
 /**
@@ -56,8 +58,11 @@ const LEADING_MARKERS = [
   /^it\s+would\s+be\s+good\s+to\s+/i,
   /^maybe\s+we\s+could\s+/i,
   /^we\s+could\s+consider\s+/i,
+  /^we\s+could\s+/i,  // "We could cache..." → strip subject phrase, leave verb
   /^could\s+we\s+/i,
   /^should\s+we\s+/i,
+  /^users?\s+want(?:s)?\s+(?:a|an|the)\s+/i,  // "Users want a Rollback command" → strip subject phrase
+  /^users?\s+want(?:s)?\s+/i,
 ];
 
 /**
@@ -214,6 +219,17 @@ export function normalizeSuggestionTitle(rawTitle: string): string {
         title = `Add ${requestRest}`;
       }
     }
+  }
+
+  // Strip hedge words appearing immediately after action verbs
+  // Pattern: "<Verb> <hedge> <rest>" → "<Verb> <rest>"
+  // Example: "Implement probably force a string..." → "Implement force a string..."
+  // Example: "Add maybe a rollback command..." → "Add a rollback command..."
+  // Applied after Implement-specific patterns so it catches remaining cases
+  const HEDGE_AFTER_VERB_PATTERN = /^(Implement|Add|Build|Create|Enable|Force|Convert)\s+(probably|maybe|likely|sort\s+of|kind\s+of)\b\s*/i;
+  const hedgeMatch = title.match(HEDGE_AFTER_VERB_PATTERN);
+  if (hedgeMatch) {
+    title = title.replace(HEDGE_AFTER_VERB_PATTERN, `${hedgeMatch[1]} `).trim();
   }
 
   // Special handling for "we should explore" → "explore" (preserve verb)
