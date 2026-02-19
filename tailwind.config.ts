@@ -22,6 +22,7 @@ export default {
         foreground: "hsl(var(--foreground))",
         surface: "hsl(var(--surface))",
         "surface-subtle": "hsl(var(--surface-subtle))",
+        "surface-elevated": "hsl(var(--surface-elevated))",
         text: {
           primary: "hsl(var(--text-primary))",
           secondary: "hsl(var(--text-secondary))",

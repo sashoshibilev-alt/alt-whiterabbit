@@ -1,5 +1,29 @@
 # Decision Log
 
+## 2026-02-19: Dark Mode — ThemeProvider Pattern + HSL Token Override
+
+### Context
+
+Task required adding dark mode support to the Quito frontend. The existing token system uses HSL-only values in `index.css`; Tailwind config wraps all tokens with `hsl(var(...))`.
+
+### Decision
+
+1. **ThemeProvider in `src/hooks/use-theme.tsx`**: Minimal context + hook providing `toggleTheme()` and `theme`. Applies/removes `.dark` on `<html>`. Persists to `localStorage("theme")`. Falls back to `prefers-color-scheme` on first load.
+
+2. **Hex → HSL conversion for `.dark` block**: The spec supplied hex values. Since all existing tokens are HSL and Tailwind wraps with `hsl()`, the `.dark` block was authored in HSL equivalents rather than using raw hex in CSS, maintaining the system constraint.
+
+3. **Toggle placed in sidebar bottom**: Minimal intrusion — appended to the existing bottom section without restructuring the sidebar.
+
+### Alternatives Rejected
+
+- **Media-query-only approach**: Rejected because spec requires explicit toggle + localStorage persistence.
+- **Separate `ThemeContext.tsx` file in a new `/providers/` dir**: Rejected for minimal-diff reasons; co-locating with hooks matches existing project structure.
+
+### Future Options Preserved
+
+- `ThemeProvider` exports both `theme` and `toggleTheme` — downstream components can consume `useTheme()` independently.
+- `--surface-elevated` added to both `:root` and `.dark` and Tailwind config for future use in modals/dialogs.
+
 ## 2026-02-09: Type Precedence Rule for Explicit Synthesis Paths
 
 ### Context
