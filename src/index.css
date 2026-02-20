@@ -11,9 +11,9 @@ All colors MUST be HSL.
     /* ============================================
        NEUTRAL FOUNDATION (Primary UI Layer)
        ============================================ */
-    --background: 220 40% 98%; /* #F7F8FB */
+    --background: 220 40% 97%; /* #F4F6FA — slightly deeper to separate from surface */
     --surface: 0 0% 100%; /* #FFFFFF */
-    --surface-subtle: 225 29% 96%; /* #F1F3F7 */
+    --surface-subtle: 225 25% 94%; /* #ECEEF5 — more distinct step below surface */
     --surface-elevated: 0 0% 100%; /* white — same as surface in light mode */
     --foreground: 237 25% 15%; /* #1E1E2F */
 
@@ -52,23 +52,24 @@ All colors MUST be HSL.
     /* ============================================
        SEMANTIC ACCENT MAPPINGS
        ============================================ */
-    --accent: 174 100% 30%; /* var(--teal-600) */
-    --accent-hover: 174 100% 24%; /* var(--teal-700) */
+    --accent: 174 100% 24%; /* var(--teal-700) — stronger CTA authority */
+    --accent-hover: 174 100% 20%; /* var(--teal-800) */
     --accent-pressed: 174 100% 20%; /* var(--teal-800) */
-    --accent-subtle-bg: 172 60% 95%; /* var(--teal-100) */
+    --accent-subtle-bg: 172 30% 97%; /* teal-100 at ~50% tint — subtle signal, not flood */
     --accent-ring: 177 100% 35%; /* var(--teal-500) at 40% opacity */
     --accent-foreground: 0 0% 100%;
 
     /* Primary button uses accent */
-    --primary: 174 100% 30%;
+    --primary: 174 100% 24%; /* var(--teal-700) — matches accent */
+    --primary-hover: 174 100% 20%; /* var(--teal-800) — solid hover, guarantees ≥4.5:1 AA on white */
     --primary-foreground: 0 0% 100%;
 
     /* Secondary uses neutral surface */
-    --secondary: 225 29% 96%;
+    --secondary: 225 25% 94%; /* aligned with current --surface-subtle */
     --secondary-foreground: 237 25% 15%;
 
     /* Muted uses neutral foundation */
-    --muted: 225 29% 96%;
+    --muted: 225 25% 94%; /* aligned with current --surface-subtle */
     --muted-foreground: 226 11% 58%;
 
     /* ============================================
@@ -76,11 +77,14 @@ All colors MUST be HSL.
        ============================================ */
     --success: 142 71% 35%; /* #16A34A */
     --success-foreground: 0 0% 100%;
+    --success-subtle-bg: 142 60% 96%; /* very light green tint */
 
     --warning: 38 92% 50%; /* #F59E0B */
     --warning-foreground: 26 83% 14%;
+    --warning-subtle-bg: 38 100% 96%; /* very light amber tint */
 
-    --destructive: 0 72% 51%; /* #DC2626 */
+    --destructive: 0 55% 51%; /* softer red default — full red restored on hover */
+    --destructive-hover: 0 72% 42%; /* full red on hover — stronger saturation, lower lightness */
     --destructive-foreground: 0 0% 100%;
 
     --info: 177 100% 35%; /* var(--teal-500) */
@@ -88,7 +92,7 @@ All colors MUST be HSL.
     /* ============================================
        SIDEBAR (Deep Violet Anchor)
        ============================================ */
-    --sidebar-background: 288 77% 12%; /* #2C0735 */
+    --sidebar-background: 288 72% 12%; /* desaturated ~5% — anchors without dominating */
     --sidebar-text: 0 0% 100% / 0.9;
     --sidebar-text-muted: 0 0% 100% / 0.65;
     --sidebar-active-bg: 288 77% 16%; /* lighten(#2C0735, 4%) */
@@ -144,11 +148,12 @@ All colors MUST be HSL.
     --accent: 174 58% 62%;        /* #66D4C9 — teal-300 */
     --accent-hover: 175 56% 71%;  /* #8AE2D9 */
     --accent-pressed: 174 53% 56%; /* #4FCABD */
-    --accent-subtle-bg: 174 58% 62% / 0.12;
-    --accent-ring: 174 58% 62% / 0.45;
+    --accent-subtle-bg: 174 58% 62% / 0.08; /* reduced from 0.12: calmer suggestion bg, ~33% less teal flood */
+    --accent-ring: 174 58% 62% / 0.35;     /* reduced from 0.45: softer focus ring, avoids neon halo */
     --accent-foreground: 240 22% 7%; /* dark text on light teal */
 
     --primary: 174 58% 62%;
+    --primary-hover: 175 56% 71%; /* matches --accent-hover in dark mode */
     --primary-foreground: 240 22% 7%;
 
     --secondary: 240 29% 13%;
@@ -160,11 +165,14 @@ All colors MUST be HSL.
     /* SEMANTIC COLORS */
     --success: 142 71% 45%;       /* #22C55E */
     --success-foreground: 0 0% 100%;
+    --success-subtle-bg: 142 40% 12%; /* dark: deep green tint */
 
     --warning: 38 97% 56%;        /* #FBBF24 */
     --warning-foreground: 26 83% 14%;
+    --warning-subtle-bg: 38 60% 12%; /* dark: deep amber tint */
 
     --destructive: 0 83% 71%;     /* #F87171 */
+    --destructive-hover: 0 90% 60%; /* full red on hover — deeper, higher saturation */
     --destructive-foreground: 0 0% 100%;
 
     --info: 174 58% 62%;          /* teal-300 in dark */
@@ -183,7 +191,7 @@ All colors MUST be HSL.
     --sidebar-border: 288 77% 18%;
     --sidebar-ring: 0 0% 100% / 0.3;
 
-    --ring: 174 58% 62% / 0.45;
+    --ring: 174 58% 62% / 0.35; /* matches accent-ring reduction */
   }
 }
 
