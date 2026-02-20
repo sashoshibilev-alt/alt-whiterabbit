@@ -51,6 +51,7 @@ export enum DropReason {
   LOW_RELEVANCE = "LOW_RELEVANCE",
   SUPPRESSED_SECTION = "SUPPRESSED_SECTION",
   SPLIT_INTO_SUBSECTIONS = "SPLIT_INTO_SUBSECTIONS",
+  UNGROUNDED_EVIDENCE = "UNGROUNDED_EVIDENCE",
 }
 
 /**
@@ -79,6 +80,7 @@ export const DROP_REASON_STAGE: Record<DropReason, DropStage> = {
   [DropReason.LOW_RELEVANCE]: DropStage.POST_SYNTHESIS_SUPPRESS,
   [DropReason.SUPPRESSED_SECTION]: DropStage.POST_SYNTHESIS_SUPPRESS,
   [DropReason.SPLIT_INTO_SUBSECTIONS]: DropStage.TOPIC_ISOLATION,
+  [DropReason.UNGROUNDED_EVIDENCE]: DropStage.VALIDATION,
 };
 
 // ============================================
