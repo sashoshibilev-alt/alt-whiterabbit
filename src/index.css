@@ -114,13 +114,13 @@ All colors MUST be HSL.
 
   .dark {
     /* NEUTRAL FOUNDATION */
-    --background: 240 22% 7%;     /* #0B0B12 — app canvas */
-    --surface: 240 29% 11%;       /* #121222 — cards */
-    --surface-subtle: 240 29% 13%; /* #17172A — subtle elevated */
-    --surface-elevated: 240 29% 16%; /* #1D1D33 — modals / high elevation */
+    --background: 240 22% 5%;     /* darkened ~2% for better depth separation */
+    --surface: 240 29% 12%;       /* lightened ~1% for surface separation */
+    --surface-subtle: 240 29% 14%; /* adjusted to maintain step between surface and elevated */
+    --surface-elevated: 240 29% 18%; /* lightened ~2% for clear step ladder */
     --foreground: 0 0% 100% / 0.90;
 
-    --card: 240 29% 11%;
+    --card: 240 29% 12%;
     --card-foreground: 0 0% 100% / 0.90;
 
     --popover: 240 29% 16%;
@@ -172,7 +172,8 @@ All colors MUST be HSL.
     --warning-subtle-bg: 38 60% 12%; /* dark: deep amber tint */
 
     --destructive: 0 83% 71%;     /* #F87171 */
-    --destructive-hover: 0 90% 60%; /* full red on hover — deeper, higher saturation */
+    --destructive-hover: 0 90% 60%; /* deeper on hover — higher saturation, lower lightness */
+    --destructive-pressed: 0 92% 52%; /* pressed state — deepest, maximum weight */
     --destructive-foreground: 0 0% 100%;
 
     --info: 174 58% 62%;          /* teal-300 in dark */
