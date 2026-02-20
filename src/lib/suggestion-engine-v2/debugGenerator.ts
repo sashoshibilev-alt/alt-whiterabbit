@@ -24,6 +24,7 @@ import {
 import { preprocessNote, resetSectionCounter } from "./preprocessing";
 import { classifySections, filterActionableSections, isPlanChangeIntentLabel } from "./classifiers";
 import { extractSignalsFromSentences } from "./signals";
+import { seedCandidatesFromBSignals, resetBSignalCounter } from "./bSignalSeeding";
 import {
   synthesizeSuggestions,
   resetSuggestionCounter,
@@ -71,6 +72,7 @@ export function generateSuggestionsWithDebug(
   // Reset counters for deterministic IDs
   resetSectionCounter();
   resetSuggestionCounter();
+  resetBSignalCounter();
 
   // Merge config with defaults
   const finalConfig: GeneratorConfig = {
@@ -875,6 +877,44 @@ export function generateSuggestionsWithDebug(
 
     if (validatedSuggestions.length === 0) {
       return buildResult([], ledger, finalConfig.enable_debug);
+    }
+
+    // ============================================
+    // Stage 4.5: B-Signal Candidate Seeding (additive)
+    // ============================================
+    // Mirror production pipeline: for each section with validated candidates, extract
+    // B-signals and append novel candidates (not already covered by existing evidence).
+    const validatedSectionIds = new Set(validatedSuggestions.map(s => s.section_id));
+    for (const section of expandedSections) {
+      if (!validatedSectionIds.has(section.section_id)) continue;
+
+      // Collect evidence texts already covered by validated candidates for this section
+      const coveredTexts = new Set<string>();
+      for (const existing of validatedSuggestions) {
+        if (existing.section_id !== section.section_id) continue;
+        for (const span of existing.evidence_spans) {
+          coveredTexts.add(span.text.trim());
+        }
+        if (existing.suggestion?.body) {
+          coveredTexts.add(existing.suggestion.body.trim());
+        }
+      }
+
+      const bSignalCandidates = seedCandidatesFromBSignals(section);
+      for (const candidate of bSignalCandidates) {
+        const signalSentence = candidate.evidence_spans[0]?.text?.trim() ?? '';
+        if (signalSentence && coveredTexts.has(signalSentence)) continue;
+
+        validatedSuggestions.push(candidate);
+
+        // Instrument ledger: record b-signal candidate just as synthesized candidates are recorded
+        if (ledger) {
+          const sectionDebug = ledger.getSection(section.section_id);
+          if (sectionDebug) {
+            ledger.afterSynthesis(sectionDebug, candidate);
+          }
+        }
+      }
     }
 
     // ============================================

@@ -31,6 +31,7 @@ import { synthesizeSuggestions, resetSuggestionCounter, shouldSplitByTopic, spli
 import { runQualityValidators } from './validators';
 import { runScoringPipeline, refineSuggestionScores } from './scoring';
 import { routeSuggestions, computeRoutingStats } from './routing';
+import { seedCandidatesFromBSignals, resetBSignalCounter } from './bSignalSeeding';
 
 // Re-export types
 export * from './types';
@@ -104,6 +105,7 @@ export function generateSuggestions(
   // Reset counters for deterministic IDs (useful for testing)
   resetSectionCounter();
   resetSuggestionCounter();
+  resetBSignalCounter();
 
   // Merge config with defaults
   const finalConfig: GeneratorConfig = {
@@ -261,6 +263,39 @@ export function generateSuggestions(
 
   if (validatedSuggestions.length === 0) {
     return buildResult([], debug, finalConfig.enable_debug);
+  }
+
+  // ============================================
+  // Stage 4.5: B-Signal Candidate Seeding (additive)
+  // ============================================
+  // For each actionable section that produced at least one validated candidate,
+  // extract B-signals and append novel candidates (those not already covered by
+  // existing evidence) to the validated list.
+  // Gated on validated candidates to respect suppression logic from stages 1–4.
+  const validatedSectionIds = new Set(validatedSuggestions.map(s => s.section_id));
+  for (const section of expandedSections) {
+    if (!validatedSectionIds.has(section.section_id)) continue;
+
+    // Collect evidence texts already covered by existing validated candidates for this section
+    const coveredTexts = new Set<string>();
+    for (const existing of validatedSuggestions) {
+      if (existing.section_id !== section.section_id) continue;
+      for (const span of existing.evidence_spans) {
+        coveredTexts.add(span.text.trim());
+      }
+      // Also check body text in suggestion context
+      if (existing.suggestion?.body) {
+        coveredTexts.add(existing.suggestion.body.trim());
+      }
+    }
+
+    const bSignalCandidates = seedCandidatesFromBSignals(section);
+    for (const candidate of bSignalCandidates) {
+      // Skip if this signal's sentence is already covered by an existing candidate
+      const signalSentence = candidate.evidence_spans[0]?.text?.trim() ?? '';
+      if (signalSentence && coveredTexts.has(signalSentence)) continue;
+      validatedSuggestions.push(candidate);
+    }
   }
 
   // ============================================

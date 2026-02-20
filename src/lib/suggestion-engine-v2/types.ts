@@ -274,6 +274,13 @@ export interface Suggestion {
   is_high_confidence?: boolean;
   // Standalone context (additive)
   suggestion?: SuggestionContext;
+  // B-signal seeding metadata (set when candidate was seeded from a B-signal)
+  metadata?: {
+    source?: string;
+    type?: string;
+    label?: string;
+    confidence?: number;
+  };
   // Debug info
   validation_results?: ValidationResult[];
   dropped?: boolean;

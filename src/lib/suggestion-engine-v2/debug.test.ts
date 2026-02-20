@@ -600,6 +600,45 @@ describe("generateSuggestionsWithDebug", () => {
 
     expect(parsed.meta.noteId).toBe(TEST_NOTE.note_id);
   });
+
+  it("seeds B-signal candidates in debug pipeline for 'They need bulk-upload by Q3.'", () => {
+    // A note with enough body content to pass synthesis validation, plus the target B-signal sentence
+    const note: NoteInput = {
+      note_id: "bsig-debug-test",
+      raw_markdown: [
+        "## Roadmap Changes",
+        "",
+        "We plan to ship the bulk-upload feature in Q2.",
+        "- They need bulk-upload by Q3.",
+        "- Users want CSV import support.",
+        "- This will require dedicated engineering resources.",
+      ].join("\n"),
+    };
+
+    const result = generateSuggestionsWithDebug(
+      note,
+      {},
+      { enable_debug: true },
+      { verbosity: "REDACTED" }
+    );
+
+    // At least one candidate must exist in the debug run
+    const allCandidates = result.debugRun?.sections.flatMap(s => s.candidates) ?? [];
+    expect(allCandidates.length).toBeGreaterThanOrEqual(1);
+
+    // At least one candidate suggestion title must contain "bulk-upload"
+    const bulkUploadCandidate = allCandidates.find(c =>
+      c.suggestion?.title.toLowerCase().includes("bulk-upload")
+    );
+    expect(bulkUploadCandidate).toBeDefined();
+
+    // The matching suggestion in the output must have b-signal source metadata
+    const bsigSuggestion = result.suggestions.find(s =>
+      s.metadata?.source === "b-signal" &&
+      s.title.toLowerCase().includes("bulk-upload")
+    );
+    expect(bsigSuggestion).toBeDefined();
+  });
 });
 
 // ============================================
