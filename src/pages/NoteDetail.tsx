@@ -487,7 +487,7 @@ export default function NoteDetailPage() {
                       const evidencePreview = suggestion.suggestion?.evidencePreview;
 
                       return (
-                        <Card key={suggestion._id} className={needsClarification ? "bg-accent-subtle-bg border-teal-300 border-orange-300" : "bg-accent-subtle-bg border-teal-300"}>
+                        <Card key={suggestion._id} className={needsClarification ? "bg-accent-subtle-bg border-warning" : "bg-accent-subtle-bg border-teal-300"}>
                           <CardContent className="p-4">
                             <p className="text-sm font-medium mb-2">{displayTitle}</p>
                             {displayBody && (
@@ -503,7 +503,7 @@ export default function NoteDetailPage() {
                               </div>
                             )}
                             {suggestion.clarificationPrompt && needsClarification && (
-                              <div className="mb-3 p-2 bg-orange-50 dark:bg-orange-950/20 rounded text-xs">
+                              <div className="mb-3 p-2 bg-warning-subtle-bg rounded text-xs">
                                 <Info className="h-3 w-3 inline mr-1" />
                                 {suggestion.clarificationPrompt}
                               </div>
@@ -512,17 +512,17 @@ export default function NoteDetailPage() {
                               <div className="flex gap-2 flex-wrap">
                                 <Badge variant="secondary">New</Badge>
                                 {needsClarification && (
-                                  <Badge variant="outline" className="border-orange-500 text-orange-700">
+                                  <Badge variant="outline" className="border-warning text-warning">
                                     Needs clarification
                                   </Badge>
                                 )}
                                 {clarificationRequested && (
-                                  <Badge variant="outline" className="border-blue-500 text-blue-700">
+                                  <Badge variant="outline" className="border-info text-info">
                                     Clarification requested
                                   </Badge>
                                 )}
                                 {clarified && (
-                                  <Badge variant="outline" className="border-green-500 text-green-700">
+                                  <Badge variant="outline" className="border-success text-success">
                                     Clarified
                                   </Badge>
                                 )}
@@ -599,14 +599,14 @@ export default function NoteDetailPage() {
                       const displayBody = suggestion.suggestion?.body;
 
                       return (
-                        <Card key={suggestion._id} className="bg-green-50 dark:bg-green-950/20">
+                        <Card key={suggestion._id} className="bg-success-subtle-bg">
                           <CardContent className="p-4">
                             <p className="text-sm font-medium mb-1">{displayTitle}</p>
                             {displayBody && (
                               <p className="text-xs text-muted-foreground mb-2 line-clamp-3">{displayBody}</p>
                             )}
                           <div className="flex items-center gap-2 flex-wrap">
-                            <Badge className="bg-green-600">
+                            <Badge className="bg-success text-success-foreground">
                               <CheckCircle2 className="h-3 w-3 mr-1" />
                               Applied
                             </Badge>
@@ -645,7 +645,7 @@ export default function NoteDetailPage() {
                             {displayBody && (
                               <p className="text-xs text-muted-foreground mb-2 line-clamp-3">{displayBody}</p>
                             )}
-                          <Badge variant="outline" className="text-orange-600">
+                          <Badge variant="outline" className="text-warning border-warning">
                             <XCircle className="h-3 w-3 mr-1" />
                             Dismissed: {suggestion.dismissReason && V0_DISMISS_REASON_LABELS[suggestion.dismissReason]}
                           </Badge>
@@ -825,7 +825,7 @@ export default function NoteDetailPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="py-4 space-y-4">
-            <div className="p-3 bg-blue-50 dark:bg-blue-950/20 rounded text-sm">
+            <div className="p-3 bg-accent-subtle-bg rounded text-sm">
               <Info className="h-4 w-4 inline mr-2" />
               This is a simulated clarification response. In a full implementation, this would call an LLM to provide context.
             </div>

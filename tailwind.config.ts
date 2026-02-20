@@ -30,6 +30,7 @@ export default {
         },
         primary: {
           DEFAULT: "hsl(var(--primary))",
+          hover: "hsl(var(--primary-hover))",
           foreground: "hsl(var(--primary-foreground))",
         },
         secondary: {
@@ -43,10 +44,12 @@ export default {
         success: {
           DEFAULT: "hsl(var(--success))",
           foreground: "hsl(var(--success-foreground))",
+          "subtle-bg": "hsl(var(--success-subtle-bg))",
         },
         warning: {
           DEFAULT: "hsl(var(--warning))",
           foreground: "hsl(var(--warning-foreground))",
+          "subtle-bg": "hsl(var(--warning-subtle-bg))",
         },
         info: "hsl(var(--info))",
         muted: {

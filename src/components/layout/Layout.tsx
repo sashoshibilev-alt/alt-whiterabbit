@@ -26,7 +26,7 @@ export function Layout({ children }: LayoutProps) {
   return (
     <div className="h-screen flex flex-row">
       {/* Sidebar */}
-      <aside className="w-[252px] shrink-0 bg-sidebar flex flex-col">
+      <aside className="w-[212px] shrink-0 bg-sidebar flex flex-col">
         {/* Logo */}
         <div className="flex items-center gap-2 px-5 py-5">
           <div className="p-1.5 bg-coral rounded">
@@ -41,7 +41,7 @@ export function Layout({ children }: LayoutProps) {
             <NavLink
               key={to}
               to={to}
-              className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
+              className="flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm font-medium text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
               activeClassName="bg-sidebar-accent text-sidebar-accent-foreground"
             >
               <Icon className="h-4 w-4" />
@@ -57,19 +57,19 @@ export function Layout({ children }: LayoutProps) {
         <div className="border-t border-sidebar-border px-3 py-3 flex flex-col gap-0.5">
           <NavLink
             to="/settings"
-            className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
+            className="flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm font-medium text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
             activeClassName="bg-sidebar-accent text-sidebar-accent-foreground"
           >
             <Settings className="h-4 w-4" />
             Settings
           </NavLink>
-          <div className="flex items-center gap-3 px-3 py-2 text-sm text-sidebar-muted">
+          <div className="flex items-center gap-2.5 px-2.5 py-2 text-sm text-sidebar-muted">
             <User className="h-4 w-4" />
             <span>Profile</span>
           </div>
           <button
             onClick={toggleTheme}
-            className="flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors w-full"
+            className="flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm font-medium text-sidebar-muted hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors w-full"
             aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
           >
             {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
