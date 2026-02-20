@@ -3960,16 +3960,18 @@ This would help new users understand where they are in the process and reduce dr
 
       const result = generateSuggestionsWithDebug(note, {}, { enable_debug: true }, { verbosity: 'REDACTED' });
 
-      expect(result.suggestions).toHaveLength(1);
-      const suggestion = result.suggestions[0];
+      expect(result.suggestions.length).toBeGreaterThanOrEqual(1);
+      // The synthesis-produced suggestion (non-b-signal) must be of type idea
+      const suggestion = result.suggestions.find(s => !s.metadata?.source);
+      expect(suggestion).toBeDefined();
 
       // Bullet-based sections stay idea
-      expect(suggestion.type).toBe('idea');
-      expect(suggestion.structural_hint).toBe('idea');
+      expect(suggestion!.type).toBe('idea');
+      expect(suggestion!.structural_hint).toBe('idea');
 
       // Debug: typeClassification
       const debugSection = result.debugRun!.sections.find(
-        s => s.sectionId === suggestion.section_id
+        s => s.sectionId === suggestion!.section_id
       );
       expect(debugSection).toBeDefined();
       expect(debugSection!.typeClassification?.topLabel).toBe('idea');

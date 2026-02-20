@@ -1,5 +1,24 @@
 # Current State
 
+## B-Signal Candidate Seeding (2026-02-20)
+
+**Files**: `index.ts`, `bSignalSeeding.ts`, `types.ts`, `b-signal-seeding.test.ts`, `debugGenerator.ts`, `debug.test.ts`
+
+B-signal seeding is now active in both `generateSuggestions` (Stage 4.5) and `generateSuggestionsWithDebug` (Stage 4.5). The debug pipeline now mirrors production candidate pool.
+
+### What it does
+
+For each actionable section that produced at least one validated candidate, `seedCandidatesFromBSignals` runs all four B-signal extractors on the section's body text and appends novel candidates (those whose signal sentence is not already covered by an existing validated candidate's evidence) to the validated list before scoring.
+
+### Constraints
+
+- Only fires for sections with at least one validated candidate (respects suppression logic from stages 1–4).
+- Cross-deduplication: signal sentence already in existing evidence → candidate skipped.
+- B-signal candidates carry `metadata.source = "b-signal"` for identification.
+- Title templates: FEATURE_DEMAND → "Implement {obj}", PLAN_CHANGE → "Update {obj} plan", SCOPE_RISK → "Mitigate risk to {obj}", BUG → "Fix {obj} issue".
+- Object extraction uses simple regex (no NLP library).
+- `debugGenerator.ts` IS seeded (Stage 4.5 wired in 2026-02-20) — debug pipeline mirrors production candidate pool.
+
 ## Discussion Details B-lite Explicit Ask Path (2026-02-09)
 
 **Files**: `synthesis.ts`, `scoring.ts`, `debugGenerator.ts`, `discussion-details-explicit-asks.test.ts`
