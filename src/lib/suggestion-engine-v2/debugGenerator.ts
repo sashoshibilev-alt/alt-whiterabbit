@@ -23,6 +23,7 @@ import {
 } from "./DebugLedger";
 import { preprocessNote, resetSectionCounter } from "./preprocessing";
 import { classifySections, filterActionableSections, isPlanChangeIntentLabel } from "./classifiers";
+import { extractSignalsFromSentences } from "./signals";
 import {
   synthesizeSuggestions,
   resetSuggestionCounter,
@@ -143,6 +144,13 @@ export function generateSuggestionsWithDebug(
             classified.actionability_reason,
             actionabilitySignals
           );
+
+          // Attach bSignalCount debug metric (only if debug object exists)
+          const bSignals = extractSignalsFromSentences((classified.body_lines ?? []).map(l => l.text));
+          sectionDebug.metadata = {
+            ...sectionDebug.metadata,
+            bSignalCount: bSignals.length,
+          };
 
           if (classified.suggested_type) {
             ledger.afterTypeClassification(

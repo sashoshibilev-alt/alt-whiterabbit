@@ -20,6 +20,7 @@ import type {
   SectionType,
   ThresholdConfig,
 } from './types';
+import { extractSignalsFromSentences } from './signals';
 
 // ============================================
 // Intent Classification Patterns
@@ -1365,7 +1366,7 @@ export function isActionable(
   intent: IntentClassification,
   section: Section,
   thresholds: ThresholdConfig
-): { actionable: boolean; reason: string; actionableSignal: number; outOfScopeSignal: number } {
+): { actionable: boolean; reason: string; actionableSignal: number; outOfScopeSignal: number; rescuedByBSignal: boolean } {
   const { actionableSignal, outOfScopeSignal } = computeActionabilitySignals(intent);
 
   // Short sections require higher thresholds (penalty for very short sections)
@@ -1382,6 +1383,7 @@ export function isActionable(
       reason: `plan_change override: bypass ACTIONABILITY gate (signal=${actionableSignal.toFixed(3)}, outOfScope=${outOfScopeSignal.toFixed(3)}, T_action=${effectiveThreshold.toFixed(3)})`,
       actionableSignal,
       outOfScopeSignal,
+      rescuedByBSignal: false,
     };
   }
 
@@ -1407,6 +1409,7 @@ export function isActionable(
       reason: `Out-of-scope dominance: oosTop=${oosTop.toFixed(3)} >= 0.75, gap=${dominanceGap.toFixed(3)} >= 0.20 (cal=${intent.calendar.toFixed(2)}, comm=${intent.communication.toFixed(2)} vs inTop=${inTop.toFixed(3)})`,
       actionableSignal,
       outOfScopeSignal,
+      rescuedByBSignal: false,
     };
   }
 
@@ -1419,17 +1422,34 @@ export function isActionable(
       reason: `imperative floor: section contains explicit imperative action (signal=${actionableSignal.toFixed(3)}, outOfScope=${outOfScopeSignal.toFixed(3)})`,
       actionableSignal,
       outOfScopeSignal,
+      rescuedByBSignal: false,
     };
   }
 
   // Check actionability: actionableSignal >= T_action (with penalty for short sections)
   // Using >= means that a section with actionableSignal == T_action passes
   if (actionableSignal < effectiveThreshold) {
+    // B-signal rescue: before dropping, check if any B-signal extractor fires with confidence >= 0.65
+    const sentences = (section.body_lines ?? []).map(l => l.text);
+    const bSignals = extractSignalsFromSentences(sentences);
+    const hasRescueSignal = bSignals.some(s => s.confidence >= 0.65);
+    if (hasRescueSignal) {
+      const rescuedSignal = Math.max(actionableSignal, 0.7);
+      return {
+        actionable: true,
+        // rescuedByBSignal flag: downstream type-gate uses this boolean instead of parsing the reason string
+        rescuedByBSignal: true,
+        reason: `B-signal rescue: actionableSignal boosted from ${actionableSignal.toFixed(3)} to ${rescuedSignal.toFixed(3)} (bSignalCount=${bSignals.length})`,
+        actionableSignal: rescuedSignal,
+        outOfScopeSignal,
+      };
+    }
     return {
       actionable: false,
       reason: `Action signal too low: ${actionableSignal.toFixed(3)} < ${effectiveThreshold.toFixed(3)} (T_action=${thresholds.T_action}, penalty=${shortSectionPenalty.toFixed(2)})`,
       actionableSignal,
       outOfScopeSignal,
+      rescuedByBSignal: false,
     };
   }
 
@@ -1437,11 +1457,27 @@ export function isActionable(
   // Only apply if the section barely crosses the threshold
   const marginAboveThreshold = actionableSignal - effectiveThreshold;
   if (marginAboveThreshold < 0.1 && section.structural_features.num_lines <= 3) {
+    // B-signal rescue: before dropping, check if any B-signal extractor fires with confidence >= 0.65
+    const sentences = (section.body_lines ?? []).map(l => l.text);
+    const bSignals = extractSignalsFromSentences(sentences);
+    const hasRescueSignal = bSignals.some(s => s.confidence >= 0.65);
+    if (hasRescueSignal) {
+      const rescuedSignal = Math.max(actionableSignal, 0.7);
+      return {
+        actionable: true,
+        // rescuedByBSignal flag: downstream type-gate uses this boolean instead of parsing the reason string
+        rescuedByBSignal: true,
+        reason: `B-signal rescue: actionableSignal boosted from ${actionableSignal.toFixed(3)} to ${rescuedSignal.toFixed(3)} (bSignalCount=${bSignals.length})`,
+        actionableSignal: rescuedSignal,
+        outOfScopeSignal,
+      };
+    }
     return {
       actionable: false,
       reason: `Insufficient content for borderline signal: margin=${marginAboveThreshold.toFixed(3)}, lines=${section.structural_features.num_lines}`,
       actionableSignal,
       outOfScopeSignal,
+      rescuedByBSignal: false,
     };
   }
 
@@ -1450,6 +1486,7 @@ export function isActionable(
     reason: `Actionable: signal=${actionableSignal.toFixed(3)} >= ${effectiveThreshold.toFixed(3)}, outOfScope=${outOfScopeSignal.toFixed(3)} < ${thresholds.T_out_of_scope}`,
     actionableSignal,
     outOfScopeSignal,
+    rescuedByBSignal: false,
   };
 }
 
@@ -1652,6 +1689,23 @@ export function classifySection(
             out_of_scope_signal: actionabilityResult.outOfScopeSignal,
             suggested_type: suggestedType,
             type_confidence: typeConfidence,
+            typeLabel: 'idea',
+          };
+        }
+
+        // B-SIGNAL RESCUE PROTECTION: If actionability was rescued by a B-signal,
+        // protect the section at the TYPE gate by forcing 'idea' type.
+        if (actionabilityResult.rescuedByBSignal) {
+          return {
+            ...section,
+            intent,
+            is_actionable: true,
+            actionability_reason:
+              `${actionabilityResult.reason} (type non_actionable overridden for b-signal rescue)`,
+            actionable_signal: actionabilityResult.actionableSignal,
+            out_of_scope_signal: actionabilityResult.outOfScopeSignal,
+            suggested_type: 'idea',
+            type_confidence: 0.5,
             typeLabel: 'idea',
           };
         }
@@ -1904,6 +1958,23 @@ export async function classifySectionWithLLM(
             out_of_scope_signal: actionabilityResult.outOfScopeSignal,
             suggested_type: suggestedType,
             type_confidence: typeConfidence,
+            typeLabel: 'idea',
+          };
+        }
+
+        // B-SIGNAL RESCUE PROTECTION: If actionability was rescued by a B-signal,
+        // protect the section at the TYPE gate by forcing 'idea' type.
+        if (actionabilityResult.rescuedByBSignal) {
+          return {
+            ...section,
+            intent,
+            is_actionable: true,
+            actionability_reason:
+              `${actionabilityResult.reason} (type non_actionable overridden for b-signal rescue)`,
+            actionable_signal: actionabilityResult.actionableSignal,
+            out_of_scope_signal: actionabilityResult.outOfScopeSignal,
+            suggested_type: 'idea',
+            type_confidence: 0.5,
             typeLabel: 'idea',
           };
         }

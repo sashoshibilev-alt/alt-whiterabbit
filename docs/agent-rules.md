@@ -47,6 +47,7 @@ Do NOT update these files mechanically. Only update them when reality changes.
 - If automated tests exist, run them.
 - If they do not exist, provide manual verification steps.
 - Never claim “verified” without evidence.
+- When modifying gating logic, never weaken existing validation without adding a compensating test.
 
 ## 7. Debuggability over cleverness
 - Favor explicit, readable logic over compressed or “smart” code.
