@@ -918,11 +918,48 @@ export function generateSuggestionsWithDebug(
     }
 
     // ============================================
+    // Stage 4.6: Grounding Invariant (anti-hallucination hard gate)
+    // ============================================
+    const groundedSuggestions: Suggestion[] = [];
+    for (const suggestion of validatedSuggestions) {
+      const section =
+        sectionMap.get(suggestion.section_id) ||
+        (suggestion.section_id.includes('__topic_')
+          ? sectionMap.get(suggestion.section_id.split('__topic_')[0])
+          : undefined);
+
+      if (!section || isSuggestionGrounded(suggestion, section)) {
+        groundedSuggestions.push(suggestion);
+      } else {
+        const evidenceSnippet = (
+          suggestion.evidence_spans[0]?.text ||
+          suggestion.suggestion?.evidencePreview?.[0] ||
+          ''
+        ).substring(0, 80);
+
+        if (finalConfig.enable_debug) {
+          console.error('[GROUNDING_INVARIANT_DROP]', {
+            suggestionId: suggestion.suggestion_id,
+            sectionId: suggestion.section_id,
+            evidenceSnippet,
+          });
+        }
+
+        if (ledger) {
+          ledger.dropCandidateById(
+            suggestion.suggestion_id,
+            DropReason.UNGROUNDED_EVIDENCE
+          );
+        }
+      }
+    }
+
+    // ============================================
     // Stage 5: Scoring & Thresholding
     // ============================================
     const scoreStart = Date.now();
     const scoringResult = runScoringPipeline(
-      validatedSuggestions,
+      groundedSuggestions,
       sectionMap,
       finalConfig
     );
@@ -1114,6 +1151,27 @@ function buildResult(
   }
 
   return result;
+}
+
+/**
+ * Returns true if the suggestion's primary evidence text is grounded in the
+ * section's raw_text (case-insensitive). For multi-line evidence spans, every
+ * non-empty line must appear in the section's raw_text individually.
+ *
+ * Only applied to B-signal seeded candidates (metadata.source === 'b-signal').
+ */
+function isSuggestionGrounded(suggestion: Suggestion, section: ClassifiedSection): boolean {
+  // Only enforce for B-signal seeded candidates where hallucination risk is highest
+  if (suggestion.metadata?.source !== 'b-signal') return true;
+
+  const evidenceText =
+    suggestion.evidence_spans[0]?.text ||
+    suggestion.suggestion?.evidencePreview?.[0];
+  if (!evidenceText) return false;
+  const haystack = section.raw_text.toLowerCase();
+  const lines = evidenceText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  if (lines.length === 0) return false;
+  return lines.every(line => haystack.includes(line.toLowerCase()));
 }
 
 /**

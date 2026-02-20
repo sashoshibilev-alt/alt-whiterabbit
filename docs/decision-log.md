@@ -1,5 +1,31 @@
 # Decision Log
 
+## 2026-02-20: Ranking Quota Stabilization — Quota-Based Cap Replaces Pass-All
+
+### Context
+
+The original cap logic in `runScoringPipeline` kept ALL `project_update` suggestions regardless of `max_suggestions`. This guaranteed no plan-change signal was lost, but meant the cap was effectively unenforced for notes with multiple `project_update` suggestions.
+
+The new requirement: stabilize surfaced output so that important types (`project_update`, `risk`) always appear, but the cap is still respected.
+
+### Decision
+
+Replaced "pass all project_updates" with a quota-based approach:
+- Rule 1: Guarantee 1 slot for the highest-scoring `project_update` (if any).
+- Rule 2: Guarantee 1 slot for the highest-scoring `risk` (if any, and if budget > 1).
+- Rule 3: Fill remaining slots from global sorted list.
+
+**Implementation**: Replaced steps 4–7 in `runScoringPipeline` (scoring.ts). No new config flags, no interface changes.
+
+### Alternatives Rejected
+
+- **Keep pass-all behavior, add risk guarantee on top**: Would violate the cap for notes with many project_updates. Rejected for output stability.
+- **Per-type quotas configurable via config**: Rejected — "Do NOT introduce new config flags" constraint.
+
+### Future Options Closed
+
+- The old invariant "never drop any project_update" is retired. Code that relied on this (one test updated) must account for the cap being enforced.
+
 ## 2026-02-19: Dark Mode — ThemeProvider Pattern + HSL Token Override
 
 ### Context

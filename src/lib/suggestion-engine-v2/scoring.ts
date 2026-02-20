@@ -589,8 +589,7 @@ export function runScoringPipeline(
   // 3) Apply confidence-based processing (respects plan_change + actionable invariants)
   const { passed, dropped, downgraded } = applyConfidenceBasedProcessing(scored, config.thresholds, sections);
 
-  // 4) Separate project_update from idea types for plan_change-aware capping
-  // idea suggestions are cappable; project_update is not
+  // 4) Separate project_update from idea types for quota-aware selection
   const projectUpdates = passed.filter(s => s.type === 'project_update');
   const ideas = passed.filter(s => s.type !== 'project_update');
 
@@ -608,22 +607,57 @@ export function runScoringPipeline(
   const sortedProjectUpdates = sortByRankingScore(projectUpdates);
   const sortedIdeas = sortByRankingScore(ideas);
 
-  // 6) Cap suggestions: always keep ALL plan_change (project_update) suggestions
-  // Only idea suggestions can be capped if total exceeds max_suggestions
-  const remainingSlots = Math.max(0, config.max_suggestions - sortedProjectUpdates.length);
-  const keptIdeas = sortedIdeas.slice(0, remainingSlots);
+  // 6) Quota-based selection:
+  //    Rule 1 — If any project_update exists, guarantee 1 slot for the highest-scoring one.
+  //    Rule 2 — If any risk (metadata.label === 'risk') exists among project_updates,
+  //              guarantee 1 slot for the highest-scoring risk (unless same as Rule 1 pick).
+  //    Rule 3 — Fill remaining slots from the global sorted list (all types), excluding
+  //              already-chosen suggestions.
+  //    If max_suggestions === 1, project_update takes precedence over risk.
+  const guaranteed: Suggestion[] = [];
+  const guaranteedIds = new Set<string>();
+
+  // Rule 1: highest-scoring project_update
+  if (sortedProjectUpdates.length > 0) {
+    const topUpdate = sortedProjectUpdates[0];
+    guaranteed.push(topUpdate);
+    guaranteedIds.add(topUpdate.suggestion_id);
+  }
+
+  // Rule 2: highest-scoring risk (only if we have budget for it)
+  if (config.max_suggestions > guaranteed.length) {
+    const sortedRisks = sortedProjectUpdates.filter(s => s.metadata?.label === 'risk');
+    if (sortedRisks.length > 0) {
+      const topRisk = sortedRisks[0];
+      if (!guaranteedIds.has(topRisk.suggestion_id)) {
+        guaranteed.push(topRisk);
+        guaranteedIds.add(topRisk.suggestion_id);
+      }
+    }
+  }
+
+  // Rule 3: fill remaining slots from global sorted list, excluding already-chosen
+  const remainingSlots = Math.max(0, config.max_suggestions - guaranteed.length);
+  const globalSorted = sortByRankingScore([...sortedProjectUpdates, ...sortedIdeas]);
+  const fillCandidates = globalSorted.filter(s => !guaranteedIds.has(s.suggestion_id));
+  const filled = fillCandidates.slice(0, remainingSlots);
 
   // 7) Preserve output ordering contract: project_update suggestions first (sorted by
   // ranking score), then idea suggestions (sorted by ranking score).
   // Do NOT globally re-sort across types — this preserves the stable grouping contract.
-  const capped = [...sortedProjectUpdates, ...keptIdeas];
+  const keptIds = new Set([...guaranteed.map(s => s.suggestion_id), ...filled.map(s => s.suggestion_id)]);
+  const capped = [
+    ...sortedProjectUpdates.filter(s => keptIds.has(s.suggestion_id)),
+    ...sortedIdeas.filter(s => keptIds.has(s.suggestion_id)),
+  ];
 
-  // Mark dropped idea suggestions beyond cap
-  // project_update suggestions are NEVER in cappedDropped
-  const cappedDropped = sortedIdeas.slice(remainingSlots).map((s) => ({
-    suggestion: s,
-    reason: 'Exceeded max_suggestions limit',
-  }));
+  // Mark dropped suggestions beyond cap
+  const cappedDropped = [...sortedProjectUpdates, ...sortedIdeas]
+    .filter(s => !keptIds.has(s.suggestion_id))
+    .map((s) => ({
+      suggestion: s,
+      reason: 'Exceeded max_suggestions limit',
+    }));
 
   return {
     suggestions: capped,

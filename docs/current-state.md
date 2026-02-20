@@ -1,5 +1,24 @@
 # Current State
 
+## Ranking Quota Stabilization (2026-02-20)
+
+**Files**: `scoring.ts`, `plan-change-invariants.test.ts`
+
+The cap logic in `runScoringPipeline` now uses quota-based selection instead of pass-all-project_updates.
+
+### Behavior
+
+Given `max_suggestions = N`:
+- **Rule 1**: If any `project_update` exists, reserve 1 slot for the highest-scoring one.
+- **Rule 2**: If any `risk` (`metadata.label === 'risk'`) exists and budget allows (N > 1), reserve 1 slot for the highest-scoring risk (unless it's the same as the Rule 1 pick).
+- **Rule 3**: Fill remaining slots from the global sorted list (all types), excluding already-chosen suggestions.
+- If `max_suggestions = 1`, `project_update` takes precedence over risk.
+
+### Breaking Change from Previous Invariant
+
+Previously: ALL `project_update` suggestions passed through uncapped regardless of `max_suggestions`.
+Now: The cap is respected. The highest-scoring `project_update` is guaranteed; excess `project_update` suggestions beyond the cap are dropped like ideas.
+
 ## B-Signal Candidate Seeding (2026-02-20)
 
 **Files**: `index.ts`, `bSignalSeeding.ts`, `types.ts`, `b-signal-seeding.test.ts`, `debugGenerator.ts`, `debug.test.ts`

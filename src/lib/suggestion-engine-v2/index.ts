@@ -84,6 +84,36 @@ export {
 } from './evaluation';
 
 // ============================================
+// Grounding Invariant
+// ============================================
+
+/**
+ * Returns true if the suggestion's primary evidence text is grounded in the
+ * section's raw_text (case-insensitive). For multi-line evidence spans, every
+ * non-empty line must appear in the section's raw_text individually, since span
+ * text joins selected lines with '\n' while raw_text may have blank lines between them.
+ *
+ * Only applied to B-signal seeded candidates (metadata.source === 'b-signal'), where
+ * hallucination risk is highest. Regular synthesis derives evidence from body_lines
+ * which are inherently verbatim from the source and may undergo intentional normalization
+ * (e.g. status-marker stripping) that makes verbatim checking unreliable.
+ */
+export function isSuggestionGrounded(suggestion: Suggestion, section: Section): boolean {
+  // Only enforce for B-signal seeded candidates where hallucination risk is highest
+  if (suggestion.metadata?.source !== 'b-signal') return true;
+
+  const evidenceText =
+    suggestion.evidence_spans[0]?.text ||
+    suggestion.suggestion?.evidencePreview?.[0];
+  if (!evidenceText) return false;
+  const haystack = section.raw_text.toLowerCase();
+  const lines = evidenceText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  if (lines.length === 0) return false;
+  // Every non-empty line of the evidence must appear in the section raw_text
+  return lines.every(line => haystack.includes(line.toLowerCase()));
+}
+
+// ============================================
 // Main Generator Function
 // ============================================
 
@@ -299,10 +329,43 @@ export function generateSuggestions(
   }
 
   // ============================================
+  // Stage 4.6: Grounding Invariant (anti-hallucination hard gate)
+  // ============================================
+  const groundedSuggestions: Suggestion[] = [];
+  for (const suggestion of validatedSuggestions) {
+    const section =
+      sectionMap.get(suggestion.section_id) ||
+      (suggestion.section_id.includes('__topic_')
+        ? sectionMap.get(suggestion.section_id.split('__topic_')[0])
+        : undefined);
+
+    if (!section || isSuggestionGrounded(suggestion, section)) {
+      groundedSuggestions.push(suggestion);
+    } else {
+      if (finalConfig.enable_debug) {
+        const evidenceSnippet = (
+          suggestion.evidence_spans[0]?.text ||
+          suggestion.suggestion?.evidencePreview?.[0] ||
+          ''
+        ).substring(0, 80);
+        console.error('[GROUNDING_INVARIANT_DROP]', {
+          suggestionId: suggestion.suggestion_id,
+          sectionId: suggestion.section_id,
+          evidenceSnippet,
+        });
+      }
+      debug.dropped_suggestions.push({
+        section_id: suggestion.section_id,
+        reason: 'UNGROUNDED_EVIDENCE',
+      });
+    }
+  }
+
+  // ============================================
   // Stage 5: Scoring & Thresholding
   // ============================================
   const scoringResult = runScoringPipeline(
-    validatedSuggestions,
+    groundedSuggestions,
     sectionMap,
     finalConfig
   );
@@ -311,7 +374,7 @@ export function generateSuggestions(
   debug.low_confidence_downgraded_count = scoringResult.downgraded_to_clarification || 0;
 
   // Track plan_change metrics per suggestion-suppression-fix plan
-  const planChangeBeforeScoring = validatedSuggestions.filter(s => s.type === 'project_update').length;
+  const planChangeBeforeScoring = groundedSuggestions.filter(s => s.type === 'project_update').length;
   const planChangeAfterScoring = scoringResult.suggestions.filter(s => s.type === 'project_update').length;
   debug.plan_change_count = planChangeBeforeScoring;
   debug.plan_change_emitted_count = planChangeAfterScoring;
