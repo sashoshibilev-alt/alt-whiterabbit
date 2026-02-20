@@ -487,7 +487,7 @@ export default function NoteDetailPage() {
                       const evidencePreview = suggestion.suggestion?.evidencePreview;
 
                       return (
-                        <Card key={suggestion._id} className={needsClarification ? "bg-accent-subtle-bg border-warning" : "bg-accent-subtle-bg border-teal-300"}>
+                        <Card key={suggestion._id} className={needsClarification ? "border-warning dark:bg-surface-elevated dark:border-border" : "dark:bg-surface-elevated dark:border-border"}>
                           <CardContent className="p-4">
                             <p className="text-sm font-medium mb-2">{displayTitle}</p>
                             {displayBody && (
