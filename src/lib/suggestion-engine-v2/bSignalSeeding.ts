@@ -10,6 +10,7 @@ import type { ClassifiedSection, Suggestion, SuggestionPayload, SuggestionScores
 import type { Signal } from './signals/types';
 import { extractSignalsFromSentences } from './signals';
 import { computeSuggestionKey } from '../suggestion-keys';
+import { isProcessNoiseSentence } from './processNoiseSuppression';
 
 // ============================================
 // ID generation (mirrors synthesis.ts counter)
@@ -204,7 +205,21 @@ export function seedCandidatesFromBSignals(section: ClassifiedSection): Suggesti
 
   if (signals.length === 0) return [];
 
-  const dedupedSignals = deduplicateSignalCandidates(signals);
+  // Suppress B-signals whose sentence is process/ownership ambiguity noise.
+  const filteredSignals = signals.filter(signal => {
+    if (!isProcessNoiseSentence(signal.sentence)) return true;
+    if (typeof process !== 'undefined' && process.env?.NODE_ENV !== 'production') {
+      console.log('[B_SIGNAL_SKIP_PROCESS_NOISE]', {
+        sentencePreview: signal.sentence.slice(0, 80),
+        matchedMarker: 'process_noise',
+      });
+    }
+    return false;
+  });
+
+  if (filteredSignals.length === 0) return [];
+
+  const dedupedSignals = deduplicateSignalCandidates(filteredSignals);
 
   return dedupedSignals.map(signal => candidateFromSignal(signal, section));
 }

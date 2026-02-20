@@ -32,6 +32,7 @@ import { runQualityValidators } from './validators';
 import { runScoringPipeline, refineSuggestionScores } from './scoring';
 import { routeSuggestions, computeRoutingStats } from './routing';
 import { seedCandidatesFromBSignals, resetBSignalCounter } from './bSignalSeeding';
+import { isProcessNoiseSentence } from './processNoiseSuppression';
 
 // Re-export types
 export * from './types';
@@ -362,10 +363,34 @@ export function generateSuggestions(
   }
 
   // ============================================
+  // Stage 4.7: Process Noise Suppression
+  // ============================================
+  // Candidate-level suppression: drop any candidate whose primary evidence text
+  // is process/ownership ambiguity noise (e.g., "ambiguity around who owns sign-off").
+  // Applied after grounding check to cover both normal synthesis and B-signal candidates.
+  const noiseFilteredSuggestions: Suggestion[] = [];
+  for (const suggestion of groundedSuggestions) {
+    const evidenceText =
+      suggestion.evidence_spans[0]?.text ||
+      suggestion.suggestion?.body ||
+      '';
+    const titleText = suggestion.title;
+
+    if (isProcessNoiseSentence(evidenceText) || isProcessNoiseSentence(titleText)) {
+      debug.dropped_suggestions.push({
+        section_id: suggestion.section_id,
+        reason: 'PROCESS_NOISE',
+      });
+    } else {
+      noiseFilteredSuggestions.push(suggestion);
+    }
+  }
+
+  // ============================================
   // Stage 5: Scoring & Thresholding
   // ============================================
   const scoringResult = runScoringPipeline(
-    groundedSuggestions,
+    noiseFilteredSuggestions,
     sectionMap,
     finalConfig
   );
@@ -374,7 +399,7 @@ export function generateSuggestions(
   debug.low_confidence_downgraded_count = scoringResult.downgraded_to_clarification || 0;
 
   // Track plan_change metrics per suggestion-suppression-fix plan
-  const planChangeBeforeScoring = groundedSuggestions.filter(s => s.type === 'project_update').length;
+  const planChangeBeforeScoring = noiseFilteredSuggestions.filter(s => s.type === 'project_update').length;
   const planChangeAfterScoring = scoringResult.suggestions.filter(s => s.type === 'project_update').length;
   debug.plan_change_count = planChangeBeforeScoring;
   debug.plan_change_emitted_count = planChangeAfterScoring;

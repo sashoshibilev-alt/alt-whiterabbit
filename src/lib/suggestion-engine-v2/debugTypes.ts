@@ -52,6 +52,7 @@ export enum DropReason {
   SUPPRESSED_SECTION = "SUPPRESSED_SECTION",
   SPLIT_INTO_SUBSECTIONS = "SPLIT_INTO_SUBSECTIONS",
   UNGROUNDED_EVIDENCE = "UNGROUNDED_EVIDENCE",
+  PROCESS_NOISE = "PROCESS_NOISE",
 }
 
 /**
@@ -81,6 +82,7 @@ export const DROP_REASON_STAGE: Record<DropReason, DropStage> = {
   [DropReason.SUPPRESSED_SECTION]: DropStage.POST_SYNTHESIS_SUPPRESS,
   [DropReason.SPLIT_INTO_SUBSECTIONS]: DropStage.TOPIC_ISOLATION,
   [DropReason.UNGROUNDED_EVIDENCE]: DropStage.VALIDATION,
+  [DropReason.PROCESS_NOISE]: DropStage.POST_SYNTHESIS_SUPPRESS,
 };
 
 // ============================================

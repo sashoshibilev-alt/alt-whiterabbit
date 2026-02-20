@@ -20,6 +20,7 @@ import { computeSuggestionKey } from '../suggestion-keys';
 import { PROPOSAL_VERBS_IDEA_ONLY, isPlanChangeCandidate } from './classifiers';
 import { DropStage, DropReason } from './debugTypes';
 import { normalizeSuggestionTitle } from './title-normalization';
+import { isProcessNoiseSentence } from './processNoiseSuppression';
 
 // ============================================
 // ID Generation
@@ -1955,6 +1956,11 @@ export function extractRankedExplicitAsks(text: string, maxResults: number = 2):
 
       // Quality filter: skip concern/risk statements without explicit ask or action verb
       if (isConcernRiskStatement(sentence)) {
+        continue;
+      }
+
+      // Suppress process/ownership ambiguity noise at anchor selection time
+      if (isProcessNoiseSentence(sentence)) {
         continue;
       }
 
