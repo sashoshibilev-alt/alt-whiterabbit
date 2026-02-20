@@ -39,6 +39,7 @@ import {
 import { runQualityValidators } from "./validators";
 import { runScoringPipeline } from "./scoring";
 import { routeSuggestions } from "./routing";
+import { isProcessNoiseSentence } from "./processNoiseSuppression";
 
 // ============================================
 // Debug Generator Options
@@ -955,11 +956,34 @@ export function generateSuggestionsWithDebug(
     }
 
     // ============================================
+    // Stage 4.7: Process Noise Suppression
+    // ============================================
+    // Candidate-level suppression: drop any candidate whose primary evidence text
+    // is process/ownership ambiguity noise (e.g., "ambiguity around who owns sign-off").
+    // Applied after grounding check to cover both normal synthesis and B-signal candidates.
+    const noiseFilteredSuggestions: Suggestion[] = [];
+    for (const suggestion of groundedSuggestions) {
+      const evidenceText =
+        suggestion.evidence_spans[0]?.text ||
+        suggestion.suggestion?.body ||
+        '';
+      const titleText = suggestion.title;
+
+      if (isProcessNoiseSentence(evidenceText) || isProcessNoiseSentence(titleText)) {
+        if (ledger) {
+          ledger.dropCandidateById(suggestion.suggestion_id, DropReason.PROCESS_NOISE);
+        }
+      } else {
+        noiseFilteredSuggestions.push(suggestion);
+      }
+    }
+
+    // ============================================
     // Stage 5: Scoring & Thresholding
     // ============================================
     const scoreStart = Date.now();
     const scoringResult = runScoringPipeline(
-      groundedSuggestions,
+      noiseFilteredSuggestions,
       sectionMap,
       finalConfig
     );
