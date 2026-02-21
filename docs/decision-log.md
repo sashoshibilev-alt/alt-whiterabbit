@@ -30,6 +30,30 @@ Also extended two signal extractors minimally:
 
 ---
 
+## 2026-02-21: Type-Label Derivation Centralization
+
+### Context
+
+Per-sentence type classification in `splitDenseParagraphIntoSentences` was inlining the logic from `computeTypeLabel` (classifiers.ts), creating two independent implementations of the same rule. If type-label rules change, both copies would need updating, risking divergence.
+
+### Decision
+
+Export `computeTypeLabel` from classifiers.ts as the canonical source:
+- All type-label derivation calls use this single function
+- No inlined duplication in synthesis.ts
+- Automatically propagates rule changes to both section-level and sentence-level typing
+
+### Alternatives Rejected
+
+- **Keep inlined logic, add comments**: Rejected — comments don't prevent divergence; a single source of truth is better.
+- **Create a private helper in synthesis.ts**: Rejected — doesn't address the centralization need; exports the public function instead.
+
+### Future Options Closed
+
+- `computeTypeLabel` is now a public export; callers must use it directly rather than reimplementing.
+
+---
+
 ## 2026-02-21: Engine Uncap — Hard Cap Removed, Presentation Layer Added
 
 ### Context
