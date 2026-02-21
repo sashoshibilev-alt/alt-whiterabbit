@@ -1,33 +1,30 @@
 /**
  * Regression test A: golden_dense_paragraph_cloudscale
  *
- * INVARIANT: Once dense-paragraph candidate extraction is implemented, the
- * engine must emit at minimum:
+ * INVARIANT: The engine must emit at minimum:
  *   1. A RISK suggestion grounded in the GDPR / "dead in the water" sentence.
  *   2. A PROJECT_UPDATE suggestion grounded in the "4-week delay" sentence.
- *
- * CURRENT STATE: This test is skipped (it.skip) because the dense-paragraph
- * extraction logic has not yet been added to the engine.  When the feature is
- * implemented, remove the `.skip` suffixes to flip the tests to active.
- *
- * Do NOT change engine thresholds, classifiers, or validators to make these
- * pass prematurely.  The skip is intentional: it documents the *expected
- * future behaviour* so the contract is visible in code review.
+ *   3. It must NOT emit a generic section-root project_update whose evidence
+ *      spans the entire section body (e.g. "Update: Discussion They").  When
+ *      dense-paragraph fallback emits ≥1 sentence candidate for a section, the
+ *      section-root synthesis candidate is suppressed (Stage 4.1).
  *
  * See cloudscale-regression-helpers.ts for the shared input fixture and the
- * full explanation of why these three tests exist.
+ * full explanation of why these tests exist.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { generateSuggestions, DEFAULT_CONFIG } from './index';
 import { resetSectionCounter } from './preprocessing';
 import { resetSuggestionCounter } from './synthesis';
+import { resetDenseParagraphCounter } from './denseParagraphExtraction';
 import { CLOUDSCALE_NOTE } from './cloudscale-regression-helpers';
 
 describe('Golden dense-paragraph: CloudScale note', () => {
   beforeEach(() => {
     resetSectionCounter();
     resetSuggestionCounter();
+    resetDenseParagraphCounter();
   });
 
   // -------------------------------------------------------------------------
@@ -107,12 +104,8 @@ describe('Golden dense-paragraph: CloudScale note', () => {
   );
 
   // -------------------------------------------------------------------------
-  // A3 – Smoke test (active now): engine does not crash on a dense paragraph
-  //
-  // This non-skipped assertion runs today and ensures the engine handles the
-  // CloudScale note without throwing.  It also verifies that any suggestions
-  // that ARE emitted right now satisfy the grounding invariant, so we don't
-  // silently introduce hallucinations before the feature lands.
+  // A3 – Smoke test: engine does not crash on a dense paragraph and all
+  // emitted suggestions satisfy the grounding invariant.
   // -------------------------------------------------------------------------
   it('should not throw and any emitted suggestions must be grounded', () => {
     let result: ReturnType<typeof generateSuggestions>;
@@ -130,5 +123,32 @@ describe('Golden dense-paragraph: CloudScale note', () => {
         expect(normNote).toContain(normSpan);
       }
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // A4 – Section-root suppression: dense-paragraph sections must NOT emit a
+  // generic section-root synthesis candidate alongside sentence candidates.
+  //
+  // Before Stage 4.1, the engine emitted "Update: Discussion They" — a
+  // project_update whose evidence spanned the entire section body and had no
+  // metadata.source (i.e. came from Stage 3 synthesis).  That candidate was
+  // low-quality: it lost sentence-level grounding and duplicated the precise
+  // sentence candidates from B-signal seeding / dense extraction.
+  //
+  // Stage 4.1 drops section-root synthesis candidates when isDenseParagraphSection
+  // is true AND extractDenseParagraphCandidates returns ≥1 sentence candidate.
+  // -------------------------------------------------------------------------
+  it('must NOT emit a generic section-root project_update for the CloudScale dense paragraph', () => {
+    const result = generateSuggestions(CLOUDSCALE_NOTE, undefined, DEFAULT_CONFIG);
+
+    // A section-root synthesis candidate has no metadata.source.
+    // The title "Update: Discussion They" was the specific regression; guard
+    // more broadly against any section-spanning synthesis candidate here.
+    const sectionRootCandidates = result.suggestions.filter((s) => {
+      const meta = (s as { metadata?: { source?: string } }).metadata;
+      return !meta?.source;
+    });
+
+    expect(sectionRootCandidates).toHaveLength(0);
   });
 });

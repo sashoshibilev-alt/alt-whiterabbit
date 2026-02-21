@@ -1,5 +1,42 @@
 # Current State
 
+## Dense-Paragraph Section-Root Suppression (Stage 4.1) (2026-02-21)
+
+**Files**: `index.ts`, `golden-dense-paragraph-cloudscale.test.ts`
+
+### Problem
+
+When a section qualified as a dense paragraph, the engine emitted both:
+1. A section-root synthesis candidate (Stage 3) — e.g. "Update: Discussion They" — spanning the entire section body, with no `metadata.source`.
+2. Sentence-level candidates (Stage 4.5 B-signal, Stage 4.55 dense-paragraph) — precise, grounded in individual sentences.
+
+The section-root candidate was low-quality: it lost sentence-level grounding, produced a generic title from the full paragraph, and appeared redundant/contradictory alongside the precise sentence candidates.
+
+### Solution
+
+Added **Stage 4.1** in `index.ts` between Stage 4 (validation) and Stage 4.5 (B-signal seeding).
+
+For each validated synthesis candidate (identified by absence of `metadata.source`):
+- If `isDenseParagraphSection(section)` is true AND `extractDenseParagraphCandidates(section)` (called without `coveredTexts`) returns ≥1 candidate → drop with `reason: 'dense_paragraph_sentence_candidates_present'`.
+
+Downstream stages (4.5, 4.55, 4.6+) operate on `filteredValidatedSuggestions` instead of `validatedSuggestions`.
+
+### Behavior change
+
+- CloudScale dense-paragraph note: was 3 suggestions (1 section-root + 2 b-signal), now 2 suggestions (2 b-signal only).
+- Structured/bulleted sections: unaffected — `isDenseParagraphSection` returns false for sections with bullets.
+- Canonical gold notes: unaffected — those sections are not dense paragraphs.
+
+### Tests
+
+**File**: `golden-dense-paragraph-cloudscale.test.ts` (4 tests, all active)
+- A1: RISK grounded in GDPR sentence — passes.
+- A2: PROJECT_UPDATE grounded in 4-week delay — passes.
+- A3: Smoke test (grounding invariant) — passes.
+- A4 (new): Must NOT emit a section-root synthesis candidate (no `metadata.source`) — passes.
+
+---
+
 ## Plan-Change Tightening: Candidate-Level Eligibility (2026-02-21)
 
 **Files**: `classifiers.ts`, `denseParagraphExtraction.ts`, `index.ts`, `plan-change-tightening.test.ts`
