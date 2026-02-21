@@ -638,7 +638,10 @@ describe('Full Pipeline', () => {
     expect(result.suggestions.length).toBeLessThanOrEqual(1);
   });
 
-  it('should respect max_suggestions config', () => {
+  it('max_suggestions is a UI hint only — engine returns all validated suggestions', () => {
+    // The engine is uncapped. max_suggestions is preserved for backward compatibility
+    // but does not cause suggestions to be dropped. UI uses groupSuggestionsForDisplay()
+    // with display.defaultCapPerType to cap display.
     const config: Partial<GeneratorConfig> = {
       max_suggestions: 1,
       enable_debug: true,
@@ -646,7 +649,16 @@ describe('Full Pipeline', () => {
 
     const result = generateSuggestions(EXECUTION_ARTIFACT_NOTE, {}, config);
 
-    expect(result.suggestions.length).toBeLessThanOrEqual(1);
+    // Engine must return ALL validated suggestions regardless of max_suggestions
+    expect(result.suggestions.length).toBeGreaterThanOrEqual(1);
+
+    // No "Exceeded max_suggestions limit" drop reason
+    if (result.debug) {
+      const exceededDrops = result.debug.dropped_suggestions.filter(
+        d => d.reason === 'Exceeded max_suggestions limit'
+      );
+      expect(exceededDrops).toHaveLength(0);
+    }
   });
 
   it('should route suggestions to initiatives when provided', () => {

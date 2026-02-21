@@ -78,3 +78,19 @@ export function isProcessNoiseSentence(text: string): boolean {
   // Both paths lead to suppression, but we keep this explicit for auditability.
   return true;
 }
+
+/**
+ * Shared predicate for suppressing process/ownership noise at anchor-selection time.
+ *
+ * shouldSuppressProcessSentence(s) = isNoiseSentence(s) AND NOT isAllowedOwnershipAssignment(s)
+ *
+ * This is the SINGLE authoritative predicate that every anchor-selection path must use.
+ * It is order-independent: the allowlist check and noise check are always both applied
+ * regardless of call site, so noise-first vs allowlist-first ordering cannot diverge.
+ *
+ * Use this instead of calling isProcessNoiseSentence directly at call sites that select
+ * candidate anchors from sentences (B-lite, B-signal seeding, imperative extraction, etc.).
+ */
+export function shouldSuppressProcessSentence(text: string): boolean {
+  return isProcessNoiseSentence(text);
+}

@@ -20,7 +20,7 @@ import { computeSuggestionKey } from '../suggestion-keys';
 import { PROPOSAL_VERBS_IDEA_ONLY, isPlanChangeCandidate } from './classifiers';
 import { DropStage, DropReason } from './debugTypes';
 import { normalizeSuggestionTitle } from './title-normalization';
-import { isProcessNoiseSentence } from './processNoiseSuppression';
+import { shouldSuppressProcessSentence } from './processNoiseSuppression';
 
 // ============================================
 // ID Generation
@@ -1960,7 +1960,7 @@ export function extractRankedExplicitAsks(text: string, maxResults: number = 2):
       }
 
       // Suppress process/ownership ambiguity noise at anchor selection time
-      if (isProcessNoiseSentence(sentence)) {
+      if (shouldSuppressProcessSentence(sentence)) {
         continue;
       }
 
@@ -2011,6 +2011,11 @@ export function extractImperativeStatement(text: string): string | null {
 
   // Find first sentence starting with imperative work verb
   for (const sentence of sentences) {
+    // Suppress process/ownership ambiguity noise at anchor selection time
+    if (shouldSuppressProcessSentence(sentence)) {
+      continue;
+    }
+
     const normalized = normalizeForProposal(sentence);
 
     for (const verb of IMPERATIVE_WORK_VERBS) {
@@ -2418,6 +2423,9 @@ function buildBliteSuggestions(section: ClassifiedSection): Suggestion[] {
       // Already emitted as an idea above?
       const alreadyCovered = [...emittedPreviews].some(t => t.includes(lineText.substring(0, 30)));
       if (alreadyCovered) continue;
+
+      // Suppress process/ownership ambiguity noise at anchor selection time
+      if (shouldSuppressProcessSentence(lineText)) continue;
 
       if (!isPlanChangeCandidate(lineText)) continue;
 

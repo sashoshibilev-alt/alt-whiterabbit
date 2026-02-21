@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   generateSuggestionsWithDebug,
+  generateSuggestions,
   classifySection,
   classifySectionWithLLM,
   filterActionableSections,
@@ -19,6 +20,7 @@ import {
   isPlanChangeIntentLabel,
   classifyIntent,
   isSuggestionGrounded,
+  groupSuggestionsForDisplay,
   NoteInput,
   Section,
   ClassifiedSection,
@@ -467,21 +469,22 @@ describe('THRESHOLD Invariants', () => {
 
       const config: GeneratorConfig = {
         ...DEFAULT_CONFIG,
-        max_suggestions: 2, // Cap at 2, but we have 3 plan_change
+        max_suggestions: 2, // Cap at 2, but we have 3 plan_change — cap does NOT apply to project_updates
       };
 
       const result = runScoringPipeline(mockPlanChangeSuggestions, sections, config);
 
-      // Quota logic: cap is respected, but highest-scoring project_update is guaranteed
-      expect(result.suggestions).toHaveLength(2);
+      // INVARIANT: ALL project_update suggestions survive regardless of max_suggestions cap
+      expect(result.suggestions).toHaveLength(3);
       expect(result.suggestions.every(s => s.type === 'project_update')).toBe(true);
 
-      // Highest-scoring project_update (sug-1, overall=0.7) must be present
+      // All three project_updates must be present
       expect(result.suggestions.some(s => s.suggestion_id === 'sug-1')).toBe(true);
+      expect(result.suggestions.some(s => s.suggestion_id === 'sug-2')).toBe(true);
+      expect(result.suggestions.some(s => s.suggestion_id === 'sug-3')).toBe(true);
 
-      // One project_update is capped out (lowest-scoring sug-3)
-      expect(result.dropped).toHaveLength(1);
-      expect(result.dropped[0].suggestion.suggestion_id).toBe('sug-3');
+      // No project_update dropped
+      expect(result.dropped).toHaveLength(0);
     });
 
     it('should never drop actionable sections at THRESHOLD (INVARIANT)', () => {
@@ -1092,16 +1095,33 @@ describe('isPlanChangeIntentLabel', () => {
 });
 
 // ============================================
-// Ranking Quota Stabilization Tests
+// Engine Uncap Tests (replaces Ranking Quota Stabilization)
 // ============================================
 
-describe('Ranking Quota Stabilization', () => {
+describe('Engine Uncap: all passing suggestions are returned', () => {
   beforeEach(() => {
     resetSectionCounter();
     resetSuggestionCounter();
   });
 
   function makeSection(id: string, type: 'project_update' | 'idea' = 'idea'): ClassifiedSection {
+    if (type === 'idea') {
+      // Idea section: new_workstream is highest intent so isPlanChangeIntentLabel returns false
+      return createMockPlanChangeSection({
+        section_id: id,
+        suggested_type: type,
+        typeLabel: 'idea',
+        intent: {
+          plan_change: 0.2,
+          new_workstream: 0.7,
+          status_informational: 0.05,
+          communication: 0.02,
+          research: 0.01,
+          calendar: 0.01,
+          micro_tasks: 0.01,
+        },
+      });
+    }
     return createMockPlanChangeSection({
       section_id: id,
       suggested_type: type,
@@ -1135,57 +1155,297 @@ describe('Ranking Quota Stabilization', () => {
     };
   }
 
-  // Case 1: 2 ideas + 1 project_update → at least 1 project_update in final suggestions
-  it('guarantees project_update slot when mixed with ideas (Rule 1)', () => {
-    const sections = new Map<string, ClassifiedSection>();
-    sections.set('idea-1-section', makeSection('idea-1-section', 'idea'));
-    sections.set('idea-2-section', makeSection('idea-2-section', 'idea'));
-    sections.set('update-1-section', makeSection('update-1-section', 'project_update'));
-
-    const suggestions: Suggestion[] = [
-      makeSuggestion('idea-1', 'idea', 0.95),   // Highest overall
-      makeSuggestion('idea-2', 'idea', 0.90),
-      makeSuggestion('update-1', 'project_update', 0.60), // Low score but must be guaranteed
-    ];
-
-    const config: GeneratorConfig = {
-      ...DEFAULT_CONFIG,
-      max_suggestions: 2, // Only 2 slots; without quota, both ideas would win
-    };
-
-    const result = runScoringPipeline(suggestions, sections, config);
-
-    // project_update must be present despite lower score
-    expect(result.suggestions.some(s => s.type === 'project_update')).toBe(true);
-    expect(result.suggestions.length).toBeLessThanOrEqual(2);
-  });
-
-  // Case 2: 1 risk + 3 ideas → risk appears in final suggestions (Rule 2)
-  it('guarantees risk slot when mixed with ideas (Rule 2)', () => {
+  // Engine is uncapped: all suggestions that pass threshold are returned regardless of max_suggestions
+  it('does not drop suggestions due to max_suggestions (engine uncapped)', () => {
     const sections = new Map<string, ClassifiedSection>();
     sections.set('idea-1-section', makeSection('idea-1-section', 'idea'));
     sections.set('idea-2-section', makeSection('idea-2-section', 'idea'));
     sections.set('idea-3-section', makeSection('idea-3-section', 'idea'));
-    sections.set('risk-1-section', makeSection('risk-1-section', 'project_update'));
+    sections.set('idea-4-section', makeSection('idea-4-section', 'idea'));
+    sections.set('idea-5-section', makeSection('idea-5-section', 'idea'));
+    sections.set('idea-6-section', makeSection('idea-6-section', 'idea'));
+    sections.set('update-1-section', makeSection('update-1-section', 'project_update'));
 
     const suggestions: Suggestion[] = [
       makeSuggestion('idea-1', 'idea', 0.95),
       makeSuggestion('idea-2', 'idea', 0.90),
       makeSuggestion('idea-3', 'idea', 0.85),
-      makeSuggestion('risk-1', 'project_update', 0.55, 'risk'), // risk with low score
+      makeSuggestion('idea-4', 'idea', 0.80),
+      makeSuggestion('idea-5', 'idea', 0.75),
+      makeSuggestion('idea-6', 'idea', 0.70),
+      makeSuggestion('update-1', 'project_update', 0.60),
     ];
 
-    const config: GeneratorConfig = {
-      ...DEFAULT_CONFIG,
-      max_suggestions: 3, // 4 candidates, 3 slots — risk would be squeezed out by score alone
-    };
+    // max_suggestions=2 but engine must return ALL 7 passing suggestions
+    const config: GeneratorConfig = { ...DEFAULT_CONFIG, max_suggestions: 2 };
 
     const result = runScoringPipeline(suggestions, sections, config);
 
-    // Risk must appear in final suggestions
-    const riskInOutput = result.suggestions.find(s => s.metadata?.label === 'risk');
-    expect(riskInOutput).toBeDefined();
-    expect(result.suggestions.length).toBeLessThanOrEqual(3);
+    // ALL suggestions survive — no "Exceeded max_suggestions limit" drops
+    expect(result.suggestions).toHaveLength(7);
+    expect(result.dropped.some(d => d.reason === 'Exceeded max_suggestions limit')).toBe(false);
+  });
+
+  // project_update suggestions are always first in output (sorted by ranking score),
+  // then ideas (sorted by ranking score) — ordering contract is preserved.
+  it('output ordering: project_updates first, then ideas, both sorted by ranking score', () => {
+    const sections = new Map<string, ClassifiedSection>();
+    sections.set('u1-section', makeSection('u1-section', 'project_update'));
+    sections.set('u2-section', makeSection('u2-section', 'project_update'));
+    sections.set('idea-a-section', makeSection('idea-a-section', 'idea'));
+    sections.set('idea-b-section', makeSection('idea-b-section', 'idea'));
+
+    const suggestions: Suggestion[] = [
+      makeSuggestion('idea-a', 'idea', 0.95),
+      makeSuggestion('u1', 'project_update', 0.80),
+      makeSuggestion('idea-b', 'idea', 0.85),
+      makeSuggestion('u2', 'project_update', 0.70),
+    ];
+
+    const result = runScoringPipeline(suggestions, sections, DEFAULT_CONFIG);
+
+    // All 4 pass
+    expect(result.suggestions).toHaveLength(4);
+
+    // First two must be project_updates
+    expect(result.suggestions[0].type).toBe('project_update');
+    expect(result.suggestions[1].type).toBe('project_update');
+    // u1 (0.80) ranks above u2 (0.70)
+    expect(result.suggestions[0].suggestion_id).toBe('u1');
+    expect(result.suggestions[1].suggestion_id).toBe('u2');
+
+    // Last two must be ideas
+    expect(result.suggestions[2].type).toBe('idea');
+    expect(result.suggestions[3].type).toBe('idea');
+    // idea-a (0.95) ranks above idea-b (0.85)
+    expect(result.suggestions[2].suggestion_id).toBe('idea-a');
+    expect(result.suggestions[3].suggestion_id).toBe('idea-b');
+  });
+
+  // project_update suggestions are NEVER dropped at THRESHOLD
+  it('project_update suggestions are never in dropped even with many ideas', () => {
+    const sections = new Map<string, ClassifiedSection>();
+    for (const id of ['u1-section', 'u2-section', 'u3-section', 'idea-x-section']) {
+      const type = id.startsWith('u') ? 'project_update' : 'idea';
+      sections.set(id, makeSection(id, type as 'project_update' | 'idea'));
+    }
+
+    const suggestions: Suggestion[] = [
+      makeSuggestion('u1', 'project_update', 0.85),
+      makeSuggestion('u2', 'project_update', 0.80),
+      makeSuggestion('u3', 'project_update', 0.75),
+      makeSuggestion('idea-x', 'idea', 0.99),
+    ];
+
+    const result = runScoringPipeline(suggestions, sections, DEFAULT_CONFIG);
+
+    // ALL survive — engine is uncapped
+    expect(result.suggestions).toHaveLength(4);
+
+    // No project_update appears in dropped
+    const droppedUpdates = result.dropped.filter(d => d.suggestion.type === 'project_update');
+    expect(droppedUpdates).toHaveLength(0);
+  });
+});
+
+// ============================================
+// Presentation Helper Tests
+// ============================================
+
+describe('groupSuggestionsForDisplay', () => {
+  beforeEach(() => {
+    resetSectionCounter();
+    resetSuggestionCounter();
+  });
+
+  function makeSuggestion(
+    id: string,
+    type: 'project_update' | 'idea',
+    overall: number,
+    label?: string
+  ): Suggestion {
+    return {
+      suggestion_id: id,
+      note_id: 'display-note',
+      section_id: id + '-section',
+      type,
+      title: `Title ${id}`,
+      payload: type === 'project_update'
+        ? { after_description: `Desc ${id}` }
+        : { draft_initiative: { title: `Title ${id}`, description: `Desc ${id}` } },
+      evidence_spans: [],
+      scores: {
+        section_actionability: overall,
+        type_choice_confidence: overall,
+        synthesis_confidence: overall,
+        overall,
+      },
+      routing: { create_new: true },
+      suggestionKey: id,
+      ...(label ? { metadata: { label } } : {}),
+    };
+  }
+
+  it('caps at capPerType and reports hiddenCount correctly', () => {
+    const suggestions: Suggestion[] = [
+      makeSuggestion('i1', 'idea', 0.95),
+      makeSuggestion('i2', 'idea', 0.90),
+      makeSuggestion('i3', 'idea', 0.85),
+      makeSuggestion('i4', 'idea', 0.80),
+      makeSuggestion('i5', 'idea', 0.75),
+      makeSuggestion('i6', 'idea', 0.70),
+      makeSuggestion('i7', 'idea', 0.65),
+    ];
+
+    const { buckets, flatShown } = groupSuggestionsForDisplay(suggestions, { capPerType: 5 });
+
+    expect(buckets).toHaveLength(1);
+    const ideaBucket = buckets[0];
+    expect(ideaBucket.key).toBe('idea');
+    expect(ideaBucket.total).toBe(7);
+    expect(ideaBucket.shown).toHaveLength(5);
+    expect(ideaBucket.hiddenCount).toBe(2);
+    expect(ideaBucket.hidden).toHaveLength(2);
+
+    // flatShown contains only shown suggestions
+    expect(flatShown).toHaveLength(5);
+
+    // shown are sorted by ranking score (highest first)
+    expect(ideaBucket.shown[0].suggestion_id).toBe('i1');
+    expect(ideaBucket.shown[4].suggestion_id).toBe('i5');
+  });
+
+  it('buckets by metadata.label for risk and bug', () => {
+    const suggestions: Suggestion[] = [
+      makeSuggestion('r1', 'project_update', 0.85, 'risk'),
+      makeSuggestion('r2', 'project_update', 0.80, 'risk'),
+      makeSuggestion('b1', 'idea', 0.75, 'bug'),
+      makeSuggestion('u1', 'project_update', 0.70),
+      makeSuggestion('i1', 'idea', 0.65),
+    ];
+
+    const { buckets } = groupSuggestionsForDisplay(suggestions, { capPerType: 5 });
+
+    const keys = buckets.map(b => b.key);
+    expect(keys).toContain('risk');
+    expect(keys).toContain('bug');
+    expect(keys).toContain('project_update');
+    expect(keys).toContain('idea');
+
+    const riskBucket = buckets.find(b => b.key === 'risk')!;
+    expect(riskBucket.total).toBe(2);
+    expect(riskBucket.hiddenCount).toBe(0);
+
+    const bugBucket = buckets.find(b => b.key === 'bug')!;
+    expect(bugBucket.total).toBe(1);
+  });
+
+  it('all shown when count <= capPerType', () => {
+    const suggestions: Suggestion[] = [
+      makeSuggestion('i1', 'idea', 0.9),
+      makeSuggestion('i2', 'idea', 0.8),
+    ];
+
+    const { buckets } = groupSuggestionsForDisplay(suggestions, { capPerType: 5 });
+
+    expect(buckets[0].shown).toHaveLength(2);
+    expect(buckets[0].hiddenCount).toBe(0);
+    expect(buckets[0].hidden).toHaveLength(0);
+  });
+
+  it('flatShown includes all buckets in display order (risk, project_update, idea, bug)', () => {
+    const suggestions: Suggestion[] = [
+      makeSuggestion('i1', 'idea', 0.9),
+      makeSuggestion('u1', 'project_update', 0.85),
+      makeSuggestion('r1', 'project_update', 0.80, 'risk'),
+      makeSuggestion('b1', 'idea', 0.75, 'bug'),
+    ];
+
+    const { buckets, flatShown } = groupSuggestionsForDisplay(suggestions, { capPerType: 5 });
+
+    // Bucket order: risk → project_update → idea → bug
+    expect(buckets[0].key).toBe('risk');
+    expect(buckets[1].key).toBe('project_update');
+    expect(buckets[2].key).toBe('idea');
+    expect(buckets[3].key).toBe('bug');
+
+    // flatShown follows bucket order
+    expect(flatShown[0].suggestion_id).toBe('r1');
+    expect(flatShown[1].suggestion_id).toBe('u1');
+    expect(flatShown[2].suggestion_id).toBe('i1');
+    expect(flatShown[3].suggestion_id).toBe('b1');
+  });
+
+  it('defaults capPerType to 5 when options is omitted', () => {
+    const suggestions: Suggestion[] = Array.from({ length: 8 }, (_, i) =>
+      makeSuggestion(`i${i}`, 'idea', 0.9 - i * 0.05)
+    );
+
+    const { buckets } = groupSuggestionsForDisplay(suggestions);
+
+    expect(buckets[0].shown).toHaveLength(5);
+    expect(buckets[0].hiddenCount).toBe(3);
+  });
+});
+
+// ============================================
+// End-to-end uncap verification
+// ============================================
+
+describe('Engine uncap: E2E does not drop suggestions due to max_suggestions', () => {
+  beforeEach(() => {
+    resetSectionCounter();
+    resetSuggestionCounter();
+  });
+
+  it('a dense note yields > 5 suggestions and all are returned', () => {
+    // This note has multiple distinct sections, each should yield at least one suggestion
+    const denseNote: NoteInput = {
+      note_id: 'dense-note-uncap',
+      raw_markdown: `# Q3 Planning
+
+## Feature: Bulk Upload
+
+We need to implement bulk-upload support for enterprise customers by Q3.
+
+## Feature: SSO Integration
+
+We need to add SSO support for enterprise accounts.
+
+## Feature: Analytics Dashboard
+
+Build a customer analytics dashboard to track engagement metrics.
+
+## Feature: Mobile App
+
+Launch a mobile app for iOS and Android by end of Q3.
+
+## Feature: API Rate Limiting
+
+Implement API rate limiting to prevent abuse.
+
+## Feature: Audit Logging
+
+Add audit logging for compliance and security.
+`,
+    };
+
+    const result = generateSuggestions(denseNote, undefined, {
+      ...DEFAULT_CONFIG,
+      max_suggestions: 3, // Deliberately low — engine must ignore this for dropping
+    });
+
+    // Engine must return ALL validated suggestions regardless of max_suggestions
+    // With 6 distinct feature sections, we expect > 3 suggestions
+    expect(result.suggestions.length).toBeGreaterThan(3);
+
+    // No "Exceeded max_suggestions limit" drop reason in debug
+    if (result.debug) {
+      const exceededDrops = result.debug.dropped_suggestions.filter(
+        d => d.reason === 'Exceeded max_suggestions limit'
+      );
+      expect(exceededDrops).toHaveLength(0);
+    }
   });
 });
 

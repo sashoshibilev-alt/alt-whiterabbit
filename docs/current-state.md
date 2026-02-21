@@ -1,23 +1,36 @@
 # Current State
 
+## Engine Uncap + Presentation Helper (2026-02-21)
+
+**Files**: `scoring.ts`, `types.ts`, `presentation.ts` (new), `index.ts`, `plan-change-invariants.test.ts`, `suggestion-engine-v2.test.ts`
+
+The engine hard cap is removed. `runScoringPipeline` now returns ALL suggestions that pass validators → scoring → dedupe. The UI uses `groupSuggestionsForDisplay()` from `presentation.ts` to show top N per bucket.
+
+### Behavior
+
+- **Engine output**: all validated + grounded + deduped suggestions, no "Exceeded max_suggestions limit" drops.
+- **Output ordering**: `project_update` first (sorted by `rankingScore`), then `idea` (sorted by `rankingScore`).
+- **`max_suggestions`** in `GeneratorConfig`: kept for backward compatibility, marked `@deprecated` as UI hint only. Engine does not use it for dropping.
+- **`display.defaultCapPerType`**: new field in `GeneratorConfig` (default: 5). Pass to `groupSuggestionsForDisplay()`.
+
+### Presentation Helper (`presentation.ts`)
+
+`groupSuggestionsForDisplay(suggestions, { capPerType })` returns:
+- `buckets`: array of `{ key, title, total, shown, hiddenCount, hidden }` sorted in display order (risk → project_update → idea → bug).
+- `flatShown`: all shown suggestions concatenated.
+- Bucketing: `metadata.label === 'risk'` → "risk" bucket; `metadata.label === 'bug'` → "bug" bucket; else by `suggestion.type`.
+
+### Invariant Preserved
+
+The `invariant_plan_change_always_emitted` check in `index.ts` is updated from strict equality (`===`) to `>=` since type normalization in scoring can promote ideas to `project_update`, increasing the after-scoring count legitimately.
+
+---
+
 ## Ranking Quota Stabilization (2026-02-20)
 
 **Files**: `scoring.ts`, `plan-change-invariants.test.ts`
 
-The cap logic in `runScoringPipeline` now uses quota-based selection instead of pass-all-project_updates.
-
-### Behavior
-
-Given `max_suggestions = N`:
-- **Rule 1**: If any `project_update` exists, reserve 1 slot for the highest-scoring one.
-- **Rule 2**: If any `risk` (`metadata.label === 'risk'`) exists and budget allows (N > 1), reserve 1 slot for the highest-scoring risk (unless it's the same as the Rule 1 pick).
-- **Rule 3**: Fill remaining slots from the global sorted list (all types), excluding already-chosen suggestions.
-- If `max_suggestions = 1`, `project_update` takes precedence over risk.
-
-### Breaking Change from Previous Invariant
-
-Previously: ALL `project_update` suggestions passed through uncapped regardless of `max_suggestions`.
-Now: The cap is respected. The highest-scoring `project_update` is guaranteed; excess `project_update` suggestions beyond the cap are dropped like ideas.
+**SUPERSEDED by Engine Uncap (2026-02-21)**. The quota-based cap is removed. See entry above.
 
 ## B-Signal Candidate Seeding (2026-02-20)
 

@@ -1,5 +1,30 @@
 # Decision Log
 
+## 2026-02-21: Engine Uncap — Hard Cap Removed, Presentation Layer Added
+
+### Context
+
+The `runScoringPipeline` quota-based cap (added 2026-02-20) dropped idea suggestions that exceeded `max_suggestions`. This created a trust problem: dense notes appeared to "miss" ideas rather than "collapse" them. The root cause is that capping in the engine is a trust risk — the UI should control what's visible, not the truth layer.
+
+### Decision
+
+Removed the engine hard cap entirely:
+- `runScoringPipeline` returns ALL suggestions passing thresholds (no idea slots, no quota math).
+- Introduced `presentation.ts` with `groupSuggestionsForDisplay()` to handle display capping at `capPerType` (default 5) per bucket.
+- `max_suggestions` preserved in `GeneratorConfig` as `@deprecated` UI hint; engine ignores it for dropping.
+- `display.defaultCapPerType` added to config for the presentation layer.
+
+### Alternatives Rejected
+
+- **Keep quota cap, just raise it**: Rejected — any engine-level cap is a trust risk. Dense notes would silently drop.
+- **Remove cap without a UI helper**: Rejected — UI still needs collapse affordance. Helper is needed.
+
+### Future Options Closed
+
+- The quota-based selection logic from 2026-02-20 is retired. Code checking `result.dropped` for "Exceeded max_suggestions limit" will find 0 entries. Tests that asserted `suggestions.length <= max_suggestions` have been updated.
+
+---
+
 ## 2026-02-20: Ranking Quota Stabilization — Quota-Based Cap Replaces Pass-All
 
 ### Context
