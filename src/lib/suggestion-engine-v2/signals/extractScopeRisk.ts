@@ -2,13 +2,17 @@ import type { Signal } from "./types";
 
 // Strong actionable conditional phrases that indicate a risk requiring action
 // (e.g., "if we don't fix X" → implies action is needed)
-const ACTIONABLE_CONDITIONAL_PHRASES = /\b(if we don't|if we do not|might need to be|could require|may force|might be pulled|could block)\b/i;
+// Extended to cover "if we can't / cannot" — common in compliance-risk sentences
+// like "if we can't prove GDPR compliance, the partnership is dead in the water".
+const ACTIONABLE_CONDITIONAL_PHRASES = /\b(if we don't|if we do not|if we can't|if we cannot|might need to be|could require|may force|might be pulled|could block)\b/i;
 
 // Conditional tokens that introduce a risk clause (classic "if/unless" form)
 const CONDITIONAL_TOKENS = /\b(if|unless)\b/i;
 
-// Consequence references that indicate scope/release impact
-const CONSEQUENCE_REFS = /\b(release|launch|rollout|scope|mobile app|pulled|app store)\b/i;
+// Consequence references that indicate scope/release/compliance impact.
+// Extended to include compliance and partnership stakes — these are common
+// in vendor/integration risk sentences ("dead in the water", "partnership").
+const CONSEQUENCE_REFS = /\b(release|launch|rollout|scope|mobile app|pulled|app store|compliance|gdpr|partnership|dead\s+in\s+the\s+water|data\s+residency)\b/i;
 
 // Subjective concern prefixes — indicate observation/worry, NOT actionable risk
 // e.g., "Some concern that...", "Risk that...", "Worried that..."

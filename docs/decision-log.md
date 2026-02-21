@@ -1,5 +1,35 @@
 # Decision Log
 
+## 2026-02-21: Dense Paragraph Extraction — Sentence-Level Candidates for Unstructured Sections
+
+### Context
+
+Single-paragraph notes (no bullets, no headings) produced at most one suggestion even when containing multiple distinct actionable signals (e.g. a GDPR compliance risk AND a 4-week schedule delay). The normal synthesis pipeline creates one suggestion per section; B-signal seeding adds candidates but uses the same whole-section evidence span.
+
+### Decision
+
+Added `denseParagraphExtraction.ts` (Stage 4.55) as an additive pass after B-signal seeding:
+- Detects dense-paragraph sections (`bulletCount == 0`, `lineCount == 1` OR `charCount >= 250`, no topic anchors).
+- Splits section text into sentence spans deterministically (regex, no randomness).
+- Runs existing signal extractors per sentence; creates one candidate per signal-bearing sentence with that sentence as evidence.
+- Skips sentences already covered by prior-stage evidence.
+
+Also extended two signal extractors minimally:
+- `extractScopeRisk`: ACTIONABLE_CONDITIONAL_PHRASES += `if we can't|if we cannot`; CONSEQUENCE_REFS += compliance/GDPR/partnership terms.
+- `extractPlanChange`: TIME_MILESTONE += `\d+-week|\d+-day|\d+-month` (hyphenated only).
+
+### Alternatives Rejected
+
+- **Modify classifier thresholds/weights**: Rejected per spec — prefer structural changes first. Threshold changes would affect ALL sections, not just unstructured ones.
+- **Match bare "N weeks" in TIME_MILESTONE**: Rejected — causes false positives in Summary/recap sections (test: `strategic-relevance-and-topic-isolation.test.ts`).
+- **New sentence-level section type**: Rejected — adds new abstraction; the existing B-signal infrastructure already provides everything needed.
+
+### Future Options Closed
+
+- The two A-series tests (A1: RISK/GDPR, A2: PROJECT_UPDATE/4-week-delay) are now active (`.skip` removed). The golden test is a permanent regression guard.
+
+---
+
 ## 2026-02-21: Engine Uncap — Hard Cap Removed, Presentation Layer Added
 
 ### Context

@@ -1,5 +1,39 @@
 # Current State
 
+## Dense Paragraph Candidate Extraction (2026-02-21)
+
+**Files**: `denseParagraphExtraction.ts` (new), `index.ts`, `signals/extractScopeRisk.ts`, `signals/extractPlanChange.ts`, `golden-dense-paragraph-cloudscale.test.ts`
+
+When a note section has no bullets and no topic anchors (e.g. a single long meeting-notes paragraph), the engine now runs a fallback pass after B-signal seeding that splits the section text into sentence spans and emits one candidate per signal-bearing sentence.
+
+### Trigger condition
+
+`isDenseParagraphSection(section)` returns `true` when:
+- `bulletCount == 0` AND
+- (`lineCount == 1` OR `charCount >= 250`) AND
+- no topic anchor keywords at body line starts
+
+### Behavior
+
+- `denseParagraphExtraction.ts`: sentence splitting using `split(/(?<=[.!?])\s+/)` + lowercase-start re-joining; per-sentence signal extraction; process-noise suppression; covered-text dedup.
+- Stage 4.55 in `index.ts`: runs after B-signal seeding; passes `coveredTexts` so it only fills genuine gaps.
+- `metadata.source === 'dense-paragraph'` on emitted candidates; grounding invariant in `isSuggestionGrounded` covers them (same as `b-signal`).
+- Counter `denseParagraphCounter` reset at `generateSuggestions()` entry for determinism.
+
+### Signal extractor changes
+
+- `extractScopeRisk`: added `if we can't|if we cannot` to ACTIONABLE_CONDITIONAL_PHRASES; added `compliance|gdpr|partnership|dead in the water|data residency` to CONSEQUENCE_REFS.
+- `extractPlanChange`: extended TIME_MILESTONE to include `\d+-week|\d+-day|\d+-month` (hyphenated only; bare "N weeks" excluded to avoid false positives in summary sections).
+
+### Invariants preserved
+
+- Grounding invariant: every evidence span text is a verbatim substring of section `raw_text`.
+- Determinism: same input → same counter resets → same candidate order → same output.
+- No process-noise suggestions: `shouldSuppressProcessSentence` applied per sentence.
+- Existing B-signal/synthesis suppression unaffected.
+
+---
+
 ## Engine Uncap + Presentation Helper (2026-02-21)
 
 **Files**: `scoring.ts`, `types.ts`, `presentation.ts` (new), `index.ts`, `plan-change-invariants.test.ts`, `suggestion-engine-v2.test.ts`

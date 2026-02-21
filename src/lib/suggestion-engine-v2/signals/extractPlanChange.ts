@@ -1,7 +1,11 @@
 import type { Signal } from "./types";
 
-// Time or milestone references
-const TIME_MILESTONE = /\b(date|q[1-4]|launch|release|v1)\b/i;
+// Time or milestone references.
+// Extended to cover hyphenated numeric duration patterns like "4-week", "2-month", "30-day"
+// which are common in schedule-impact sentences ("We're looking at a 4-week delay").
+// Intentionally NOT matching bare "N weeks / N days" (space-separated) to avoid
+// false positives in summary/recap sections like "slip by 2 weeks".
+const TIME_MILESTONE = /\b(date|q[1-4]|launch|release|v1|\d+-week|\d+-day|\d+-month)\b/i;
 
 // Shift verbs indicating a plan change (base forms and gerunds)
 const SHIFT_VERBS = /\b(push(?:ing|ed)?|delay(?:ing|ed)?|mov(?:e|ing|ed)|slip(?:ping|ped)?|pull(?:ing|ed)?)\b/i;
