@@ -51,7 +51,7 @@ Add offline mode for mobile.
 
     if (suggestion) {
       expect(suggestion.type).toBe('idea');
-      expect(suggestion.title.toLowerCase()).toMatch(/^add/);
+      expect(suggestion.title.toLowerCase()).toMatch(/^(?:idea:\s*)?add/i);
       expect(suggestion.title.toLowerCase()).toContain('offline mode');
 
       // Check structural hint
@@ -108,7 +108,7 @@ Enable export to CSV for all report types.
 
     if (suggestion) {
       expect(suggestion.type).toBe('idea');
-      expect(suggestion.title.toLowerCase()).toMatch(/^enable/);
+      expect(suggestion.title.toLowerCase()).toMatch(/^(?:idea:\s*)?enable/i);
       expect(suggestion.title.toLowerCase()).toContain('export');
       expect(suggestion.structural_hint).toBe('idea');
     }
@@ -136,7 +136,7 @@ Implement regional data hosting for EU customers.
 
     if (suggestion) {
       expect(suggestion.type).toBe('idea');
-      expect(suggestion.title.toLowerCase()).toMatch(/^implement/);
+      expect(suggestion.title.toLowerCase()).toMatch(/^(?:idea:\s*)?implement/i);
       expect(suggestion.title.toLowerCase()).toContain('regional');
       expect(suggestion.structural_hint).toBe('idea');
     }
@@ -164,7 +164,7 @@ Build dark mode toggle for the dashboard.
 
     if (suggestion) {
       expect(suggestion.type).toBe('idea');
-      expect(suggestion.title.toLowerCase()).toMatch(/^build/);
+      expect(suggestion.title.toLowerCase()).toMatch(/^(?:idea:\s*)?build/i);
       expect(suggestion.title.toLowerCase()).toContain('dark mode');
       expect(suggestion.structural_hint).toBe('idea');
     }
@@ -192,7 +192,7 @@ Integrate with Slack for real-time alerts.
 
     if (suggestion) {
       expect(suggestion.type).toBe('idea');
-      expect(suggestion.title.toLowerCase()).toMatch(/^integrate/);
+      expect(suggestion.title.toLowerCase()).toMatch(/^(?:idea:\s*)?integrate/i);
       expect(suggestion.title.toLowerCase()).toContain('slack');
       expect(suggestion.structural_hint).toBe('idea');
     }
@@ -220,7 +220,7 @@ Add retry logic for failed API calls to improve resilience.
 
     if (suggestion) {
       expect(suggestion.type).toBe('idea');
-      expect(suggestion.title.toLowerCase()).toMatch(/^add/);
+      expect(suggestion.title.toLowerCase()).toMatch(/^(?:idea:\s*)?add/i);
       expect(suggestion.title.toLowerCase()).toContain('retry');
       expect(suggestion.structural_hint).toBe('idea');
     }
@@ -248,7 +248,7 @@ Create notification system for real-time alerts to users.
 
     if (suggestion) {
       expect(suggestion.type).toBe('idea');
-      expect(suggestion.title.toLowerCase()).toMatch(/^create/);
+      expect(suggestion.title.toLowerCase()).toMatch(/^(?:idea:\s*)?create/i);
       expect(suggestion.title.toLowerCase()).toContain('notification');
       expect(suggestion.structural_hint).toBe('idea');
     }
@@ -276,7 +276,7 @@ Fix memory leak in batch processor causing OOM errors.
 
     if (suggestion) {
       expect(suggestion.type).toBe('idea');
-      expect(suggestion.title.toLowerCase()).toMatch(/^fix/);
+      expect(suggestion.title.toLowerCase()).toMatch(/^(?:idea:\s*|bug:\s*)?fix/i);
       expect(suggestion.title.toLowerCase()).toContain('memory leak');
       expect(suggestion.structural_hint).toBe('idea');
     }
@@ -304,7 +304,7 @@ Improve search performance by implementing caching layer.
 
     if (suggestion) {
       expect(suggestion.type).toBe('idea');
-      expect(suggestion.title.toLowerCase()).toMatch(/^improve/);
+      expect(suggestion.title.toLowerCase()).toMatch(/^(?:idea:\s*)?improve/i);
       expect(suggestion.title.toLowerCase()).toContain('search');
       expect(suggestion.structural_hint).toBe('idea');
     }
@@ -397,7 +397,7 @@ The team discussed improvements. We should add a better notification system for 
 
     // Should emit at least 1 idea suggestion with imperative title
     const ideaSuggestions = result.suggestions.filter(s =>
-      s.type === 'idea' && /^(add|enable|support|implement)/i.test(s.title)
+      s.type === 'idea' && /^(?:idea:\s*)?(add|enable|support|implement)/i.test(s.title)
     );
     expect(ideaSuggestions.length).toBeGreaterThanOrEqual(1);
   });
@@ -450,7 +450,7 @@ This will improve resilience during traffic spikes.
 
     if (suggestion) {
       expect(suggestion.type).toBe('idea');
-      expect(suggestion.title.toLowerCase()).toMatch(/^add/);
+      expect(suggestion.title.toLowerCase()).toMatch(/^(?:idea:\s*)?add/i);
       expect(suggestion.title.toLowerCase()).toContain('auto-scaling');
       expect(suggestion.structural_hint).toBe('idea');
     }

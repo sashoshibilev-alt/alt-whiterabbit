@@ -159,9 +159,9 @@ Requirement to implement granular feature gating by the end of March so premium 
       // Must be type idea (not project_update)
       expect(suggestion.type).toBe('idea');
 
-      // Title should start with "Implement" in imperative form
+      // Title should start with "Implement" in imperative form (possibly with "Idea: " prefix)
       const title = suggestion.title.toLowerCase();
-      expect(title).toMatch(/^implement/);
+      expect(title).toMatch(/^(?:idea:\s*)?implement/i);
       expect(title).toContain('granular');
       expect(title).toContain('feature');
       expect(title).toContain('gating');
@@ -194,7 +194,7 @@ Requirement: implement horizontal sharding for user data to support 100k concurr
       expect(suggestion.type).toBe('idea');
 
       const title = suggestion.title.toLowerCase();
-      expect(title).toMatch(/^implement/);
+      expect(title).toMatch(/^(?:idea:\s*)?implement/i);
       expect(title).toContain('horizontal');
       expect(title).toContain('shard');
     }
@@ -410,8 +410,8 @@ This will require a new User Type to be added to the permission system for manag
       // Title should be imperative and contain key concepts from the sentence
       expect(title).toContain('user type');
 
-      // Title should be imperative (starts with action verb or "Implement")
-      const startsWithVerb = /^(add|implement|introduce|create)/i.test(suggestion.title);
+      // Title should be imperative (starts with action verb or "Implement", possibly with "Idea: " prefix)
+      const startsWithVerb = /^(?:idea:\s*)?(add|implement|introduce|create)/i.test(suggestion.title);
       expect(startsWithVerb).toBe(true);
     }
   });

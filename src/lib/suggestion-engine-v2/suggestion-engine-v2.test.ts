@@ -4272,8 +4272,8 @@ Design to create mockups for new onboarding flow.
       );
 
       if (roleAssignmentSugg) {
-        // Title should use "Action items:" template
-        expect(roleAssignmentSugg.title).toMatch(/^Action items:/);
+        // Title should use "Action items:" template (possibly with "Update: " prefix)
+        expect(roleAssignmentSugg.title).toMatch(/^(?:Update:\s*)?Action items:/);
         expect(roleAssignmentSugg.type).toBe('project_update');
       }
     });
@@ -4306,8 +4306,8 @@ Timeline: Next quarter.
 
       expect(roleAssignmentSugg).toBeDefined();
       if (roleAssignmentSugg) {
-        // Title should use "Action items:" template
-        expect(roleAssignmentSugg.title).toMatch(/^Action items:/);
+        // Title should use "Action items:" template (possibly with "Update: " prefix)
+        expect(roleAssignmentSugg.title).toMatch(/^(?:Update:\s*)?Action items:/);
         expect(roleAssignmentSugg.title).toContain('Next Steps');
         expect(roleAssignmentSugg.type).toBe('project_update');
 

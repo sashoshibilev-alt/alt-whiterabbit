@@ -41,7 +41,7 @@ Add inline alert banners for critical errors
     const suggestion = result.suggestions[0];
     expect(suggestion).toBeDefined();
     // Now that "Add" is in PROPOSAL_VERBS_IDEA_ONLY, it anchors on the proposal line
-    expect(suggestion.title.toLowerCase()).toMatch(/^add/);
+    expect(suggestion.title.toLowerCase()).toMatch(/^(?:idea:\s*)?add/i);
     expect(suggestion.title.toLowerCase()).toContain('inline alert banners');
   });
 
@@ -222,7 +222,7 @@ Fix memory leak in background sync process
     const suggestion = result.suggestions[0];
     expect(suggestion).toBeDefined();
     // After imperative fallback, title should be imperative-anchored
-    expect(suggestion.title.toLowerCase()).toMatch(/^fix/);
+    expect(suggestion.title.toLowerCase()).toMatch(/^(?:idea:\s*|bug:\s*)?fix/i);
     expect(suggestion.title.toLowerCase()).toContain('memory leak');
   });
 
