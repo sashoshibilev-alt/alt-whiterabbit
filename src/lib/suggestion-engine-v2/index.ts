@@ -34,6 +34,7 @@ import { routeSuggestions, computeRoutingStats } from './routing';
 import { seedCandidatesFromBSignals, resetBSignalCounter } from './bSignalSeeding';
 import { shouldSuppressProcessSentence } from './processNoiseSuppression';
 import { extractDenseParagraphCandidates, isDenseParagraphSection, resetDenseParagraphCounter } from './denseParagraphExtraction';
+import { extractIdeaCandidates, resetIdeaSemanticCounter } from './extractIdeaCandidates';
 import { enforceTitleContract, normalizeTitlePrefix, truncateTitleSmart, ensureUpdateTitleIncludesDelta, stripKnownPrefix } from './title-normalization';
 
 // Re-export types
@@ -148,6 +149,7 @@ export function generateSuggestions(
   resetSuggestionCounter();
   resetBSignalCounter();
   resetDenseParagraphCounter();
+  resetIdeaSemanticCounter();
 
   // Merge config with defaults
   const finalConfig: GeneratorConfig = {
@@ -408,6 +410,43 @@ export function generateSuggestions(
 
     const dpCandidates = extractDenseParagraphCandidates(section, dpCoveredTexts);
     for (const candidate of dpCandidates) {
+      filteredValidatedSuggestions.push(candidate);
+    }
+  }
+
+  // ============================================
+  // Stage 4.58: Semantic Idea Candidate Extraction (additive)
+  // ============================================
+  // For sections containing strategy/mechanism/feature-style language (≥ 2 distinct
+  // signal tokens), emit one idea candidate grounded in the best matching sentence.
+  // Runs after dense-paragraph extraction so it only fills gaps left by prior passes.
+  // Heading text (≤ level 3, non-generic) is preferred as the title; otherwise a
+  // concise title is derived from the evidence sentence.
+  //
+  // NOTE: Iterates ALL classified sections (not just actionable ones) because
+  // semantic idea detection is intentionally independent of the actionability gate.
+  // A section with rich strategy/mechanism language but low actionability signal
+  // (e.g., descriptive planning text) must still produce an idea candidate.
+  // Suppressed sections (process noise headings) are excluded via checkSectionSuppression.
+  for (const section of classifiedSections) {
+    // Skip suppressed sections (e.g., "Next Steps", "Summary")
+    const headingText = section.heading_text?.trim() ?? '';
+    const hasForceRoleAssignment = section.intent.flags?.forceRoleAssignment ?? false;
+    if (checkSectionSuppression(headingText, section.structural_features, section.raw_text, hasForceRoleAssignment, section.body_lines)) {
+      continue;
+    }
+
+    // Collect covered texts for this section to avoid duplicate evidence
+    const icCoveredTexts = new Set<string>();
+    for (const existing of filteredValidatedSuggestions) {
+      if (existing.section_id !== section.section_id) continue;
+      for (const span of existing.evidence_spans) {
+        icCoveredTexts.add(span.text.trim());
+      }
+    }
+
+    const ideaCandidates = extractIdeaCandidates(section, icCoveredTexts);
+    for (const candidate of ideaCandidates) {
       filteredValidatedSuggestions.push(candidate);
     }
   }
