@@ -314,14 +314,16 @@ export function refineSuggestionScores(
 // ============================================
 
 /**
- * Check if a suggestion represents a plan change
+ * Check if a suggestion represents a plan change, bug, or risk.
  *
- * Plan change suggestions should NEVER be dropped due to low scores.
+ * These suggestion types should NEVER be dropped due to low scores.
  * Per the plan: "any belief with intentLabel === 'plan_change' always produces at least one suggestion"
+ * Bug and risk types behave identically: they may be downgraded to needs_clarification but never silently dropped.
  */
 export function isPlanChangeSuggestion(suggestion: Suggestion): boolean {
-  // project_update type is the equivalent of plan_change intentLabel
-  return suggestion.type === 'project_update';
+  return suggestion.type === 'project_update' ||
+         suggestion.type === 'bug' ||
+         suggestion.type === 'risk';
 }
 
 /**
@@ -554,10 +556,11 @@ export function runScoringPipeline(
     const section = sections.get(s.section_id);
     if (!section) return s;
 
-    // IMPORTANT: If suggestion explicitly sets a type (e.g., B-lite explicit ask path),
-    // that type MUST be authoritative. Only apply section-level type normalization
-    // if the suggestion doesn't have an explicit type indicator.
-    const hasExplicitType = s.structural_hint === 'explicit_ask' ||
+    // IMPORTANT: If suggestion explicitly sets a type (e.g., B-lite explicit ask path or
+    // B-signal seeded with deterministic type inference), that type MUST be authoritative.
+    // Only apply section-level type normalization if no explicit type is set.
+    const hasExplicitType = s.metadata?.explicitType === true ||
+                           s.structural_hint === 'explicit_ask' ||
                            (s.structural_hint && s.structural_hint !== section.typeLabel);
 
     if (hasExplicitType) {
@@ -608,8 +611,8 @@ export function runScoringPipeline(
     return [...arr].sort((a, b) => rankingScore(b) - rankingScore(a));
   }
 
-  const projectUpdates = passed.filter(s => s.type === 'project_update');
-  const ideas = passed.filter(s => s.type !== 'project_update');
+  const projectUpdates = passed.filter(s => s.type === 'project_update' || s.type === 'bug' || s.type === 'risk');
+  const ideas = passed.filter(s => s.type !== 'project_update' && s.type !== 'bug' && s.type !== 'risk');
 
   // 5) Return ALL passing suggestions (engine uncapped; UI uses presentation helper to cap display).
   //    Output ordering: project_update first (sorted by ranking score), then ideas (sorted by ranking score).

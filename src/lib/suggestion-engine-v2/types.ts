@@ -162,7 +162,7 @@ export interface EvidenceSpan {
 /**
  * Suggestion type enum
  */
-export type SuggestionType = 'idea' | 'project_update';
+export type SuggestionType = 'idea' | 'project_update' | 'bug' | 'risk';
 
 /**
  * Plan mutation payload
@@ -280,6 +280,8 @@ export interface Suggestion {
     type?: string;
     label?: string;
     confidence?: number;
+    /** When true, the suggestion type was set by signal inference and must not be overridden by section normalization */
+    explicitType?: boolean;
   };
   // Debug info
   validation_results?: ValidationResult[];

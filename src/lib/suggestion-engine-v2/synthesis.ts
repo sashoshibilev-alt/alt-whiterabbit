@@ -206,7 +206,7 @@ function generateProjectUpdateTitle(section: ClassifiedSection): string {
     // Check if heading is specific enough
     const normalized = headingText.toLowerCase();
     if (!isGenericHeading(normalized)) {
-      return `Update ${headingText} plan`;
+      return `Update: ${headingText}`;
     }
   }
 
@@ -230,7 +230,7 @@ function generateProjectUpdateTitle(section: ClassifiedSection): string {
   // Fallback: use key nouns from the section
   const keyNouns = extractKeyNouns(bodyText);
   if (keyNouns.length > 0) {
-    return `Update ${keyNouns.slice(0, 2).join(' ')} plan`;
+    return `Update: ${keyNouns.slice(0, 2).join(' ')}`;
   }
 
   // Last resort
