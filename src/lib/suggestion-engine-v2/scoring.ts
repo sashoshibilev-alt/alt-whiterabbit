@@ -290,6 +290,14 @@ export function refineSuggestionScores(
   suggestion: Suggestion,
   section: ClassifiedSection
 ): Suggestion {
+  // Preserve scores for idea-semantic candidates on non-actionable sections.
+  // The semantic extractor already computed confidence from signal token count;
+  // re-scoring from section actionability (which is 0 for non-actionable) would
+  // incorrectly drop valid strategy/mechanism detections.
+  if (suggestion.metadata?.source === 'idea-semantic' && !section.is_actionable) {
+    return suggestion;
+  }
+
   const sectionActionability = computeSectionActionability(section);
   const typeChoiceConfidence = computeTypeChoiceConfidence(section);
   const synthesisConfidence = computeSynthesisConfidence(suggestion, section);
