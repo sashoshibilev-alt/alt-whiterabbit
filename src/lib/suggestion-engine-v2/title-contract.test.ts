@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { enforceTitleContract, normalizeTitlePrefix } from './title-normalization';
+import { enforceTitleContract, normalizeTitlePrefix, truncateTitleSmart, ensureUpdateTitleIncludesDelta, stripKnownPrefix } from './title-normalization';
 import type { EvidenceSpan } from './types';
 
 // ---------------------------------------------------------------------------
@@ -288,5 +288,215 @@ describe('normalizeTitlePrefix — canonical gold title unchanged', () => {
   it('"Update: V1 launch 12th → 19th" passes through project_update unchanged', () => {
     expect(normalizeTitlePrefix('project_update', 'Update: V1 launch 12th → 19th'))
       .toBe('Update: V1 launch 12th → 19th');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stage 7 sequencing: enforceTitleContract → normalizeTitlePrefix → truncateTitleSmart
+// ---------------------------------------------------------------------------
+//
+// Simulates the three-step pipeline in the correct order.
+// These tests verify that when enforceTitleContract replaces a bad title,
+// the subsequent normalizeTitlePrefix guarantees the correct prefix, and
+// truncateTitleSmart caps the result at 80 chars.
+
+const UPDATE_TYPES = new Set(['project_update', 'plan_change']);
+
+function applyStage7(type: string, title: string, evidenceSpans: EvidenceSpan[]): string {
+  const enforced = enforceTitleContract(type as 'project_update' | 'risk' | 'idea' | 'bug', title, evidenceSpans);
+  const deltaEnriched = UPDATE_TYPES.has(type)
+    ? ensureUpdateTitleIncludesDelta(stripKnownPrefix(enforced), evidenceSpans)
+    : stripKnownPrefix(enforced);
+  const prefixed = normalizeTitlePrefix(type, deltaEnriched);
+  return truncateTitleSmart(prefixed, 80);
+}
+
+describe('Stage 7 sequencing — prefix preserved after contract replacement', () => {
+  it('risk: when enforceTitleContract replaces a bad title, final title still starts with "Risk:"', () => {
+    // "Risk: They" fails the contract → replaced by a prefix-free fallback from evidence.
+    // The subsequent normalizeTitlePrefix must restore "Risk:".
+    const result = applyStage7(
+      'risk',
+      'Risk: They',
+      [span('GDPR compliance requirement for German nodes may block the partnership.')]
+    );
+    expect(result).toMatch(/^Risk:/);
+  });
+
+  it('idea: when enforceTitleContract replaces a bad title, final title still starts with "Idea:"', () => {
+    const result = applyStage7(
+      'idea',
+      'Idea: This',
+      [span('CSV export feature requested by enterprise customers.')]
+    );
+    expect(result).toMatch(/^Idea:/);
+  });
+
+  it('bug: when enforceTitleContract replaces a bad title, final title still starts with "Bug:"', () => {
+    const result = applyStage7(
+      'bug',
+      'Bug: We',
+      [span('Latency regression in the APAC global view endpoint.')]
+    );
+    expect(result).toMatch(/^Bug:/);
+  });
+
+  it('project_update: when enforceTitleContract replaces a bad title, final title still starts with "Update:"', () => {
+    const result = applyStage7(
+      'project_update',
+      'Update: Discussion They',
+      [span('We are looking at a 4-week delay due to infrastructure work.')]
+    );
+    expect(result).toMatch(/^Update:/);
+  });
+
+  it('final title length is ≤ 80 after full Stage 7 processing', () => {
+    const longEvidence = span('The CloudScale API integration timeline has been pushed back significantly due to ongoing infrastructure upgrades and compliance review processes.');
+    const result = applyStage7('risk', 'Risk: They', [longEvidence]);
+    expect(result.length).toBeLessThanOrEqual(80);
+  });
+
+  it('canonical gold note title passes Stage 7 unchanged', () => {
+    const result = applyStage7(
+      'project_update',
+      'Update: V1 launch 12th → 19th',
+      [span("We're pushing the V1 launch from the 12th to the 19th due to infra delays.")]
+    );
+    expect(result).toBe('Update: V1 launch 12th → 19th');
+  });
+
+  it('idempotent: applying Stage 7 twice yields the same result', () => {
+    const evidence = [span('GDPR compliance requirement for German nodes may block the partnership.')];
+    const first = applyStage7('risk', 'Risk: GDPR compliance gap for German nodes', evidence);
+    const second = applyStage7('risk', first, evidence);
+    expect(second).toBe(first);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Delta-in-title enrichment for project_update
+// ---------------------------------------------------------------------------
+
+describe('ensureUpdateTitleIncludesDelta — delta enrichment for project_update', () => {
+  it('vague update title gets enriched with delta from evidence (CloudScale scenario)', () => {
+    // The raw content "project plan" is vague; evidence contains "4-week delay".
+    // After full Stage 7, the final title must reference that delta.
+    const result = applyStage7(
+      'project_update',
+      'Update: project plan',
+      [span('CloudScale integration is facing a 4-week delay due to vendor review.')]
+    );
+    expect(result).toMatch(/^Update:/);
+    expect(result).toMatch(/4-?week/i);
+  });
+
+  it('vague update title includes entity when entity is extractable from evidence', () => {
+    // Entity "CloudScale" should appear in the enriched title when found in evidence.
+    const result = applyStage7(
+      'project_update',
+      'Update: project plan',
+      [span('CloudScale integration is facing a 4-week delay due to vendor review.')]
+    );
+    expect(result).toMatch(/cloudscale/i);
+  });
+
+  it('gold note invariant: "Update: V1 launch 12th → 19th" is unchanged after delta enrichment', () => {
+    // The title already contains "12th → 19th" which is the delta in the evidence.
+    // ensureUpdateTitleIncludesDelta must detect this and leave the title unchanged.
+    const result = applyStage7(
+      'project_update',
+      'Update: V1 launch 12th → 19th',
+      [span("We're pushing the V1 launch from the 12th to the 19th due to infra delays.")]
+    );
+    expect(result).toBe('Update: V1 launch 12th → 19th');
+  });
+
+  it('no-op when evidence contains no delta: title passes through unchanged (modulo contract/prefix)', () => {
+    // Evidence has no delta patterns; title should not be rewritten beyond
+    // standard contract/prefix normalization.
+    const result = applyStage7(
+      'project_update',
+      'Update: V1 launch scope confirmed',
+      [span('The team has reviewed all requirements and confirmed scope.')]
+    );
+    // Title must still start with "Update:" and must NOT have injected a delta
+    expect(result).toMatch(/^Update:/);
+    expect(result).not.toMatch(/delayed|Timeline delayed/i);
+  });
+
+  it('non-project_update type is not affected by delta enrichment', () => {
+    // A risk title with a date-like token in evidence must NOT be rewritten
+    // to include delta (delta enrichment is restricted to update types).
+    const result = applyStage7(
+      'risk',
+      'Risk: GDPR compliance gap for German nodes',
+      [span('The 4-week audit window for GDPR compliance may block the partnership.')]
+    );
+    // Must still be a valid risk title and must NOT look like an update delta enrichment
+    expect(result).toMatch(/^Risk:/);
+    expect(result).not.toMatch(/delayed/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// End-to-end: persisted/rendered title must be Stage-7 canonical
+// ---------------------------------------------------------------------------
+//
+// Verifies the contract: given a raw candidate title, the value that Stage 7
+// emits (and therefore what the UI must display) carries the correct prefix.
+//
+// Also verifies that when the Suggestion.suggestion sub-object exists, its
+// title field is kept in sync with the top-level Suggestion.title so that
+// UI paths reading either field both see the canonical title.
+
+describe('Stage 7 end-to-end — rendered title has correct prefix', () => {
+  it('risk: "Mitigate release risk" is rendered as "Risk: Mitigate release risk"', () => {
+    const result = applyStage7(
+      'risk',
+      'Mitigate release risk',
+      [span('The release is at risk due to unresolved dependency conflicts.')]
+    );
+    expect(result).toBe('Risk: Mitigate release risk');
+  });
+
+  it('project_update: bare update title gets "Update:" prefix', () => {
+    const result = applyStage7(
+      'project_update',
+      'Deployment timeline adjusted',
+      [span('We moved the deployment date from Friday to Monday.')]
+    );
+    expect(result).toMatch(/^Update:/);
+  });
+
+  it('suggestion.title is kept in sync with top-level title after Stage 7', () => {
+    // Simulate the Stage 7 mapping from index.ts:
+    //   { ...s, title: finalTitle, suggestion: s.suggestion ? { ...s.suggestion, title: finalTitle } : s.suggestion }
+    const rawTitle = 'Mitigate release risk';
+    const finalTitle = applyStage7('risk', rawTitle, [
+      span('The release is at risk due to unresolved dependency conflicts.'),
+    ]);
+
+    // Stub a Suggestion with a SuggestionContext whose title is still the raw value
+    const stubSuggestion = {
+      title: rawTitle,
+      suggestion: {
+        title: rawTitle,
+        body: 'Body text.',
+        sourceSectionId: 'sec-1',
+        sourceHeading: 'Risks',
+      },
+    };
+
+    // Apply the same spread logic used in index.ts Stage 7
+    const updated = {
+      ...stubSuggestion,
+      title: finalTitle,
+      suggestion: stubSuggestion.suggestion
+        ? { ...stubSuggestion.suggestion, title: finalTitle }
+        : stubSuggestion.suggestion,
+    };
+
+    expect(updated.title).toBe('Risk: Mitigate release risk');
+    expect(updated.suggestion.title).toBe('Risk: Mitigate release risk');
   });
 });

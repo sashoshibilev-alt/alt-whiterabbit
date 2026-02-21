@@ -34,7 +34,7 @@ import { routeSuggestions, computeRoutingStats } from './routing';
 import { seedCandidatesFromBSignals, resetBSignalCounter } from './bSignalSeeding';
 import { shouldSuppressProcessSentence } from './processNoiseSuppression';
 import { extractDenseParagraphCandidates, isDenseParagraphSection, resetDenseParagraphCounter } from './denseParagraphExtraction';
-import { enforceTitleContract, normalizeTitlePrefix, truncateTitleSmart } from './title-normalization';
+import { enforceTitleContract, normalizeTitlePrefix, truncateTitleSmart, ensureUpdateTitleIncludesDelta, stripKnownPrefix } from './title-normalization';
 
 // Re-export types
 export * from './types';
@@ -81,7 +81,7 @@ export {
 export { groupSuggestionsForDisplay } from './presentation';
 export type { SuggestionBucket, GroupedSuggestions, GroupSuggestionsOptions } from './presentation';
 export { routeSuggestions, routeSuggestion, computeRoutingStats } from './routing';
-export { enforceTitleContract, normalizeTitlePrefix } from './title-normalization';
+export { enforceTitleContract, normalizeTitlePrefix, ensureUpdateTitleIncludesDelta, stripKnownPrefix } from './title-normalization';
 export {
   evaluateNote,
   evaluateBatch,
@@ -532,11 +532,31 @@ export function generateSuggestions(
   // titles (pronoun-only, generic-only) with deterministic fallbacks derived
   // from evidence tokens.  No invented content; canonical gold titles pass
   // unchanged.
+  //
+  // Order (must not be changed):
+  // 1. enforceTitleContract        — may replace a bad title with a prefix-free fallback
+  // 1b. ensureUpdateTitleIncludesDelta — enriches project_update/plan_change content with
+  //     a concrete delta token from evidence when the title is vague and the evidence
+  //     contains one. Runs after the contract so we only enrich validated content, and
+  //     before normalizeTitlePrefix so the prefix is attached cleanly in step 2.
+  // 2. normalizeTitlePrefix        — guarantees the correct "Type:" prefix after any replacement
+  // 3. truncateTitleSmart          — caps final length at 80 chars
+  const UPDATE_TYPES = new Set(['project_update', 'plan_change']);
   const contractedSuggestions = routedSuggestions.map(s => {
-    const prefixedTitle = truncateTitleSmart(normalizeTitlePrefix(s.type, s.title), 80);
-    const enforcedTitle = enforceTitleContract(s.type, prefixedTitle, s.evidence_spans);
-    if (enforcedTitle === s.title) return s;
-    return { ...s, title: enforcedTitle };
+    const enforcedTitle = enforceTitleContract(s.type, s.title, s.evidence_spans);
+    const deltaEnrichedTitle = UPDATE_TYPES.has(s.type)
+      ? ensureUpdateTitleIncludesDelta(stripKnownPrefix(enforcedTitle), s.evidence_spans)
+      : stripKnownPrefix(enforcedTitle);
+    const prefixedTitle = normalizeTitlePrefix(s.type, deltaEnrichedTitle);
+    const finalTitle = truncateTitleSmart(prefixedTitle, 80);
+    if (finalTitle === s.title) return s;
+    return {
+      ...s,
+      title: finalTitle,
+      // Keep SuggestionContext.title in sync so the UI always reads the Stage-7
+      // canonical title regardless of which field it inspects.
+      suggestion: s.suggestion ? { ...s.suggestion, title: finalTitle } : s.suggestion,
+    };
   });
 
   return buildResult(contractedSuggestions, debug, finalConfig.enable_debug);
