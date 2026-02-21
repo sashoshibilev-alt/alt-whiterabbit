@@ -1,5 +1,27 @@
 # Decision Log
 
+## 2026-02-21: Dense-Paragraph Section-Root Suppression — Stage 4.1 Placement
+
+### Context
+
+Dense-paragraph sections produce low-quality section-root synthesis candidates (Stage 3) alongside precise sentence-level candidates (Stage 4.5, 4.55). The section-root candidate spans the full paragraph, generates a generic title, and duplicates the sentence candidates.
+
+### Decision
+
+Added Stage 4.1 in `index.ts`: post-validation filter that drops synthesis candidates for sections where `isDenseParagraphSection` AND `extractDenseParagraphCandidates` (without coveredTexts) returns ≥1. Identification uses absence of `metadata.source` (synthesis candidates never set it; b-signal and dense-paragraph candidates always do).
+
+### Alternatives Rejected
+
+- **Suppress in synthesis.ts (Stage 3)**: Would require `extractDenseParagraphCandidates` to be called inside `synthesizeSuggestions`, coupling synthesis to the fallback extractor. Stage 4.1 keeps the pipeline stages independent.
+- **Add `isDenseParagraph` flag to ClassifiedSection**: Adding schema field to `ClassifiedSection` for a single pipeline gate was over-engineering. The existing `isDenseParagraphSection` helper is sufficient.
+- **Suppress via dropReason in DropStage enum**: Not needed — `debug.dropped_suggestions` with a string reason provides the same observability with no schema change.
+
+### Future Options Preserved
+
+- If a dense section has a strong section-root candidate (all extractors return 0 sentences), the section-root survives: `denseCandidates.length > 0` check is the gate.
+
+---
+
 ## 2026-02-21: Plan-Change Tightening — Candidate-Level Eligibility
 
 ### Context

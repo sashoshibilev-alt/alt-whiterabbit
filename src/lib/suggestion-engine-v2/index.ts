@@ -33,7 +33,7 @@ import { runScoringPipeline, refineSuggestionScores } from './scoring';
 import { routeSuggestions, computeRoutingStats } from './routing';
 import { seedCandidatesFromBSignals, resetBSignalCounter } from './bSignalSeeding';
 import { shouldSuppressProcessSentence } from './processNoiseSuppression';
-import { extractDenseParagraphCandidates, resetDenseParagraphCounter } from './denseParagraphExtraction';
+import { extractDenseParagraphCandidates, isDenseParagraphSection, resetDenseParagraphCounter } from './denseParagraphExtraction';
 
 // Re-export types
 export * from './types';
@@ -301,7 +301,49 @@ export function generateSuggestions(
 
   debug.suggestions_after_validation = validatedSuggestions.length;
 
-  // Note: do NOT early-exit here even if validatedSuggestions is empty.
+  // ============================================
+  // Stage 4.1: Dense-paragraph section-root suppression
+  // ============================================
+  // When dense-paragraph fallback would emit sentence-level candidates for a
+  // section, the section-root synthesis candidate (which spans the entire section
+  // and loses sentence-level grounding) must be suppressed.  Keeping it would
+  // produce a low-quality generic update alongside the precise sentence candidates,
+  // and the two would appear to the user as redundant / contradictory.
+  //
+  // Check: isDenseParagraphSection(section) AND extractDenseParagraphCandidates
+  // (called without coveredTexts to detect intrinsic signal capacity) returns ≥1.
+  // If both are true, drop the section-root candidate with an explicit reason.
+  //
+  // Synthesis candidates have no metadata.source (unlike b-signal / dense-paragraph
+  // candidates), so we identify them by the absence of that field.
+  const afterDenseRootSuppression: Suggestion[] = [];
+  for (const suggestion of validatedSuggestions) {
+    const isSynthesisRoot = !suggestion.metadata?.source;
+    if (!isSynthesisRoot) {
+      afterDenseRootSuppression.push(suggestion);
+      continue;
+    }
+
+    const section = sectionMap.get(suggestion.section_id);
+    if (section && isDenseParagraphSection(section)) {
+      // Check whether dense extraction would emit at least one sentence candidate
+      // (called without coveredTexts — we want intrinsic capacity, not pipeline state).
+      const denseCandidates = extractDenseParagraphCandidates(section);
+      if (denseCandidates.length > 0) {
+        // Drop: sentence-level candidates will represent this section more precisely.
+        debug.dropped_suggestions.push({
+          section_id: suggestion.section_id,
+          reason: 'dense_paragraph_sentence_candidates_present',
+        });
+        continue;
+      }
+    }
+
+    afterDenseRootSuppression.push(suggestion);
+  }
+  const filteredValidatedSuggestions = afterDenseRootSuppression;
+
+  // Note: do NOT early-exit here even if filteredValidatedSuggestions is empty.
   // B-signal seeding (Stage 4.5) runs for all actionable sections and may
   // produce bug/risk candidates even when normal synthesis was fully suppressed.
 
@@ -325,7 +367,7 @@ export function generateSuggestions(
 
     // Collect evidence texts already covered by existing validated candidates for this section
     const coveredTexts = new Set<string>();
-    for (const existing of validatedSuggestions) {
+    for (const existing of filteredValidatedSuggestions) {
       if (existing.section_id !== section.section_id) continue;
       for (const span of existing.evidence_spans) {
         coveredTexts.add(span.text.trim());
@@ -341,7 +383,7 @@ export function generateSuggestions(
       // Skip if this signal's sentence is already covered by an existing candidate
       const signalSentence = candidate.evidence_spans[0]?.text?.trim() ?? '';
       if (signalSentence && coveredTexts.has(signalSentence)) continue;
-      validatedSuggestions.push(candidate);
+      filteredValidatedSuggestions.push(candidate);
     }
   }
 
@@ -355,7 +397,7 @@ export function generateSuggestions(
   for (const section of expandedSections) {
     // Collect evidence texts already covered for this section
     const dpCoveredTexts = new Set<string>();
-    for (const existing of validatedSuggestions) {
+    for (const existing of filteredValidatedSuggestions) {
       if (existing.section_id !== section.section_id) continue;
       for (const span of existing.evidence_spans) {
         dpCoveredTexts.add(span.text.trim());
@@ -364,7 +406,7 @@ export function generateSuggestions(
 
     const dpCandidates = extractDenseParagraphCandidates(section, dpCoveredTexts);
     for (const candidate of dpCandidates) {
-      validatedSuggestions.push(candidate);
+      filteredValidatedSuggestions.push(candidate);
     }
   }
 
@@ -372,7 +414,7 @@ export function generateSuggestions(
   // Stage 4.6: Grounding Invariant (anti-hallucination hard gate)
   // ============================================
   const groundedSuggestions: Suggestion[] = [];
-  for (const suggestion of validatedSuggestions) {
+  for (const suggestion of filteredValidatedSuggestions) {
     const section =
       sectionMap.get(suggestion.section_id) ||
       (suggestion.section_id.includes('__topic_')
