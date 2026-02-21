@@ -27,12 +27,13 @@ import type {
 import { DEFAULT_CONFIG as defaultConfig } from './types';
 import { preprocessNote, resetSectionCounter } from './preprocessing';
 import { classifySections, filterActionableSections } from './classifiers';
-import { synthesizeSuggestions, resetSuggestionCounter, shouldSplitByTopic, splitSectionByTopic } from './synthesis';
+import { synthesizeSuggestions, resetSuggestionCounter, shouldSplitByTopic, splitSectionByTopic, checkSectionSuppression } from './synthesis';
 import { runQualityValidators } from './validators';
 import { runScoringPipeline, refineSuggestionScores } from './scoring';
 import { routeSuggestions, computeRoutingStats } from './routing';
 import { seedCandidatesFromBSignals, resetBSignalCounter } from './bSignalSeeding';
 import { shouldSuppressProcessSentence } from './processNoiseSuppression';
+import { extractDenseParagraphCandidates, resetDenseParagraphCounter } from './denseParagraphExtraction';
 
 // Re-export types
 export * from './types';
@@ -103,8 +104,12 @@ export {
  * (e.g. status-marker stripping) that makes verbatim checking unreliable.
  */
 export function isSuggestionGrounded(suggestion: Suggestion, section: Section): boolean {
-  // Only enforce for B-signal seeded candidates where hallucination risk is highest
-  if (suggestion.metadata?.source !== 'b-signal') return true;
+  // Only enforce for B-signal and dense-paragraph seeded candidates where
+  // hallucination risk is highest.  Regular synthesis derives evidence from
+  // body_lines verbatim and may undergo intentional normalization that makes
+  // verbatim checking unreliable.
+  const source = suggestion.metadata?.source;
+  if (source !== 'b-signal' && source !== 'dense-paragraph') return true;
 
   const evidenceText =
     suggestion.evidence_spans[0]?.text ||
@@ -140,6 +145,7 @@ export function generateSuggestions(
   resetSectionCounter();
   resetSuggestionCounter();
   resetBSignalCounter();
+  resetDenseParagraphCounter();
 
   // Merge config with defaults
   const finalConfig: GeneratorConfig = {
@@ -308,6 +314,14 @@ export function generateSuggestions(
   // This ensures bug/risk B-signals are emitted even when normal synthesis is
   // dropped by V4 (heading-only) or other validators for that section.
   for (const section of expandedSections) {
+    // Suppressed sections (e.g., "Next Steps", "Summary") must not seed B-signal candidates.
+    // Without this guard, a future extractor change could reintroduce process-noise suggestions
+    // from sections that synthesis already refuses to touch.
+    const headingText = section.heading_text?.trim() ?? '';
+    const hasForceRoleAssignment = section.intent.flags?.forceRoleAssignment ?? false;
+    if (checkSectionSuppression(headingText, section.structural_features, section.raw_text, hasForceRoleAssignment, section.body_lines)) {
+      continue;
+    }
 
     // Collect evidence texts already covered by existing validated candidates for this section
     const coveredTexts = new Set<string>();
@@ -327,6 +341,29 @@ export function generateSuggestions(
       // Skip if this signal's sentence is already covered by an existing candidate
       const signalSentence = candidate.evidence_spans[0]?.text?.trim() ?? '';
       if (signalSentence && coveredTexts.has(signalSentence)) continue;
+      validatedSuggestions.push(candidate);
+    }
+  }
+
+  // ============================================
+  // Stage 4.55: Dense Paragraph Candidate Extraction (additive)
+  // ============================================
+  // For sections that qualify (no bullets, single line or >=250 chars, no topic
+  // anchors), split the body into sentence spans and emit one candidate per
+  // signal-bearing sentence.  Runs after normal synthesis + B-signal seeding so
+  // it only fills gaps left by those two passes.
+  for (const section of expandedSections) {
+    // Collect evidence texts already covered for this section
+    const dpCoveredTexts = new Set<string>();
+    for (const existing of validatedSuggestions) {
+      if (existing.section_id !== section.section_id) continue;
+      for (const span of existing.evidence_spans) {
+        dpCoveredTexts.add(span.text.trim());
+      }
+    }
+
+    const dpCandidates = extractDenseParagraphCandidates(section, dpCoveredTexts);
+    for (const candidate of dpCandidates) {
       validatedSuggestions.push(candidate);
     }
   }
