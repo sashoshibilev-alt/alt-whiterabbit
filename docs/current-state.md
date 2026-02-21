@@ -1,5 +1,45 @@
 # Current State
 
+## Plan-Change Tightening: Candidate-Level Eligibility (2026-02-21)
+
+**Files**: `classifiers.ts`, `denseParagraphExtraction.ts`, `index.ts`, `plan-change-tightening.test.ts`
+
+### Problem
+
+Dense-paragraph extraction (Stage 4.55) emits sentence-level candidates. Previously, vague pressure language ("Pressure from the Board to get this live") could promote a section to plan_change intent at the section level, potentially causing the plan_change override (bypass ACTIONABILITY gate) to bleed into all sibling candidates — not just the sentence containing the actual schedule change.
+
+### Solution
+
+Added `hasPlanChangeEligibility(text): boolean` — a new exported function in `classifiers.ts` that requires **both**:
+- A) A change marker verb from `V3_CHANGE_OPERATORS` (delay, push, slip, move, etc.), AND
+- B) A concrete delta from `PLAN_CHANGE_CONCRETE_DELTA`:
+  - Numeric time unit: "4-week", "2 weeks", "14 days", "1 sprint"
+  - Explicit date change: "12th → 19th", "from the 12th to the 19th", "from June to August", "delayed to Q3", "pushed until March"
+
+Dense-paragraph candidates now carry `metadata.planChangeEligible: boolean` so debug output can show which candidates qualify for plan_change override independently of their parent section's intent.
+
+### Section-level intent unchanged
+
+The section-level `isPlanChangeDominant` flag (and `isPlanChangeIntentLabel`) is **not changed** — it continues to use the broad `hasChangeOperators` check (any V3_CHANGE_OPERATOR without requiring a delta). This preserves behaviour for strategic pivot language like "Shift from enterprise to SMB customers." which correctly classifies as plan_change.
+
+### Behavior
+
+- `hasPlanChangeEligibility("We're looking at a 4-week delay…")` → `true`
+- `hasPlanChangeEligibility("Pressure from the Board to get this live…")` → `false`
+- `hasPlanChangeEligibility("Shift from enterprise to SMB customers.")` → `false` (no date delta)
+- Dense paragraph candidates: "4-week delay" sentence → `planChangeEligible: true`; GDPR risk sentence → `planChangeEligible: false`; "Pressure from Board" → no candidate emitted (no B-signal match)
+
+### Tests
+
+**File**: `plan-change-tightening.test.ts` (25 tests, all passing)
+- A) 8 positive tests for `hasPlanChangeEligibility` (change marker + concrete delta)
+- B) 6 negative tests for `hasPlanChangeEligibility` (vague language, no delta, strategic pivot)
+- B-ext) 2 section-level tests: "Pressure" → not plan_change, no project_update emitted
+- C) 6 integration tests: CloudScale dense-paragraph candidate metadata + full engine output
+- D) 3 canonical gold note tests: V1 launch 12th→19th still qualifies
+
+---
+
 ## Dense Paragraph Candidate Extraction (2026-02-21)
 
 **Files**: `denseParagraphExtraction.ts` (new), `index.ts`, `signals/extractScopeRisk.ts`, `signals/extractPlanChange.ts`, `golden-dense-paragraph-cloudscale.test.ts`
