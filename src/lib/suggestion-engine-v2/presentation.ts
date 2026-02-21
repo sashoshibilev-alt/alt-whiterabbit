@@ -37,6 +37,15 @@ export interface GroupedSuggestions {
   buckets: SuggestionBucket[];
   /** All shown suggestions concatenated in display order */
   flatShown: Suggestion[];
+  /** Alias for flatShown — suggestions visible in the UI by default */
+  visible: Suggestion[];
+  /** Number of hidden suggestions per type bucket */
+  remainingByType: {
+    project_update: number;
+    risk: number;
+    bug: number;
+    idea: number;
+  };
 }
 
 // ============================================
@@ -136,5 +145,18 @@ export function groupSuggestionsForDisplay(
 
   const flatShown = buckets.flatMap(b => b.shown);
 
-  return { buckets, flatShown };
+  const remainingByType: GroupedSuggestions['remainingByType'] = {
+    project_update: 0,
+    risk: 0,
+    bug: 0,
+    idea: 0,
+  };
+  for (const bucket of buckets) {
+    const key = bucket.key as keyof typeof remainingByType;
+    if (key in remainingByType) {
+      remainingByType[key] = bucket.hiddenCount;
+    }
+  }
+
+  return { buckets, flatShown, visible: flatShown, remainingByType };
 }
