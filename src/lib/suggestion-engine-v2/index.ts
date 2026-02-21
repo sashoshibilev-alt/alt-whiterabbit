@@ -27,7 +27,7 @@ import type {
 import { DEFAULT_CONFIG as defaultConfig } from './types';
 import { preprocessNote, resetSectionCounter } from './preprocessing';
 import { classifySections, filterActionableSections } from './classifiers';
-import { synthesizeSuggestions, resetSuggestionCounter, shouldSplitByTopic, splitSectionByTopic, checkSectionSuppression } from './synthesis';
+import { synthesizeSuggestions, resetSuggestionCounter, shouldSplitByTopic, splitSectionByTopic, checkSectionSuppression, shouldSplitDenseParagraph, splitDenseParagraphIntoSentences } from './synthesis';
 import { runQualityValidators } from './validators';
 import { runScoringPipeline, refineSuggestionScores } from './scoring';
 import { routeSuggestions, computeRoutingStats } from './routing';
@@ -61,7 +61,7 @@ export { classifySections, classifySection, classifyIntent, classifyType, filter
 export type { LLMClassificationOptions } from './classifiers';
 export { classifyIntentWithLLM, classifyTypeWithLLM, blendIntentScores, MockLLMProvider } from './llmClassifiers';
 export type { LLMProvider, LLMIntentResponse, LLMTypeResponse } from './llmClassifiers';
-export { synthesizeSuggestions, synthesizeSuggestion } from './synthesis';
+export { synthesizeSuggestions, synthesizeSuggestion, shouldSplitDenseParagraph, splitDenseParagraphIntoSentences } from './synthesis';
 export {
   runQualityValidators,
   validateV2AntiVacuity,

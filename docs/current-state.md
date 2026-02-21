@@ -34,6 +34,25 @@ When a note section has no bullets and no topic anchors (e.g. a single long meet
 
 ---
 
+## Type-Label Centralization Fix (2026-02-21)
+
+**Files**: `classifiers.ts`, `synthesis.ts`, `dense-paragraph-extraction.test.ts`
+
+Centralized type-label derivation by exporting `computeTypeLabel` from classifiers.ts. Previously, per-sentence type classification in `splitDenseParagraphIntoSentences` was inlining duplicate logic, risking divergence if type-label rules changed in classifiers but not in synthesis.
+
+### Change
+
+- Export `computeTypeLabel` from classifiers.ts as the canonical source of type-label derivation
+- Import and call it in synthesis.ts instead of inlined if/else
+- Add centralization invariant test verifying both paths produce identical results
+
+### Invariants Preserved
+
+- No behavior change — refactoring only
+- All 820 tests pass (23 tests in dense-paragraph-extraction.test.ts, including 2 new centralization tests)
+
+---
+
 ## Engine Uncap + Presentation Helper (2026-02-21)
 
 **Files**: `scoring.ts`, `types.ts`, `presentation.ts` (new), `index.ts`, `plan-change-invariants.test.ts`, `suggestion-engine-v2.test.ts`

@@ -1593,8 +1593,12 @@ export function classifyType(section: Section, intent: IntentClassification): {
  * Returns "project_update" when plan_change is the dominant intent.
  * Returns "idea" for all actionable new_workstream sections.
  * OVERRIDE: Decision markers and role assignments force project_update type.
+ *
+ * CENTRALIZATION NOTE: This is the single canonical type-label derivation function.
+ * All callers (section typing in classifySection, sentence typing in synthesis.ts)
+ * MUST call this function. Do not inline or duplicate this logic elsewhere.
  */
-function computeTypeLabel(
+export function computeTypeLabel(
   section: Section,
   intent: IntentClassification
 ): 'idea' | 'project_update' {

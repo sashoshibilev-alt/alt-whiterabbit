@@ -17,7 +17,7 @@ import type {
 } from './types';
 import { normalizeForComparison } from './preprocessing';
 import { computeSuggestionKey } from '../suggestion-keys';
-import { PROPOSAL_VERBS_IDEA_ONLY, isPlanChangeCandidate } from './classifiers';
+import { PROPOSAL_VERBS_IDEA_ONLY, isPlanChangeCandidate, classifyIntent, classifyType, isPlanChangeIntentLabel, computeTypeLabel } from './classifiers';
 import { DropStage, DropReason } from './debugTypes';
 import { normalizeSuggestionTitle } from './title-normalization';
 import { shouldSuppressProcessSentence } from './processNoiseSuppression';
@@ -2922,6 +2922,176 @@ function createSubSection(
     start_line: lines[0]?.index || parentSection.start_line,
     end_line: lines[lines.length - 1]?.index || parentSection.end_line,
   };
+}
+
+// ============================================
+// Dense Paragraph Candidate Extraction
+// ============================================
+
+/**
+ * Fallback rule for unstructured sections:
+ *
+ * When a note section has no bullets/topic anchors and consists of a long
+ * dense paragraph, the normal pipeline collapses all content into a single
+ * candidate with the full section as evidence. This loses signal diversity.
+ *
+ * This fallback splits such sections into sentence-level sub-sections so that
+ * each sentence flows through the full pipeline independently, allowing the
+ * engine to emit multiple grounded suggestions (risk + project_update + bug etc.)
+ * instead of one coarse candidate.
+ *
+ * Trigger conditions (all must be true):
+ *   - bulletCount == 0 (no list items)
+ *   - lineCount == 1 OR charCount >= 250 (dense single-line or long paragraph)
+ *   - hasTopicAnchors == false (topic-isolation already handles anchored sections)
+ */
+export function shouldSplitDenseParagraph(section: ClassifiedSection): boolean {
+  const bulletCount = section.structural_features?.num_list_items ?? 0;
+  const lineCount = section.body_lines.length;
+  const charCount = section.raw_text.length;
+  const hasTopicAnchors = hasExtractableTopicAnchors(section.body_lines);
+
+  return bulletCount === 0 &&
+    (lineCount === 1 || charCount >= 250) &&
+    !hasTopicAnchors;
+}
+
+/**
+ * Deterministically split a dense-paragraph section into sentence-level sub-sections.
+ *
+ * Split strategy:
+ * - Split on sentence boundaries: `. `, `! `, `? ` (trailing space to avoid decimal splits).
+ * - Preserve quoted content by not splitting inside double-quoted spans.
+ * - Trim whitespace; drop empty sentences.
+ * - Keep sentence order stable (deterministic).
+ *
+ * Each resulting sub-section has:
+ * - raw_text = single sentence text
+ * - body_lines = one synthetic Line with the original line's index
+ * - section_id = `${parentId}__sent_${sentenceIndex}`
+ *
+ * If splitting produces only 1 sentence, return the original section unchanged
+ * (no point in splitting a single sentence).
+ */
+export function splitDenseParagraphIntoSentences(
+  section: ClassifiedSection
+): ClassifiedSection[] {
+  const rawText = section.raw_text.trim();
+
+  // Deterministic sentence split: `. `, `! `, `? ` at word boundaries.
+  // We use a simple state machine to skip splits inside double quotes.
+  const sentenceTexts = splitSentencesRespectingQuotes(rawText);
+
+  // Drop empty results
+  const nonEmpty = sentenceTexts.map(s => s.trim()).filter(s => s.length > 0);
+
+  // No gain from splitting if only 1 sentence
+  if (nonEmpty.length <= 1) {
+    return [section];
+  }
+
+  // The original body line index (for all synthetic lines to inherit)
+  const originalLineIndex = section.body_lines[0]?.index ?? section.start_line;
+
+  return nonEmpty.map((sentenceText, sentenceIndex) => {
+    // Create a synthetic Line representing this sentence
+    const syntheticLine: import('./types').Line = {
+      index: originalLineIndex,
+      text: sentenceText,
+      line_type: 'paragraph',
+    };
+
+    const subSectionId = `${section.section_id}__sent_${sentenceIndex}`;
+
+    // Build a minimal section-shaped object for the sentence so we can run
+    // the type classifier against the sentence text rather than the full paragraph.
+    // This is required because each sentence may carry a different signal type
+    // (e.g. one sentence is a schedule delay → project_update, another is a GDPR
+    // compliance gap → risk), and inheriting the parent's type causes spurious
+    // project_update emissions from sentences that are not updates.
+    const sentenceBaseSection: ClassifiedSection = {
+      ...section,
+      section_id: subSectionId,
+      body_lines: [syntheticLine],
+      raw_text: sentenceText,
+      start_line: originalLineIndex,
+      end_line: originalLineIndex,
+      structural_features: {
+        ...section.structural_features,
+        num_lines: 1,
+        num_list_items: 0,
+      },
+    };
+
+    // Re-classify intent and type based solely on the sentence text.
+    // Deterministic: classifyIntent and classifyType are pure functions.
+    const sentenceIntent = classifyIntent(sentenceBaseSection);
+    const sentenceTypeResult = classifyType(sentenceBaseSection, sentenceIntent);
+
+    // Derive typeLabel using the canonical computeTypeLabel from classifiers.ts.
+    // Do not inline this logic — all type-label derivation must go through that function.
+    const sentenceTypeLabel = computeTypeLabel(sentenceBaseSection, sentenceIntent);
+
+    const sentenceSuggestedType =
+      sentenceTypeResult.type === 'non_actionable' ? undefined : sentenceTypeResult.type;
+
+    return {
+      ...sentenceBaseSection,
+      intent: sentenceIntent,
+      suggested_type: sentenceSuggestedType,
+      type_confidence: sentenceSuggestedType !== undefined ? sentenceTypeResult.confidence : undefined,
+      typeLabel: sentenceTypeLabel,
+    };
+  });
+}
+
+/**
+ * Split text into sentences, respecting double-quoted spans.
+ *
+ * Splits on `. `, `! `, `? ` (sentence-terminating punctuation followed by a space),
+ * but does not split when the punctuation is inside a double-quoted span.
+ *
+ * Also treats end-of-string after a sentence terminator as a sentence boundary.
+ * Preserves the terminating punctuation in the preceding sentence.
+ *
+ * Deterministic: same input always produces the same output.
+ */
+function splitSentencesRespectingQuotes(text: string): string[] {
+  const sentences: string[] = [];
+  let inQuote = false;
+  let start = 0;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+
+    if (ch === '"') {
+      inQuote = !inQuote;
+      continue;
+    }
+
+    if (inQuote) continue;
+
+    // Check for sentence-terminating punctuation followed by a space (or end of string)
+    if ((ch === '.' || ch === '!' || ch === '?') && (i + 1 >= text.length || text[i + 1] === ' ')) {
+      const sentence = text.slice(start, i + 1).trim();
+      if (sentence.length > 0) {
+        sentences.push(sentence);
+      }
+      // Skip the space after the punctuation
+      start = i + 2;
+      i = i + 1; // advance past the space (loop will do i++ again)
+    }
+  }
+
+  // Capture any remaining text after the last sentence terminator
+  if (start < text.length) {
+    const remainder = text.slice(start).trim();
+    if (remainder.length > 0) {
+      sentences.push(remainder);
+    }
+  }
+
+  return sentences;
 }
 
 // ============================================
