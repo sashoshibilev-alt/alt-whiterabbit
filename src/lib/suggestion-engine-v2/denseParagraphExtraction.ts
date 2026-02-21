@@ -36,6 +36,7 @@ import type { Signal } from './signals/types';
 import { computeSuggestionKey } from '../suggestion-keys';
 import { shouldSuppressProcessSentence } from './processNoiseSuppression';
 import { titleFromSignal } from './bSignalSeeding';
+import { hasPlanChangeEligibility } from './classifiers';
 
 // ============================================
 // ID generation (separate counter for traceability)
@@ -233,6 +234,12 @@ function candidateFromSentenceSignal(
       label: signal.label,
       confidence: signal.confidence,
       explicitType: true,
+      // planChangeEligible: true means this sentence's span satisfies the
+      // change-marker + concrete-delta rule, so it qualifies for plan_change
+      // override (bypass ACTIONABILITY gate).  Candidates without this flag
+      // must not inherit plan_change override from a sibling sentence in the
+      // same parent section.
+      planChangeEligible: hasPlanChangeEligibility(sentence),
     },
     suggestion: suggestionContext,
   };

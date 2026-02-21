@@ -383,6 +383,86 @@ const V3_CHANGE_OPERATORS = [
 ];
 
 /**
+ * Concrete delta evidence patterns for plan_change tightening.
+ *
+ * A "concrete delta" means the sentence contains a measurable, time-bounded
+ * change — not just vague directional language like "shift priorities" or
+ * "move faster".  We recognise two shapes:
+ *
+ * Shape 1 — numeric time unit (most important):
+ *   "4-week delay", "2-month slip", "14-day extension"  (hyphenated)
+ *   "2 weeks", "14 days", "3 months", "1 sprint"        (space-separated)
+ *
+ * Shape 2 — explicit date / milestone change:
+ *   "12th → 19th"          (ordinal dates with unicode/ASCII arrow)
+ *   "from the 12th to 19th" (ordinal from-to)
+ *   "from June to August"   (month-name from-to)
+ *   "delayed to Q3", "pushed until March", "moved to next quarter"
+ *
+ * "from X to Y" is restricted to date-like X (ordinal, month name, quarter)
+ * to prevent matching strategic pivots like "shift from enterprise to SMB".
+ *
+ * This is intentionally conservative: the goal is to reduce false positives
+ * (vague pressure language triggering plan_change) without touching true
+ * positives (actual schedule changes with measurable deltas).
+ *
+ * Why candidate-level evaluation matters (post-Stage 4.55):
+ *   Dense-paragraph extraction emits one candidate per signal-bearing sentence.
+ *   The section-level isPlanChangeDominant flag was previously set whenever
+ *   any sentence in the section contained a change operator, causing the
+ *   plan_change override to bleed into unrelated sibling candidates.  By
+ *   requiring a concrete delta we ensure only the sentence that actually
+ *   describes "change + how much" qualifies for plan_change override.
+ */
+
+// Month names (abbreviated or full) for use in date-delta patterns
+const MONTH_NAMES = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+
+// Quarter references
+const QUARTER_REFS = '(?:q[1-4]|quarter)';
+
+// Date-like tokens: ordinals, months, quarters, "next <timeframe>"
+const DATE_LIKE = `(?:\\d+(?:th|st|nd|rd)|${MONTH_NAMES}|${QUARTER_REFS}|next\\s+\\w+|this\\s+\\w+)`;
+
+const PLAN_CHANGE_CONCRETE_DELTA = new RegExp(
+  // Shape 1a: hyphenated numeric time unit (e.g. "4-week", "2-month")
+  '\\b\\d+-(?:week|day|month|sprint|quarter)s?\\b'
+  // Shape 1b: bare numeric time unit (e.g. "2 weeks", "14 days")
+  + '|\\b\\d+\\s+(?:week|day|month|sprint|quarter)s?\\b'
+  // Shape 2a: arrow between ordinals or numbers (e.g. "12th → 19th", "3 -> 5")
+  + '|\\d+(?:th|st|nd|rd)?\\s*[→>-]+\\s*\\d+(?:th|st|nd|rd)?'
+  // Shape 2b: "from <date-like> to <date-like>" (restricted to date tokens;
+  //            optional "the" before each ordinal, e.g. "from the 12th to the 19th")
+  + `|\\bfrom\\s+(?:the\\s+)?${DATE_LIKE}\\s+to\\s+(?:the\\s+)?${DATE_LIKE}`
+  // Shape 2c: "moved/pushed/delayed/postponed to/until <date-like>"
+  + `|\\b(?:moved?|pushed?|delayed?|postponed?|rescheduled?)\\s+(?:to|until|from)\\s+${DATE_LIKE}`,
+  'i'
+);
+
+/**
+ * Returns true when a text span qualifies for plan_change override at the
+ * candidate (sentence) level.
+ *
+ * Requires BOTH:
+ *   A) At least one explicit change marker (a word from V3_CHANGE_OPERATORS), AND
+ *   B) Concrete delta evidence (PLAN_CHANGE_CONCRETE_DELTA).
+ *
+ * The section-level isPlanChangeDominant flag uses the broader hasChangeOperators
+ * check (any V3_CHANGE_OPERATOR without requiring a delta) to preserve existing
+ * behaviour for strategic pivot language like "shift from enterprise to SMB".
+ *
+ * This function is specifically for dense-paragraph candidate annotation so
+ * that each sentence-derived candidate can independently report whether it
+ * qualifies for plan_change override — preventing sibling sentences in the
+ * same parent section from inheriting the override via section-level intent.
+ */
+export function hasPlanChangeEligibility(text: string): boolean {
+  const hasChangeOperator = V3_CHANGE_OPERATORS.some((op) => text.toLowerCase().includes(op));
+  if (!hasChangeOperator) return false;
+  return PLAN_CHANGE_CONCRETE_DELTA.test(text);
+}
+
+/**
  * V3 Status/progress markers
  */
 const V3_STATUS_MARKERS = [

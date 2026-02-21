@@ -1,5 +1,32 @@
 # Decision Log
 
+## 2026-02-21: Plan-Change Tightening — Candidate-Level Eligibility
+
+### Context
+
+Dense-paragraph extraction (Stage 4.55) emits sentence-derived candidates. The section-level plan_change classification (from `isPlanChangeDominant`) can be triggered by any `V3_CHANGE_OPERATOR` in the section — including vague words like "move faster" or "shift priorities". This causes the plan_change override (bypass ACTIONABILITY gate) to apply to the whole section, potentially making all dense-paragraph candidates appear as plan_change-eligible even when only one sentence contains an actual schedule change with a measurable delta.
+
+### Decision
+
+Added `hasPlanChangeEligibility(text): boolean` to enforce a two-part rule at the **candidate/sentence level**:
+- Change marker verb (V3_CHANGE_OPERATORS) AND concrete delta (numeric time unit or explicit date change)
+
+Annotate dense-paragraph candidates with `metadata.planChangeEligible` (true/false) computed per sentence. This makes plan_change override intent observable at the candidate level for debug output and future gating.
+
+### Alternatives Rejected
+
+- **Modify section-level isPlanChangeDominant**: Rejected because it would break existing tests where strategic pivot language ("Shift from enterprise to SMB") correctly triggers plan_change without a numeric delta. The section-level classification uses the broader `hasChangeOperators` check intentionally.
+
+- **Block "Pressure from the Board" at section level**: Not needed — "Pressure from the Board" already returns `isPlanChange: false` (no V3_CHANGE_OPERATOR match). The problem is not a false positive at that level but at the candidate annotation level.
+
+- **Filter out dense-paragraph candidates that aren't planChangeEligible**: Not implemented because dense-paragraph candidates are created by B-signal extractors which already do sentence-level validation. "Pressure from the Board" never creates a candidate (no B-signal match). The annotation is defensive, not blocking.
+
+### Future Options Preserved
+
+- `metadata.planChangeEligible` can be used to further gate which dense-paragraph candidates bypass the ACTIONABILITY gate if future B-signal extractors create candidates from sentences that lack a concrete delta.
+
+---
+
 ## 2026-02-21: Dense Paragraph Extraction — Sentence-Level Candidates for Unstructured Sections
 
 ### Context
