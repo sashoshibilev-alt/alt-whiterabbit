@@ -7,6 +7,8 @@
  * NO LLM. NO embeddings. Pure deterministic rules.
  */
 
+import type { SuggestionType, EvidenceSpan } from './types';
+
 /**
  * Strong imperative verbs we want titles to start with
  * Per requirements: add|build|create|enable|launch|evaluate|investigate|improve|reduce|transition
@@ -490,5 +492,280 @@ function inferStrongVerb(title: string): string {
   }
 
   // Default: if nothing matches, keep original
+  return title;
+}
+
+// ============================================
+// Title Quality Contract
+// ============================================
+
+/**
+ * Title Quality Contract (`enforceTitleContract`)
+ *
+ * WHY THIS EXISTS:
+ * The synthesis pipeline can produce malformed titles like "Update: Discussion They"
+ * where the content portion consists entirely of pronouns ("They", "We") or
+ * generic words ("Discussion", "General") with no concrete entity. These titles
+ * are uninformative and confusing to users.
+ *
+ * CONTRACT (applied to the content portion of the title, after any prefix):
+ * 1. Strip leading stopwords/pronouns from the content portion.
+ * 2. Require ≥3 meaningful tokens (excluding stopwords).
+ * 3. Reject content dominated by pronouns or generic words alone.
+ * 4. On failure, apply a deterministic fallback derived from evidence span tokens.
+ *
+ * The prefix (e.g. "Update:", "Risk:") is preserved unchanged.
+ * Canonical gold note titles pass without modification.
+ */
+
+/**
+ * Pronouns that dominate-fail a title when they are the only content tokens.
+ * A title fails if EVERY token is in this set.
+ */
+const TITLE_CONTRACT_PRONOUNS = new Set([
+  'they', 'we', 'us', 'our', 'their', 'it', 'its',
+  'this', 'that', 'these', 'those', 'he', 'she', 'him', 'her',
+  'i', 'you', 'me', 'my', 'your',
+]);
+
+/**
+ * Generic words that, alone, make a title vacuous.
+ * A title fails if EVERY token is in this set (combined with pronouns).
+ */
+const TITLE_CONTRACT_GENERICS = new Set([
+  'discussion', 'general', 'update', 'info', 'information',
+  'overview', 'summary', 'note', 'notes', 'topic', 'item',
+  'meeting', 'call', 'session', 'status', 'check',
+]);
+
+/**
+ * Stopwords to strip from the start of the content portion.
+ * Stripping these before the token check prevents them from padding the count.
+ */
+const TITLE_CONTRACT_LEADING_STOPWORDS = [
+  /^(?:the|a|an|and|or|but|in|on|at|to|for|of|with|by|from|about|as|into|through|during|before|after)\s+/i,
+  /^(?:they|we|our|their|it|this|that|these|those)\s+/i,
+];
+
+/**
+ * Known title prefixes emitted by the engine (e.g. "Update:", "Risk:").
+ * We split on these to isolate the content portion.
+ */
+const KNOWN_TITLE_PREFIXES = /^(Update|Risk|Idea|Bug|Action items|Implement|Fix|Add|Build|Create|Enable|Launch|Evaluate|Investigate|Improve|Reduce|Transition|Develop|Remove|Migrate|Refactor|Optimize|Integrate|Deploy|Configure|Establish|Streamline):\s*/i;
+
+/**
+ * Extract the first concrete entity from evidence span tokens.
+ * Returns the first noun-like token (≥4 chars, not a stopword/pronoun) found
+ * in the evidence text, or null if none is found.
+ */
+function extractEntityFromEvidence(evidenceSpans: EvidenceSpan[]): string | null {
+  const stopwords = new Set([
+    ...Array.from(TITLE_CONTRACT_PRONOUNS),
+    ...Array.from(TITLE_CONTRACT_GENERICS),
+    'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to',
+    'for', 'of', 'with', 'by', 'from', 'about', 'as', 'into',
+    'through', 'during', 'before', 'after', 'is', 'are', 'was',
+    'were', 'be', 'been', 'have', 'has', 'had', 'do', 'does',
+    'did', 'will', 'would', 'could', 'should', 'may', 'might',
+    'can', 'not', 'no', 'if', 'so', 'just', 'also', 'only',
+    'than', 'then', 'when', 'where', 'which', 'who', 'what', 'how',
+  ]);
+
+  for (const span of evidenceSpans) {
+    // Split into words, skip punctuation
+    const tokens = span.text
+      .replace(/[^\w\s-]/g, ' ')
+      .split(/\s+/)
+      .filter(t => t.length >= 4 && !stopwords.has(t.toLowerCase()));
+
+    if (tokens.length > 0) {
+      // Prefer capitalized tokens (proper nouns / product names)
+      const proper = tokens.find(t => /^[A-Z]/.test(t));
+      return proper ?? tokens[0];
+    }
+  }
+  return null;
+}
+
+/**
+ * Extract a delta or date token from evidence spans.
+ * Returns the first match of patterns like "4-week", "2 weeks", "12th → 19th", etc.
+ */
+function extractDeltaFromEvidence(evidenceSpans: EvidenceSpan[]): string | null {
+  const DELTA_PATTERNS = [
+    /\d+-(?:week|day|month|sprint)s?/i,
+    /\d+\s+(?:week|day|month|sprint)s?/i,
+    /\d+(?:st|nd|rd|th)\s*[→\-–]\s*\d+(?:st|nd|rd|th)/i,
+    /from\s+\w+\s+to\s+\w+/i,
+    /delayed?\s+to\s+\w+/i,
+    /pushed?\s+(?:to|until)\s+\w+/i,
+  ];
+
+  for (const span of evidenceSpans) {
+    for (const pattern of DELTA_PATTERNS) {
+      const match = span.text.match(pattern);
+      if (match) return match[0];
+    }
+  }
+  return null;
+}
+
+/**
+ * Build a deterministic fallback title by type, derived from evidence tokens.
+ * Never invents entities — all content comes from evidence span text.
+ */
+function buildFallbackTitle(type: SuggestionType, evidenceSpans: EvidenceSpan[]): string {
+  const entity = extractEntityFromEvidence(evidenceSpans);
+
+  switch (type) {
+    case 'project_update': {
+      const delta = extractDeltaFromEvidence(evidenceSpans);
+      if (entity && delta) return `Update: ${entity} ${delta}`;
+      if (entity) return `Update: ${entity} delayed`;
+      return 'Update: Timeline adjustment identified';
+    }
+    case 'risk':
+      return entity ? `${entity} risk identified` : 'Risk identified';
+    case 'idea':
+      return entity ? `${entity} improvement` : 'Idea identified';
+    case 'bug':
+      return entity ? `${entity} issue` : 'Bug identified';
+    default:
+      return entity ? `${entity} issue` : 'Issue identified';
+  }
+}
+
+/**
+ * Check whether the content tokens (after stripping stopwords) pass the quality bar.
+ * Returns true if the content is acceptable, false if a fallback is needed.
+ */
+function contentPassesContract(content: string): boolean {
+  let stripped = content.trim();
+
+  // Step 1: Strip leading stopwords/pronouns
+  for (const pattern of TITLE_CONTRACT_LEADING_STOPWORDS) {
+    stripped = stripped.replace(pattern, '');
+  }
+  stripped = stripped.trim();
+
+  // Step 2: Tokenize and count meaningful tokens
+  const tokens = stripped
+    .split(/\s+/)
+    .filter(t => t.length > 0)
+    .map(t => t.toLowerCase().replace(/[^a-z0-9-]/g, ''));
+
+  const meaningfulTokens = tokens.filter(
+    t => t.length >= 2 && !TITLE_CONTRACT_PRONOUNS.has(t) && !TITLE_CONTRACT_GENERICS.has(t)
+  );
+
+  // Step 3: Require ≥3 meaningful tokens
+  if (meaningfulTokens.length < 3) {
+    // Allow if there are at least 2 meaningful tokens that aren't generics/pronouns
+    // (stricter: require at least 1 non-generic, non-pronoun token)
+    const concreteTokens = tokens.filter(
+      t => t.length >= 3 && !TITLE_CONTRACT_PRONOUNS.has(t) && !TITLE_CONTRACT_GENERICS.has(t)
+    );
+    if (concreteTokens.length === 0) return false;
+    if (meaningfulTokens.length < 1) return false;
+  }
+
+  // Step 4: Reject if every token is a pronoun or generic word
+  const allTokens = tokens.filter(t => t.length >= 2);
+  if (allTokens.length === 0) return false;
+
+  const allVacuous = allTokens.every(
+    t => TITLE_CONTRACT_PRONOUNS.has(t) || TITLE_CONTRACT_GENERICS.has(t)
+  );
+  if (allVacuous) return false;
+
+  return true;
+}
+
+/**
+ * Expected title prefix by suggestion type.
+ * plan_change uses the same "Update:" prefix as project_update.
+ */
+const TYPE_PREFIX: Record<string, string> = {
+  project_update: 'Update:',
+  plan_change: 'Update:',
+  risk: 'Risk:',
+  idea: 'Idea:',
+  bug: 'Bug:',
+};
+
+/**
+ * Matches any of the four user-facing prefixes at the start of a title.
+ * Case-insensitive so "update:" and "Update:" are both caught.
+ */
+const USER_FACING_PREFIXES = /^(Update|Risk|Idea|Bug):\s*/i;
+
+/**
+ * Normalize the title prefix for a suggestion so it matches the expected
+ * prefix for its type. Idempotent and deterministic.
+ *
+ * Rules (applied in order):
+ * 1. Determine expectedPrefix from type (e.g. "Update:" for project_update).
+ * 2. If no expectedPrefix for this type → return title unchanged (types like
+ *    "idea" that currently emit bare imperative titles are left alone so the
+ *    contract layer can still add them if needed; only types explicitly listed
+ *    in TYPE_PREFIX are normalized).
+ * 3. If the title already starts with any known user-facing prefix:
+ *    a. If it matches expectedPrefix (case-insensitive) → keep as-is.
+ *    b. If it does not match → replace the existing prefix with expectedPrefix,
+ *       keeping the trimmed remainder.
+ * 4. If the title has no known prefix → prepend expectedPrefix + " " + title.
+ * 5. Double-prefix guard: if after the above the title would start with
+ *    "Update: Update:" (or any repetition) → collapse to single prefix.
+ */
+export function normalizeTitlePrefix(type: string, title: string): string {
+  const expectedPrefix = TYPE_PREFIX[type];
+  if (!expectedPrefix) return title;
+
+  const prefixMatch = title.match(USER_FACING_PREFIXES);
+
+  if (prefixMatch) {
+    const existingPrefixRaw = prefixMatch[0]; // e.g. "Update: " or "risk: "
+    const existingPrefixWord = prefixMatch[1]; // e.g. "Update" or "risk"
+    const expectedPrefixWord = expectedPrefix.slice(0, -1); // strip trailing ":"
+
+    if (existingPrefixWord.toLowerCase() === expectedPrefixWord.toLowerCase()) {
+      // Already correct prefix — keep but normalise casing to canonical form
+      return expectedPrefix + ' ' + title.slice(existingPrefixRaw.length).trimStart();
+    }
+    // Wrong prefix — replace with expected, keep remainder
+    const remainder = title.slice(existingPrefixRaw.length).trimStart();
+    return expectedPrefix + ' ' + remainder;
+  }
+
+  // No known prefix — prepend expectedPrefix
+  return expectedPrefix + ' ' + title;
+}
+
+/**
+ * Enforce the title quality contract before final emission.
+ *
+ * @param type - The suggestion type (for fallback selection)
+ * @param title - The normalized title to validate
+ * @param evidenceSpans - Evidence spans to derive fallback content from
+ * @returns The original title if it passes, or a deterministic fallback
+ */
+export function enforceTitleContract(
+  type: SuggestionType,
+  title: string,
+  evidenceSpans: EvidenceSpan[]
+): string {
+  if (!title || title.trim().length === 0) {
+    return buildFallbackTitle(type, evidenceSpans);
+  }
+
+  // Split off any known prefix (e.g. "Update:", "Risk:")
+  const prefixMatch = title.match(KNOWN_TITLE_PREFIXES);
+  const prefix = prefixMatch ? prefixMatch[0] : '';
+  const content = prefixMatch ? title.slice(prefix.length) : title;
+
+  if (!contentPassesContract(content)) {
+    return buildFallbackTitle(type, evidenceSpans);
+  }
+
   return title;
 }

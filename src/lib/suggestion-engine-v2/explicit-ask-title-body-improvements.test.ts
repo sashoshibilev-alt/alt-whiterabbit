@@ -82,8 +82,8 @@ Users need better audit logging for compliance tracking.
     if (suggestion) {
       const title = suggestion.title.toLowerCase();
 
-      // Should convert to imperative: "Improve audit logging"
-      expect(title).toMatch(/^improve/);
+      // Should convert to imperative: "Improve audit logging" (possibly with "Idea: " prefix)
+      expect(title).toMatch(/^(?:idea:\s*)?improve/i);
       expect(title).toContain('audit logging');
     }
   });
@@ -110,8 +110,8 @@ There is a request to add audit logging to the admin panel for compliance tracki
     if (suggestion) {
       const title = suggestion.title.toLowerCase();
 
-      // Should be imperative: "Add audit logging to the admin panel"
-      expect(title).toMatch(/^add/);
+      // Should be imperative: "Add audit logging to the admin panel" (possibly with "Idea: " prefix)
+      expect(title).toMatch(/^(?:idea:\s*)?add/i);
       expect(title).toContain('audit logging');
       expect(title).toContain('admin panel');
     }
@@ -173,8 +173,8 @@ Add offline mode for mobile to improve user experience in low-connectivity areas
     if (suggestion) {
       const title = suggestion.title.toLowerCase();
 
-      // Should anchor on the "Add" proposal line, not fall back to heading
-      expect(title).toMatch(/^add/);
+      // Should anchor on the "Add" proposal line, not fall back to heading (possibly with "Idea: " prefix)
+      expect(title).toMatch(/^(?:idea:\s*)?add/i);
       expect(title).toContain('offline mode');
       expect(title).toContain('mobile');
 
@@ -207,15 +207,15 @@ This will improve response times for large catalogs.
     if (suggestion) {
       const title = suggestion.title.toLowerCase();
 
-      // Should anchor on the "Add supplier segmentation" proposal line
-      expect(title).toMatch(/^add/);
+      // Should anchor on the "Add supplier segmentation" proposal line (possibly with "Idea: " prefix)
+      expect(title).toMatch(/^(?:idea:\s*)?add/i);
       expect(title).toContain('supplier segmentation');
       expect(title).toContain('filter');
 
       // Should NOT anchor on "Current system has..." or "This will improve..."
       expect(title).not.toContain('performance bottleneck');
       expect(title).not.toContain('response time');
-      expect(title).not.toMatch(/^improve/);
+      expect(title).not.toMatch(/^(?:idea:\s*)?improve/i);
     }
   });
 });

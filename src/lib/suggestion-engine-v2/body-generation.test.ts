@@ -749,8 +749,8 @@ Target is to complete the changes by early Q3.
     expect(title.toLowerCase()).toMatch(/self-service|deliverable/);
     expect(title.toLowerCase()).toMatch(/slip|delay/);
 
-    // Title should be concise (≤60 chars as per spec)
-    expect(title.length).toBeLessThanOrEqual(60);
+    // Title should be concise (≤60 chars as per spec, plus up to 8 chars for "Update: " prefix)
+    expect(title.length).toBeLessThanOrEqual(68);
   });
 
   it('project_update title fallback when no impact line exists', () => {

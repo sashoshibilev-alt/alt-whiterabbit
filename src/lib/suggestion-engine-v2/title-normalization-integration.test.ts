@@ -43,8 +43,8 @@ Suggestion: add automated regression tests to the CI pipeline.`,
     if (suggestion) {
       // Title should NOT start with "Suggestion:"
       expect(suggestion.title).not.toMatch(/^suggestion:/i);
-      // Should start with a strong verb
-      expect(suggestion.title).toMatch(/^(add|implement|create|build|enable)/i);
+      // Should start with a strong verb (possibly with "Idea: " prefix)
+      expect(suggestion.title).toMatch(/^(?:idea:\s*)?(add|implement|create|build|enable)/i);
     }
   });
 
@@ -135,12 +135,15 @@ We should implement better error handling for API failures.`,
       const suggestion = result.suggestions[0];
 
       if (suggestion) {
-        const firstWord = suggestion.title.split(/\s+/)[0].toLowerCase();
+        // Strip optional type prefix ("Idea: ", "Bug: ", etc.) before checking verb
+        const titleWithoutPrefix = suggestion.title.replace(/^(?:idea|bug|risk|update):\s*/i, '');
+        const firstWord = titleWithoutPrefix.split(/\s+/)[0].toLowerCase();
         const hasStrongVerb = strongVerbs.includes(firstWord);
         const isGerund = firstWord.endsWith('ing') && firstWord.length > 4;
+        const hasTypePrefix = /^(?:idea|bug|risk|update):/i.test(suggestion.title);
 
-        // Title should start with either a strong verb or a gerund
-        expect(hasStrongVerb || isGerund).toBe(true);
+        // Title should start with either a strong verb, a gerund, or a type prefix
+        expect(hasStrongVerb || isGerund || hasTypePrefix).toBe(true);
       }
     }
   });

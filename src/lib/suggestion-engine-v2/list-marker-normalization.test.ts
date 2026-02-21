@@ -46,8 +46,8 @@ describe('List Marker Normalization', () => {
 
     const suggestion = result.suggestions[0];
     expect(suggestion).toBeDefined();
-    // Now that "Add" is in PROPOSAL_VERBS_IDEA_ONLY, it anchors on the proposal line
-    expect(suggestion.title.toLowerCase()).toMatch(/^add/);
+    // Now that "Add" is in PROPOSAL_VERBS_IDEA_ONLY, it anchors on the proposal line (possibly with "Idea: " prefix)
+    expect(suggestion.title.toLowerCase()).toMatch(/^(?:idea:\s*)?add/i);
     expect(suggestion.title.toLowerCase()).toContain('required steps');
   });
 
@@ -214,8 +214,8 @@ Add boundary detection to catch edge cases. This improves reliability for produc
 
     const suggestion = result.suggestions[0];
     expect(suggestion).toBeDefined();
-    // Since "Add" is now in PROPOSAL_VERBS_IDEA_ONLY, it should anchor on the proposal line
-    expect(suggestion.title.toLowerCase()).toMatch(/^add/);
+    // Since "Add" is now in PROPOSAL_VERBS_IDEA_ONLY, it should anchor on the proposal line (possibly with "Idea: " prefix)
+    expect(suggestion.title.toLowerCase()).toMatch(/^(?:idea:\s*)?add/i);
     expect(suggestion.title.toLowerCase()).toContain('boundary detection');
   });
 
@@ -239,8 +239,8 @@ Add boundary detection to catch edge cases. This improves reliability for produc
 
     const suggestion = result.suggestions[0];
     expect(suggestion).toBeDefined();
-    // Now that "Add" is in PROPOSAL_VERBS_IDEA_ONLY, it anchors on the proposal line
-    expect(suggestion.title.toLowerCase()).toMatch(/^add/);
+    // Now that "Add" is in PROPOSAL_VERBS_IDEA_ONLY, it anchors on the proposal line (possibly with "Idea: " prefix)
+    expect(suggestion.title.toLowerCase()).toMatch(/^(?:idea:\s*)?add/i);
     expect(suggestion.title.toLowerCase()).toContain('required steps');
   });
 
@@ -281,8 +281,8 @@ Add dashboard for monitoring errors and improve visibility.
 
     const suggestion = result.suggestions[0];
     expect(suggestion).toBeDefined();
-    // Now that "Add" is in PROPOSAL_VERBS_IDEA_ONLY, it anchors on the proposal line
-    expect(suggestion.title.toLowerCase()).toMatch(/^add/);
+    // Now that "Add" is in PROPOSAL_VERBS_IDEA_ONLY, it anchors on the proposal line (possibly with "Idea: " prefix)
+    expect(suggestion.title.toLowerCase()).toMatch(/^(?:idea:\s*)?add/i);
     expect(suggestion.title.toLowerCase()).toContain('dashboard');
   });
 

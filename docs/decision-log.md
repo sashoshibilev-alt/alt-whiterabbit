@@ -1,5 +1,56 @@
 # Decision Log
 
+## 2026-02-21: Title Prefix Standardization — Stage 7, normalizeTitlePrefix
+
+### Context
+
+Emitted suggestion titles had inconsistent prefixes: `idea` and `bug` types emitted bare imperative titles ("Add CSV export", "Fix memory leak") while `project_update` always had "Update:" and `risk` had "Risk:" from B-signal seeding but not always from synthesis.
+
+### Decision
+
+Added `normalizeTitlePrefix(type, title)` and applied it in Stage 7 of `index.ts` (before `enforceTitleContract`, after routing). Re-apply `truncateTitleSmart` after normalization to keep ≤80 char limit.
+
+Stage 7 was chosen (rather than synthesis, B-signal, or dense-paragraph paths) because the previous decision log explicitly noted Stage 7 as the single authoritative place for title quality enforcement — covering all synthesis paths with one gate.
+
+### Alternatives Rejected
+
+- **Apply in each synthesis path (synthesis.ts, bSignalSeeding.ts, denseParagraphExtraction.ts)**: Rejected — would scatter the logic across three paths and risk missing future paths. Stage 7 already covers all of them.
+- **Apply only to types that lacked prefixes (idea, bug)**: Rejected — the normalizer is idempotent and handles mismatched prefixes too, so applying it uniformly is cleaner and safer.
+
+### Future Options Preserved
+
+- `normalizeTitlePrefix` is exported and can be called independently by tests or debug tooling.
+
+---
+
+## 2026-02-21: Title Quality Contract — Stage 7 Placement
+
+### Context
+
+The engine could emit "Update: Discussion They" — pronoun-only content after the prefix. This needed a last-resort quality gate that is guaranteed to apply to every emitted suggestion.
+
+### Decision
+
+Added `enforceTitleContract` as Stage 7 in `index.ts`, after routing and before `buildResult`. This placement guarantees:
+- It runs on exactly the suggestions that reach the user.
+- It does not interfere with validators, scoring, or routing.
+- It is the single authoritative place for title quality enforcement.
+
+Implemented in `title-normalization.ts` alongside the existing `normalizeSuggestionTitle` and `truncateTitleSmart` functions, as it is conceptually part of the same "title post-processing" layer.
+
+### Alternatives Rejected
+
+- **Enforce in `normalizeSuggestionTitle`**: Rejected because normalization runs before B-signal seeding and dense-paragraph extraction; malformed titles could still be introduced by those later stages.
+- **Add validation inside `validators.ts`**: Rejected because the existing validators (V2 anti-vacuity, V3 evidence sanity) are hard gates that drop candidates. A title contract should fix, not drop — the evidence may be fine even if the title is malformed.
+- **Enforce in synthesis per type**: Rejected because the contract needs to cover all synthesis paths (section synthesis, B-signal seeding, dense-paragraph extraction), making a single post-hoc gate cleaner than patching each path.
+
+### Future Options Preserved
+
+- The `enforceTitleContract` function is exported and can be called independently by the debug generator or tests.
+- The fallback content is derived from evidence tokens, so it remains grounded even if extraction improves.
+
+---
+
 ## 2026-02-21: Dense-Paragraph Section-Root Suppression — Stage 4.1 Placement
 
 ### Context

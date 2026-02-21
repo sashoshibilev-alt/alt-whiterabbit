@@ -34,6 +34,7 @@ import { routeSuggestions, computeRoutingStats } from './routing';
 import { seedCandidatesFromBSignals, resetBSignalCounter } from './bSignalSeeding';
 import { shouldSuppressProcessSentence } from './processNoiseSuppression';
 import { extractDenseParagraphCandidates, isDenseParagraphSection, resetDenseParagraphCounter } from './denseParagraphExtraction';
+import { enforceTitleContract, normalizeTitlePrefix, truncateTitleSmart } from './title-normalization';
 
 // Re-export types
 export * from './types';
@@ -80,6 +81,7 @@ export {
 export { groupSuggestionsForDisplay } from './presentation';
 export type { SuggestionBucket, GroupedSuggestions, GroupSuggestionsOptions } from './presentation';
 export { routeSuggestions, routeSuggestion, computeRoutingStats } from './routing';
+export { enforceTitleContract, normalizeTitlePrefix } from './title-normalization';
 export {
   evaluateNote,
   evaluateBatch,
@@ -522,7 +524,22 @@ export function generateSuggestions(
   debug.routing_attached = routingStats.attached;
   debug.routing_create_new = routingStats.create_new;
 
-  return buildResult(routedSuggestions, debug, finalConfig.enable_debug);
+  // ============================================
+  // Stage 7: Title Quality Contract
+  // ============================================
+  // Applied last — after all prior filtering, scoring, and routing — so it
+  // only touches titles that actually reach the user.  Replaces malformed
+  // titles (pronoun-only, generic-only) with deterministic fallbacks derived
+  // from evidence tokens.  No invented content; canonical gold titles pass
+  // unchanged.
+  const contractedSuggestions = routedSuggestions.map(s => {
+    const prefixedTitle = truncateTitleSmart(normalizeTitlePrefix(s.type, s.title), 80);
+    const enforcedTitle = enforceTitleContract(s.type, prefixedTitle, s.evidence_spans);
+    if (enforcedTitle === s.title) return s;
+    return { ...s, title: enforcedTitle };
+  });
+
+  return buildResult(contractedSuggestions, debug, finalConfig.enable_debug);
 }
 
 /**

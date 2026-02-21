@@ -1,5 +1,91 @@
 # Current State
 
+## Title Prefix Standardization — Stage 7 (2026-02-21)
+
+**Files**: `title-normalization.ts`, `index.ts`, `title-contract.test.ts`
+
+### Problem
+
+Emitted suggestion titles had inconsistent prefixes by type:
+- `project_update` / `plan_change`: already had "Update:"
+- `risk`: had "Risk:" from bSignalSeeding, but bare titles from synthesis
+- `idea`: had bare imperative verbs (no prefix)
+- `bug`: had bare "Fix …" (no prefix)
+
+### Solution
+
+Added `normalizeTitlePrefix(type, title)` to `title-normalization.ts`, applied in Stage 7 of `index.ts` before `enforceTitleContract`. After prefix normalization, `truncateTitleSmart` is re-applied to keep titles within 80 chars.
+
+**Contract:**
+- `project_update` / `plan_change` → "Update: <content>"
+- `risk` → "Risk: <content>"
+- `idea` → "Idea: <content>"
+- `bug` → "Bug: <content>"
+
+**Rules (idempotent):**
+1. If title already has correct prefix (case-insensitive match) → normalise casing only.
+2. If title has a wrong prefix (e.g. "Update: ..." for a risk) → replace prefix, keep content.
+3. If title has no known prefix → prepend expected prefix.
+4. No double prefixes — applying twice produces the same result.
+
+### Invariants Preserved
+
+- **Canonical gold title** `"Update: V1 launch 12th → 19th"` passes unchanged.
+- **plan_change invariant** "Update: <X>" is preserved.
+- No synthesis logic, thresholds, or classifiers changed.
+
+### Tests
+
+**File**: `title-contract.test.ts` (12 new tests added, 29 total)
+- Each type: bare title gets correct prefix.
+- Mismatched prefix is replaced (e.g., "Update: GDPR..." for risk → "Risk: GDPR...").
+- No double prefixes after repeated application (idempotent).
+- Canonical gold title passes unchanged.
+
+---
+
+## Title Quality Contract — Stage 7 (2026-02-21)
+
+**Files**: `title-normalization.ts`, `index.ts`, `title-contract.test.ts`
+
+### Problem
+
+The synthesis pipeline could produce titles like "Update: Discussion They" — where the content portion after the prefix consists entirely of pronouns ("They", "We") or generic words ("Discussion", "General") with no concrete entity. These titles are uninformative and confusing.
+
+### Solution
+
+Added `enforceTitleContract(type, title, evidenceSpans)` to `title-normalization.ts`. This is applied as **Stage 7** in `index.ts` — the last step before `buildResult`, after routing — so it only touches suggestions that actually reach the user.
+
+**Contract (applied to content portion, after any prefix like "Update:"):**
+1. Strip leading stopwords/pronouns from the content.
+2. Require ≥3 meaningful tokens (excluding stopwords/pronouns/generics).
+3. Reject content where every token is a pronoun or generic word.
+4. On failure: apply a deterministic fallback by type, derived from evidence tokens only.
+
+**Fallback by type:**
+- `project_update`: `"<entity> <delta>"` if entity + delta tokens exist; `"<entity> delayed"` if entity only; `"Timeline adjustment identified"` if no evidence tokens.
+- `risk`: `"<entity> risk identified"` or `"Risk identified"`
+- `idea`: `"<entity> improvement"` or `"Idea identified"`
+- `bug`: `"<entity> issue"` or `"Bug identified"`
+
+### Invariants Preserved
+
+- **Canonical gold title** `"Update: V1 launch 12th → 19th"` passes unchanged (has 4 meaningful tokens).
+- **No invented content**: fallback entity extraction uses evidence span tokens only.
+- **No threshold/classifier changes**: purely post-processing on the title string.
+- **Prefix preserved**: "Update:", "Risk:", etc. are kept; only the content portion is validated.
+
+### Tests
+
+**File**: `title-contract.test.ts` (17 tests, all passing)
+- Pronoun-only content replaced: "Update: Discussion They", "Update: They We", etc.
+- Canonical gold title "Update: V1 launch 12th → 19th" passes unchanged.
+- Fallbacks are grounded in evidence tokens (no invented entities).
+- Type-generic fallbacks when evidence is empty.
+- Regression guard: no emitted title matches the "Update: Discussion They" pattern.
+
+---
+
 ## Dense-Paragraph Section-Root Suppression (Stage 4.1) (2026-02-21)
 
 **Files**: `index.ts`, `golden-dense-paragraph-cloudscale.test.ts`
