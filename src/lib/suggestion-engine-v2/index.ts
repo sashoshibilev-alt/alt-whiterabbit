@@ -32,7 +32,7 @@ import { runQualityValidators } from './validators';
 import { runScoringPipeline, refineSuggestionScores } from './scoring';
 import { routeSuggestions, computeRoutingStats } from './routing';
 import { seedCandidatesFromBSignals, resetBSignalCounter } from './bSignalSeeding';
-import { isProcessNoiseSentence } from './processNoiseSuppression';
+import { shouldSuppressProcessSentence } from './processNoiseSuppression';
 
 // Re-export types
 export * from './types';
@@ -66,15 +66,18 @@ export {
   validateV2AntiVacuity,
   validateV3EvidenceSanity,
 } from './validators';
-export { 
-  runScoringPipeline, 
-  refineSuggestionScores, 
+export {
+  runScoringPipeline,
+  refineSuggestionScores,
   passesThresholds,
   isPlanChangeSuggestion,
   isHighConfidence,
   computeClarificationReasons,
   applyConfidenceBasedProcessing,
+  rankingScore,
 } from './scoring';
+export { groupSuggestionsForDisplay } from './presentation';
+export type { SuggestionBucket, GroupedSuggestions, GroupSuggestionsOptions } from './presentation';
 export { routeSuggestions, routeSuggestion, computeRoutingStats } from './routing';
 export {
   evaluateNote,
@@ -376,7 +379,7 @@ export function generateSuggestions(
       '';
     const titleText = suggestion.title;
 
-    if (isProcessNoiseSentence(evidenceText) || isProcessNoiseSentence(titleText)) {
+    if (shouldSuppressProcessSentence(evidenceText) || shouldSuppressProcessSentence(titleText)) {
       debug.dropped_suggestions.push({
         section_id: suggestion.section_id,
         reason: 'PROCESS_NOISE',
@@ -405,8 +408,10 @@ export function generateSuggestions(
   debug.plan_change_emitted_count = planChangeAfterScoring;
   debug.high_confidence_count = scoringResult.suggestions.filter(s => s.is_high_confidence).length;
   
-  // Verify invariant: all plan_change suggestions must be emitted
-  debug.invariant_plan_change_always_emitted = (planChangeBeforeScoring === planChangeAfterScoring);
+  // Verify invariant: plan_change suggestions must never be dropped by scoring.
+  // planChangeAfterScoring may exceed planChangeBeforeScoring when scoring normalizes
+  // idea-typed candidates to project_update — that is correct behavior, not a violation.
+  debug.invariant_plan_change_always_emitted = (planChangeAfterScoring >= planChangeBeforeScoring);
   if (!debug.invariant_plan_change_always_emitted) {
     console.error('INVARIANT VIOLATED: plan_change suggestions were dropped by scoring!',
       `Before: ${planChangeBeforeScoring}, After: ${planChangeAfterScoring}`);

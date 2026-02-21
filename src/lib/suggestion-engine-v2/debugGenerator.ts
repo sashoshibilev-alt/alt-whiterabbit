@@ -39,7 +39,7 @@ import {
 import { runQualityValidators } from "./validators";
 import { runScoringPipeline } from "./scoring";
 import { routeSuggestions } from "./routing";
-import { isProcessNoiseSentence } from "./processNoiseSuppression";
+import { shouldSuppressProcessSentence } from "./processNoiseSuppression";
 
 // ============================================
 // Debug Generator Options
@@ -969,7 +969,7 @@ export function generateSuggestionsWithDebug(
         '';
       const titleText = suggestion.title;
 
-      if (isProcessNoiseSentence(evidenceText) || isProcessNoiseSentence(titleText)) {
+      if (shouldSuppressProcessSentence(evidenceText) || shouldSuppressProcessSentence(titleText)) {
         if (ledger) {
           ledger.dropCandidateById(suggestion.suggestion_id, DropReason.PROCESS_NOISE);
         }

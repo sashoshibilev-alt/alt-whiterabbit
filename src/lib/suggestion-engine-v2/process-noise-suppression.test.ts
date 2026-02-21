@@ -403,6 +403,14 @@ We need to add multi-factor authentication support.
   it('"legal to" shorthand allowlist: Legal to review is NOT suppressed', () => {
     expect(isProcessNoiseSentence('Legal to review the handover documentation.')).toBe(false);
   });
+
+  // Regression test: exact sentence from task spec must not be suppressed.
+  // This sentence contains "sign-off" (noise phrase) AND "SOC2" (amplifier), but
+  // the allowlist pattern \bsecurity\s+to\s+\w/i matches "Security to audit", so
+  // shouldSuppressProcessSentence must return false.
+  it('regression: "Security to audit the SOC2 sign-off flow" is NOT suppressed', () => {
+    expect(isProcessNoiseSentence('Security to audit the SOC2 sign-off flow')).toBe(false);
+  });
 });
 
 // ============================================

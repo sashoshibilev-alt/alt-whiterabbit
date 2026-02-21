@@ -162,7 +162,14 @@ export default defineSchema({
   // Suggestions table - AI-generated suggestions linked to notes
   suggestions: defineTable({
     noteId: v.id("notes"), // FK to notes
-    content: v.string(), // The suggestion text
+    content: v.string(), // The suggestion text (legacy; kept for backward compatibility)
+    // Structured suggestion fields (v2 engine output)
+    suggestionType: v.optional(v.union(v.literal("idea"), v.literal("project_update"))),
+    title: v.optional(v.string()),
+    body: v.optional(v.string()),
+    evidencePreview: v.optional(v.string()),
+    sourceSectionId: v.optional(v.string()),
+    suggestionKey: v.optional(v.string()),
     status: suggestionStatusValidator, // new, applied, dismissed
     createdAt: v.number(),
     appliedAt: v.optional(v.number()),

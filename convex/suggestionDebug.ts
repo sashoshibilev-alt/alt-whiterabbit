@@ -343,19 +343,26 @@ export const createDebugRun = action({
     // Optionally persist suggestions to the suggestions table
     let suggestionsCreated = 0;
     if (args.persistSuggestions && result.suggestions.length > 0) {
-      // Extract suggestion content (title) from the generated suggestions
-      const suggestionContents = result.suggestions.map(s => s.title);
-      
-      // Store suggestions using the same mutation as Regenerate
+      // Build structured suggestion records from v2 engine output
+      const suggestionRecords = result.suggestions.map(s => ({
+        type: s.type as "idea" | "project_update",
+        title: s.title,
+        body: s.suggestion?.body ?? s.payload.after_description ?? s.payload.draft_initiative?.description ?? "",
+        evidencePreview: s.suggestion?.evidencePreview?.[0] ?? s.evidence_spans?.[0]?.text ?? "",
+        sourceSectionId: s.section_id,
+        suggestionKey: s.suggestionKey,
+      }));
+
+      // Store suggestions using the same mutation as generate/regenerate
       const suggestionIds = await ctx.runMutation(internal.suggestions.storeSuggestions, {
         noteId: args.noteId,
-        suggestions: suggestionContents,
+        suggestions: suggestionRecords,
         modelVersion: "suggestion-engine-v2-debug",
         regenerated: false,
         noteVersion: note.updatedAt,
         suggestionFamily: "debug-run",
       });
-      
+
       suggestionsCreated = suggestionIds.length;
     }
 

@@ -320,11 +320,26 @@ export const DEFAULT_THRESHOLDS: ThresholdConfig = {
 };
 
 /**
+ * Display configuration (UI hint only — not used by the engine for dropping).
+ * Pass to presentation.groupSuggestionsForDisplay() to get bucketed + collapsed output.
+ */
+export interface DisplayConfig {
+  /** Number of suggestions to show per bucket before collapsing to "+N more". Default: 5. */
+  defaultCapPerType: number;
+}
+
+/**
  * Generator configuration
  */
 export interface GeneratorConfig {
   thresholds: ThresholdConfig;
+  /**
+   * @deprecated UI hint only. The engine no longer caps suggestions.
+   * Use display.defaultCapPerType with groupSuggestionsForDisplay() instead.
+   */
   max_suggestions: number;
+  /** Display cap config passed through to the presentation layer. */
+  display?: DisplayConfig;
   enable_debug: boolean;
   use_llm_classifiers: boolean; // false = rule-based only
   embedding_enabled: boolean; // for routing
@@ -335,7 +350,8 @@ export interface GeneratorConfig {
  */
 export const DEFAULT_CONFIG: GeneratorConfig = {
   thresholds: DEFAULT_THRESHOLDS,
-  max_suggestions: 5,
+  max_suggestions: 5, // UI hint only; engine is uncapped
+  display: { defaultCapPerType: 5 },
   enable_debug: false,
   use_llm_classifiers: false,
   embedding_enabled: false,

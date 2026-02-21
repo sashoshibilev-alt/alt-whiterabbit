@@ -514,8 +514,23 @@ export function capSuggestions(
 // ============================================
 
 /**
+ * Compute ranking score for a suggestion.
+ * Applies anchor ranking delta on top of the base overall score.
+ * Used for stable output ordering (and by presentation.ts for display bucketing).
+ *
+ * NOTE: This does NOT affect actionability gating — only candidate ordering.
+ */
+export function rankingScore(s: Suggestion): number {
+  const anchorText = s.evidence_spans[0]?.text ?? s.suggestion?.evidencePreview?.[0] ?? '';
+  return s.scores.overall + computeAnchorRankingDelta(anchorText);
+}
+
+/**
  * Run full scoring and pruning pipeline
- * 
+ *
+ * Engine is uncapped: returns ALL suggestions that pass validators → scoring → dedupe.
+ * UI uses the presentation helper (presentation.ts) to cap display at defaultCapPerType.
+ *
  * Per suggestion-suppression-fix plan:
  * - project_update suggestions are NEVER dropped due to low scores
  * - Low confidence downgrades to needs_clarification
@@ -524,9 +539,6 @@ export function capSuggestions(
  * NORMALIZATION: Ensures suggestion.type matches section intent label.
  * If a plan_change section was mis-typed as idea, we normalize
  * it to project_update to ensure proper THRESHOLD handling.
- *
- * CAPPING: project_update suggestions are always kept; only idea
- * suggestions can be capped if total exceeds max_suggestions.
  */
 export function runScoringPipeline(
   suggestions: Suggestion[],
@@ -589,79 +601,26 @@ export function runScoringPipeline(
   // 3) Apply confidence-based processing (respects plan_change + actionable invariants)
   const { passed, dropped, downgraded } = applyConfidenceBasedProcessing(scored, config.thresholds, sections);
 
-  // 4) Separate project_update from idea types for quota-aware selection
-  const projectUpdates = passed.filter(s => s.type === 'project_update');
-  const ideas = passed.filter(s => s.type !== 'project_update');
-
-  // 5) Sort each group by score, applying anchor ranking delta during sort.
-  // computeAnchorRankingDelta is applied here (not in computeSectionActionability)
-  // so it influences candidate ordering but never affects actionability gating.
-  function rankingScore(s: Suggestion): number {
-    const anchorText = s.evidence_spans[0]?.text ?? s.suggestion?.evidencePreview?.[0] ?? '';
-    return s.scores.overall + computeAnchorRankingDelta(anchorText);
-  }
+  // 4) Sort by ranking score: project_update suggestions first, then ideas.
+  //    computeAnchorRankingDelta is applied here (not in computeSectionActionability)
+  //    so it influences candidate ordering but never affects actionability gating.
   function sortByRankingScore(arr: Suggestion[]): Suggestion[] {
     return [...arr].sort((a, b) => rankingScore(b) - rankingScore(a));
   }
 
-  const sortedProjectUpdates = sortByRankingScore(projectUpdates);
-  const sortedIdeas = sortByRankingScore(ideas);
+  const projectUpdates = passed.filter(s => s.type === 'project_update');
+  const ideas = passed.filter(s => s.type !== 'project_update');
 
-  // 6) Quota-based selection:
-  //    Rule 1 — If any project_update exists, guarantee 1 slot for the highest-scoring one.
-  //    Rule 2 — If any risk (metadata.label === 'risk') exists among project_updates,
-  //              guarantee 1 slot for the highest-scoring risk (unless same as Rule 1 pick).
-  //    Rule 3 — Fill remaining slots from the global sorted list (all types), excluding
-  //              already-chosen suggestions.
-  //    If max_suggestions === 1, project_update takes precedence over risk.
-  const guaranteed: Suggestion[] = [];
-  const guaranteedIds = new Set<string>();
-
-  // Rule 1: highest-scoring project_update
-  if (sortedProjectUpdates.length > 0) {
-    const topUpdate = sortedProjectUpdates[0];
-    guaranteed.push(topUpdate);
-    guaranteedIds.add(topUpdate.suggestion_id);
-  }
-
-  // Rule 2: highest-scoring risk (only if we have budget for it)
-  if (config.max_suggestions > guaranteed.length) {
-    const sortedRisks = sortedProjectUpdates.filter(s => s.metadata?.label === 'risk');
-    if (sortedRisks.length > 0) {
-      const topRisk = sortedRisks[0];
-      if (!guaranteedIds.has(topRisk.suggestion_id)) {
-        guaranteed.push(topRisk);
-        guaranteedIds.add(topRisk.suggestion_id);
-      }
-    }
-  }
-
-  // Rule 3: fill remaining slots from global sorted list, excluding already-chosen
-  const remainingSlots = Math.max(0, config.max_suggestions - guaranteed.length);
-  const globalSorted = sortByRankingScore([...sortedProjectUpdates, ...sortedIdeas]);
-  const fillCandidates = globalSorted.filter(s => !guaranteedIds.has(s.suggestion_id));
-  const filled = fillCandidates.slice(0, remainingSlots);
-
-  // 7) Preserve output ordering contract: project_update suggestions first (sorted by
-  // ranking score), then idea suggestions (sorted by ranking score).
-  // Do NOT globally re-sort across types — this preserves the stable grouping contract.
-  const keptIds = new Set([...guaranteed.map(s => s.suggestion_id), ...filled.map(s => s.suggestion_id)]);
-  const capped = [
-    ...sortedProjectUpdates.filter(s => keptIds.has(s.suggestion_id)),
-    ...sortedIdeas.filter(s => keptIds.has(s.suggestion_id)),
+  // 5) Return ALL passing suggestions (engine uncapped; UI uses presentation helper to cap display).
+  //    Output ordering: project_update first (sorted by ranking score), then ideas (sorted by ranking score).
+  const allPassed = [
+    ...sortByRankingScore(projectUpdates),
+    ...sortByRankingScore(ideas),
   ];
 
-  // Mark dropped suggestions beyond cap
-  const cappedDropped = [...sortedProjectUpdates, ...sortedIdeas]
-    .filter(s => !keptIds.has(s.suggestion_id))
-    .map((s) => ({
-      suggestion: s,
-      reason: 'Exceeded max_suggestions limit',
-    }));
-
   return {
-    suggestions: capped,
-    dropped: [...dropped, ...cappedDropped],
+    suggestions: allPassed,
+    dropped,
     downgraded_to_clarification: downgraded,
   };
 }
