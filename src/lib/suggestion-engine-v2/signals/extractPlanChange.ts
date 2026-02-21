@@ -6,12 +6,18 @@ const TIME_MILESTONE = /\b(date|q[1-4]|launch|release|v1)\b/i;
 // Shift verbs indicating a plan change (base forms and gerunds)
 const SHIFT_VERBS = /\b(push(?:ing|ed)?|delay(?:ing|ed)?|mov(?:e|ing|ed)|slip(?:ping|ped)?|pull(?:ing|ed)?)\b/i;
 
+// Conditional markers: if present, sentence describes a risk, not a plan change
+const CONDITIONAL_TOKENS = /\b(if|unless|might|could|may)\b/i;
+
 /**
  * Extracts PLAN_CHANGE signals from a list of sentences.
  *
  * Triggers when:
  * - Sentence references a time or milestone (date, Q1–Q4, launch, release, v1)
  * - AND contains a shift verb (push, delay, move, slip, pull)
+ * - AND is NOT conditional (if/unless/might/could/may)
+ *
+ * Conditional sentences ("might be pulled from the release") are SCOPE_RISK, not PLAN_CHANGE.
  *
  * Confidence: base 0.75.
  */
@@ -25,9 +31,14 @@ export function extractPlanChange(sentences: string[]): Signal[] {
       continue;
     }
 
+    // Conditional sentences are risks, not plan changes
+    if (CONDITIONAL_TOKENS.test(sentence)) {
+      continue;
+    }
+
     signals.push({
       signalType: "PLAN_CHANGE",
-      label: "update",
+      label: "project_update",
       proposedType: "project_update",
       confidence: 0.75,
       sentence,

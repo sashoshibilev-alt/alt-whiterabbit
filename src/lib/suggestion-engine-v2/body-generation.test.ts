@@ -777,11 +777,11 @@ This aligns better with market opportunities.
     const title = suggestion.title;
 
     // Title should use fallback behavior (not impact-based)
-    // Should be "Update Leadership Alignment plan" or change-pattern based
+    // Guard against legacy PLAN_CHANGE format ("Update <X> plan").
+    // Titles now follow the standardized "Update: <X>" convention.
     expect(title.length).toBeGreaterThan(10);
 
     // This is a fallback case, so we accept current template behavior
-    // Could be "Update Leadership Alignment plan" or "Project update: SMB focus"
     expect(title).toMatch(/update|shift|leadership|alignment|smb/i);
   });
 

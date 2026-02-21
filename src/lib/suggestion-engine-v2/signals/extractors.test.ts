@@ -20,7 +20,7 @@ describe("extractPlanChange", () => {
     const signals = extractPlanChange(sentences);
 
     expect(signals).toHaveLength(1);
-    expect(signals[0].label).toBe("update");
+    expect(signals[0].label).toBe("project_update");
     expect(signals[0].confidence).toBeGreaterThanOrEqual(0.75);
   });
 });

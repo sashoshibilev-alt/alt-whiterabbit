@@ -295,20 +295,19 @@ export function generateSuggestions(
 
   debug.suggestions_after_validation = validatedSuggestions.length;
 
-  if (validatedSuggestions.length === 0) {
-    return buildResult([], debug, finalConfig.enable_debug);
-  }
+  // Note: do NOT early-exit here even if validatedSuggestions is empty.
+  // B-signal seeding (Stage 4.5) runs for all actionable sections and may
+  // produce bug/risk candidates even when normal synthesis was fully suppressed.
 
   // ============================================
   // Stage 4.5: B-Signal Candidate Seeding (additive)
   // ============================================
-  // For each actionable section that produced at least one validated candidate,
-  // extract B-signals and append novel candidates (those not already covered by
-  // existing evidence) to the validated list.
-  // Gated on validated candidates to respect suppression logic from stages 1–4.
-  const validatedSectionIds = new Set(validatedSuggestions.map(s => s.section_id));
+  // For each actionable section, extract B-signals and append novel candidates
+  // (those not already covered by existing evidence) to the validated list.
+  // Runs for ALL actionable sections — not just those with validated candidates.
+  // This ensures bug/risk B-signals are emitted even when normal synthesis is
+  // dropped by V4 (heading-only) or other validators for that section.
   for (const section of expandedSections) {
-    if (!validatedSectionIds.has(section.section_id)) continue;
 
     // Collect evidence texts already covered by existing validated candidates for this section
     const coveredTexts = new Set<string>();

@@ -43,11 +43,13 @@ export function resetBSignalCounter(): void {
 function extractObjectFromSentence(sentence: string): string | null {
   // Match: <trigger verb> <object phrase>
   const match = sentence.match(
-    /\b(?:need|needs|require|requires|want|wants|implement|build|add|fix|push(?:ing)?|pull(?:ing)?|slip(?:ping)?|fail(?:ing)?|block(?:ing)?)\s+([^.,;!?\n]{3,60})/i
+    /\b(?:need|needs|require|requires|want|wants|requesting|asking\s+for|screaming\s+for|implement|build|add|fix|push(?:ing)?|pull(?:ing)?|slip(?:ping)?|fail(?:ing)?|block(?:ing)?)\s+([^.,;!?\n]{3,120})/i
   );
   if (!match) return null;
 
   let obj = match[1].trim();
+  // Stop at common clause boundaries so titles stay clean
+  obj = obj.split(/\bbut\b|\buntil\b|\bbecause\b|\bso\b|\bwhen\b|\bunless\b/i)[0].trim();
   // Remove leading articles
   obj = obj.replace(/^(a|an|the)\s+/i, '');
   // Trim to word boundary at 50 chars
@@ -70,9 +72,9 @@ export function titleFromSignal(signal: Signal): string {
     case 'FEATURE_DEMAND':
       return obj ? `Implement ${obj}` : 'Implement requested feature';
     case 'PLAN_CHANGE':
-      return obj ? `Update ${obj} plan` : 'Update project plan';
+      return obj ? `Update: ${obj}` : 'Update: project plan';
     case 'SCOPE_RISK':
-      return obj ? `Mitigate risk to ${obj}` : 'Mitigate release risk';
+      return obj ? `Risk: ${obj}` : 'Mitigate release risk';
     case 'BUG':
       return obj ? `Fix ${obj} issue` : 'Fix reported issue';
   }
@@ -147,6 +149,7 @@ function candidateFromSignal(signal: Signal, section: ClassifiedSection): Sugges
       type: signal.proposedType,
       label: signal.label,
       confidence: signal.confidence,
+      explicitType: true,
     },
     suggestion: suggestionContext,
   };
