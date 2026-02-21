@@ -9,17 +9,18 @@ import { generateSuggestions, adaptConvexNote, adaptConvexInitiative } from "../
 // ============================================
 
 /**
- * Compute a fingerprint for a suggestion to detect duplicates
- * Based on the first 100 chars of normalized content
+ * Compute a fingerprint for a suggestion to detect duplicates.
+ * For structured suggestions: based on `${type}::${title}::${body}` (normalized).
+ * For legacy string suggestions: based on first 100 chars of normalized content.
  */
 function computeSuggestionFingerprint(content: string): string {
   const normalized = content
     .toLowerCase()
     .replace(/\s+/g, ' ')
-    .replace(/[^\w\s]/g, '')
+    .replace(/[^\w\s:]/g, '')
     .trim()
-    .substring(0, 100);
-  
+    .substring(0, 200);
+
   // Simple hash (for deduplication, not cryptographic security)
   let hash = 0;
   for (let i = 0; i < normalized.length; i++) {
@@ -29,6 +30,22 @@ function computeSuggestionFingerprint(content: string): string {
   }
   return hash.toString(36);
 }
+
+function computeStructuredFingerprint(type: string, title: string, body: string): string {
+  return computeSuggestionFingerprint(`${type}::${title}::${body}`);
+}
+
+/**
+ * Structured suggestion record from the v2 engine.
+ */
+type SuggestionRecord = {
+  type: "idea" | "project_update";
+  title: string;
+  body: string;
+  evidencePreview: string;
+  sourceSectionId?: string;
+  suggestionKey?: string;
+};
 
 const dismissReasonValidator = v.union(
   v.literal("not_relevant"),
@@ -76,12 +93,23 @@ export const get = query({
   },
 });
 
+// Validator for a structured suggestion record
+const suggestionRecordValidator = v.object({
+  type: v.union(v.literal("idea"), v.literal("project_update")),
+  title: v.string(),
+  body: v.string(),
+  evidencePreview: v.string(),
+  sourceSectionId: v.optional(v.string()),
+  suggestionKey: v.optional(v.string()),
+});
+
 // Internal mutation to store suggestions (called from action)
 // v0-correct: Now includes fingerprint and note version tracking
+// Accepts structured SuggestionRecord[] with type/title/body/evidencePreview.
 export const storeSuggestions = internalMutation({
   args: {
     noteId: v.id("notes"),
-    suggestions: v.array(v.string()),
+    suggestions: v.array(suggestionRecordValidator),
     modelVersion: v.string(),
     regenerated: v.optional(v.boolean()),
     noteVersion: v.optional(v.number()),
@@ -94,13 +122,21 @@ export const storeSuggestions = internalMutation({
   handler: async (ctx, args) => {
     const now = Date.now();
     const ids = [];
-    
-    for (const content of args.suggestions) {
-      const fingerprint = computeSuggestionFingerprint(content);
-      
+
+    for (const rec of args.suggestions) {
+      const fingerprint = computeStructuredFingerprint(rec.type, rec.title, rec.body);
+      // Use title as the legacy content field for any existing queries that read it
+      const content = rec.title;
+
       const id = await ctx.db.insert("suggestions", {
         noteId: args.noteId,
         content,
+        suggestionType: rec.type,
+        title: rec.title,
+        body: rec.body,
+        evidencePreview: rec.evidencePreview,
+        sourceSectionId: rec.sourceSectionId,
+        suggestionKey: rec.suggestionKey,
         status: "new",
         createdAt: now,
         modelVersion: args.modelVersion,
@@ -111,11 +147,11 @@ export const storeSuggestions = internalMutation({
         clarificationPrompt: args.clarificationPrompt,
         modelConfidenceScore: args.modelConfidenceScore,
         ruleOrPromptId: args.ruleOrPromptId || args.modelVersion,
-        suggestionFamily: args.suggestionFamily || "general",
-        estimatedDiffSize: "medium", // Default, can be computed based on content
+        suggestionFamily: args.suggestionFamily || rec.type,
+        estimatedDiffSize: "medium",
       });
       ids.push(id);
-      
+
       // Log suggestion_generated event
       await ctx.db.insert("suggestionEvents", {
         noteId: args.noteId,
@@ -123,12 +159,12 @@ export const storeSuggestions = internalMutation({
         eventType: "generated",
         createdAt: now,
         uiSurface: "backend_generation",
-        suggestionFamily: args.suggestionFamily || "general",
+        suggestionFamily: args.suggestionFamily || rec.type,
         ruleOrPromptId: args.ruleOrPromptId || args.modelVersion,
         clarificationState: args.clarificationState || "none",
       });
     }
-    
+
     return ids;
   },
 });
@@ -520,7 +556,6 @@ export const generate = action({
       noteInput,
       { initiatives },
       {
-        max_suggestions: 3,
         thresholds: {
           T_overall_min: 0.65,
           T_section_min: 0.6,
@@ -528,23 +563,30 @@ export const generate = action({
       }
     );
 
-    const suggestionContents = result.suggestions.map(s => s.title);
+    const records: SuggestionRecord[] = result.suggestions.map(s => ({
+      type: s.type,
+      title: s.title,
+      body: s.suggestion?.body ?? s.payload.after_description ?? s.payload.draft_initiative?.description ?? "",
+      evidencePreview: s.suggestion?.evidencePreview?.[0] ?? s.evidence_spans?.[0]?.text ?? "",
+      sourceSectionId: s.section_id,
+      suggestionKey: s.suggestionKey,
+    }));
 
     // If the engine produces no suggestions, return early (this is expected behavior)
-    if (suggestionContents.length === 0) {
+    if (records.length === 0) {
       return 0;
     }
-    
+
     // Store the suggestions
     await ctx.runMutation(internal.suggestions.storeSuggestions, {
       noteId: args.noteId,
-      suggestions: suggestionContents,
+      suggestions: records,
       modelVersion: "suggestion-engine-v2.0",
       regenerated: false,
       noteVersion: note.updatedAt,
     });
 
-    return suggestionContents.length;
+    return records.length;
   },
 });
 
@@ -591,7 +633,6 @@ export const regenerate = action({
       noteInput,
       { initiatives },
       {
-        max_suggestions: 3,
         thresholds: {
           T_overall_min: 0.65,
           T_section_min: 0.6,
@@ -599,10 +640,19 @@ export const regenerate = action({
       }
     );
 
-    const freshSuggestionContents = result.suggestions.map(s => s.title);
+    const freshRecords: SuggestionRecord[] = result.suggestions.map(s => ({
+      type: s.type,
+      title: s.title,
+      body: s.suggestion?.body ?? s.payload.after_description ?? s.payload.draft_initiative?.description ?? "",
+      evidencePreview: s.suggestion?.evidencePreview?.[0] ?? s.evidence_spans?.[0]?.text ?? "",
+      sourceSectionId: s.section_id,
+      suggestionKey: s.suggestionKey,
+    }));
 
-    // Compute fingerprints for fresh suggestions
-    const freshFingerprints = freshSuggestionContents.map(computeSuggestionFingerprint);
+    // Compute fingerprints for fresh suggestions using the new structured scheme
+    const freshFingerprints = freshRecords.map(r =>
+      computeStructuredFingerprint(r.type, r.title, r.body)
+    );
 
     // Filter out suggestions that were previously dismissed (if note hasn't changed)
     const previousDismissedFingerprints = new Set<string>();
@@ -621,29 +671,29 @@ export const regenerate = action({
     }
 
     // Filter fresh suggestions to exclude previously dismissed ones (if note unchanged)
-    const suggestionsToStore: string[] = [];
-    for (let i = 0; i < freshSuggestionContents.length; i++) {
-      const content = freshSuggestionContents[i];
+    const recordsToStore: SuggestionRecord[] = [];
+    for (let i = 0; i < freshRecords.length; i++) {
+      const rec = freshRecords[i];
       const fingerprint = freshFingerprints[i];
-      
+
       if (previousDismissedFingerprints.has(fingerprint)) {
         // Skip this suggestion - it was dismissed and note hasn't changed
         continue;
       }
-      
-      suggestionsToStore.push(content);
+
+      recordsToStore.push(rec);
     }
 
     // Count previous new suggestions for comparison
     const previousNewCount = existingSuggestions.filter(s => s.status === "new").length;
-    const newCount = suggestionsToStore.length;
+    const newCount = recordsToStore.length;
 
     // Store the regenerated suggestions
-    if (suggestionsToStore.length > 0) {
+    if (recordsToStore.length > 0) {
       await ctx.runMutation(internal.suggestions.storeSuggestions, {
         noteId: args.noteId,
-        suggestions: suggestionsToStore,
-        modelVersion: "suggestion-engine-v1.0-regenerate",
+        suggestions: recordsToStore,
+        modelVersion: "suggestion-engine-v2.0-regenerate",
         regenerated: true,
         noteVersion: note.updatedAt,
       });
