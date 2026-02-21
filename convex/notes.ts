@@ -118,9 +118,12 @@ export const getWithComputedSuggestions = action({
         modelVersion: "v2-engine",
         suggestionFamily: engineSug.type,
         modelConfidenceScore: engineSug.scores.overall,
-        // Add the structured suggestion context
+        // Add the structured suggestion context.
+        // Always use engineSug.title (Stage-7 canonical) for the suggestion.title
+        // field so the UI renders the final prefixed/contracted title rather than
+        // the raw pre-Stage-7 SuggestionContext title.
         suggestion: engineSug.suggestion ? {
-          title: engineSug.suggestion.title,
+          title: engineSug.title,
           body: engineSug.suggestion.body,
           evidencePreview: engineSug.suggestion.evidencePreview,
           sourceSectionId: engineSug.suggestion.sourceSectionId,

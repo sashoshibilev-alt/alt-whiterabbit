@@ -742,6 +742,64 @@ export function normalizeTitlePrefix(type: string, title: string): string {
 }
 
 /**
+ * Strip a user-facing type prefix (e.g. "Update: ", "Risk: ", "Idea: ", "Bug: ")
+ * from the start of a title. Returns the bare content portion, or the original
+ * string if no type prefix is found.
+ *
+ * Intentionally uses USER_FACING_PREFIXES, NOT KNOWN_TITLE_PREFIXES, so that
+ * content prefixes like "Action items:" are preserved and not mistakenly removed.
+ * Stage 7 calls this before normalizeTitlePrefix to let it re-attach the correct
+ * type prefix — only stripping the type-level marker, never content markers.
+ */
+export function stripKnownPrefix(title: string): string {
+  const match = title.match(USER_FACING_PREFIXES);
+  if (match) return title.slice(match[0].length);
+  return title;
+}
+
+// ============================================
+// Delta-in-title enrichment for project_update
+// ============================================
+
+/**
+ * Enrich a project_update title's content portion to include a concrete delta
+ * when the evidence contains one and the title does not already mention it.
+ *
+ * WHY HERE (after enforceTitleContract, before normalizeTitlePrefix):
+ *   - The contract step already guarantees the content is not vacuous.
+ *   - We operate on prefix-free content so that normalizeTitlePrefix can attach
+ *     the correct "Update:" prefix in the next step — avoiding any double-prefix
+ *     issue.
+ *   - Truncation happens after, so an enriched title still gets capped at 80 chars.
+ *
+ * WHY ONLY project_update:
+ *   - Delta tokens ("4-week delay", "12th → 19th") are timeline signals that are
+ *     meaningful for project updates and plan changes but would be noise or
+ *     misleading in risk/idea/bug titles whose framing is different.
+ *
+ * @param titleContent - The prefix-free title content (e.g. "project plan")
+ * @param evidenceSpans - Evidence spans from which delta/entity are extracted
+ * @returns Enriched content string (prefix-free), or original if no delta found
+ */
+export function ensureUpdateTitleIncludesDelta(
+  titleContent: string,
+  evidenceSpans: EvidenceSpan[]
+): string {
+  const delta = extractDeltaFromEvidence(evidenceSpans);
+  if (!delta) return titleContent;
+
+  // Guard: title already contains the delta (case-insensitive, normalise whitespace)
+  const normalise = (s: string) => s.replace(/\s+/g, ' ').toLowerCase();
+  if (normalise(titleContent).includes(normalise(delta))) return titleContent;
+
+  const entity = extractEntityFromEvidence(evidenceSpans);
+  if (entity) {
+    return `${entity} delayed ${delta}`;
+  }
+  return `Timeline delayed ${delta}`;
+}
+
+/**
  * Enforce the title quality contract before final emission.
  *
  * @param type - The suggestion type (for fallback selection)
