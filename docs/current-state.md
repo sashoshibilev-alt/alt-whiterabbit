@@ -1,5 +1,61 @@
 # Current State
 
+## Type Tie-Breaker & Plan-Change Tightening — Stage 4.59 (2026-02-22)
+
+**Files**: `classifiers.ts`, `scoring.ts`, `type-tiebreaker.test.ts`
+
+### Problem
+
+Strategy-only plan_change sections (e.g. "Shift from enterprise to SMB", "Narrow our focus to self-serve onboarding") were emitting as `project_update` even though they describe strategic direction, not a schedule mutation. The ACTIONABILITY gate was bypassed unconditionally for all plan_change sections.
+
+### Solution
+
+**Part A — ACTIONABILITY gate tightened:**
+`isActionable()` now bypasses the gate only when the section contains a **concrete delta** (numeric duration: "4-week delay", "2 months", "14 days") or a **schedule-event word** (deploy, launch, release, ETA, deadline, milestone). Strategy-only language ("shift from X to Y", "pivot the go-to-market approach") falls through to normal actionability evaluation.
+
+Two new exported functions added to `classifiers.ts`:
+- `hasSectionConcreteDelta(text)` — returns true for measurable time-bounded changes
+- `isStrategyOnlySection(text)` — returns true when no concrete delta AND no schedule-event word
+
+**Part B — Strategy-only sections prefer idea over project_update:**
+- `computeTypeLabel()`: strategy-only + no bullets → returns `'idea'` instead of `'project_update'`
+- `classifySection()`: four override points updated with `!_isStrategyOnly` guards
+- STRATEGY-ONLY OVERRIDE: downgrades `project_update → idea` for strategy-only sections, **exempt** when `hasExplicitImperativeAction` (e.g. "Remove deprecated feature flags")
+- `scoring.ts` normalization: `isStrategyOnlySection` guard prevents forcing strategy-only idea → project_update
+
+### Behavior Change
+
+| Section type | Before | After |
+|---|---|---|
+| "Shift from enterprise to SMB" | `project_update` | `idea` |
+| "Narrow our focus to self-serve onboarding" | `project_update` | `idea` |
+| "Ham Light deployment has slipped by 2 weeks" | `project_update` | `project_update` (unchanged) |
+| "V1 launch 12th → 19th" | `project_update` | `project_update` (unchanged) |
+| "Remove deprecated feature flags" (imperative) | `project_update` | `project_update` (exempt from override) |
+
+### Invariants Preserved
+
+- CloudScale note (4-week delay + GDPR risk): still emits `project_update` + `risk`
+- Canonical gold note (12th → 19th): still emits `project_update`
+- Imperative action sections: still emit correctly (not reclassified)
+- Sections with explicit imperatives are exempt from the STRATEGY-ONLY OVERRIDE
+
+### Tests
+
+**New file**: `type-tiebreaker.test.ts` (26 tests)
+- `hasSectionConcreteDelta` unit tests (6)
+- `isStrategyOnlySection` unit tests (8)
+- Agatha mixed note golden tests (7): strategy sections → idea, Ham Light → project_update, Security → risk
+- CloudScale non-regression (2)
+- Canonical gold non-regression (2)
+
+**Updated tests** to reflect new behavior:
+- `plan-change-invariants.test.ts`: Invariants A1/A2 accept `idea | project_update`
+- `suggestion-engine-v2.test.ts`: ACTIONABILITY invariant accepts `idea | project_update`; "always yields" test uses a concrete-delta note
+- `body-generation.test.ts`: Two fixtures updated to use concrete-delta notes (not strategy-only)
+
+---
+
 ## Title Prefix Standardization — Stage 7 (2026-02-21)
 
 **Files**: `title-normalization.ts`, `index.ts`, `title-contract.test.ts`

@@ -1,5 +1,41 @@
 # Decision Log
 
+## 2026-02-22: Type Tie-Breaker — Strategy-Only Sections Emit as Idea
+
+### Context
+
+`plan_change` sections with strategic direction language ("shift from enterprise to SMB", "narrow our focus") were emitting as `project_update` because:
+1. The ACTIONABILITY gate was unconditionally bypassed for all plan_change sections.
+2. `computeTypeLabel` returned `project_update` for all plan_change sections.
+
+This produced misleading "Update: ..." suggestions for sections that described strategic pivots rather than schedule mutations.
+
+### Decision
+
+**Gate the ACTIONABILITY bypass on concrete delta presence.** Strategy-only sections (no numeric delta, no schedule-event word) fall through to normal actionability evaluation. This means they may or may not pass the gate on their own merits.
+
+**Downgrade strategy-only sections from project_update to idea** using the STRATEGY-ONLY OVERRIDE in `classifySection`. The override is exempt for sections with `hasExplicitImperativeAction` (e.g., "Remove deprecated feature flags") to avoid false downgrades caused by V3_CHANGE_OPERATORS substring matches (e.g., "Remove" containing "move").
+
+The `isStrategyOnlySection(text)` function is defined as: no concrete delta AND no schedule-event word. It does NOT require explicit strategy vocabulary (shift/pivot/narrow) in order to correctly handle strategy sections that use other plan_change-triggering language (e.g., "prioritize", "automate") without being about schedule mutations.
+
+### Trade-offs
+
+- **Strategy-only plan_change sections that produce `idea` may be dropped by V4_heading_only** if the only title source is the section heading and there is no explicit-ask anchor. This is intentional: generic headings like "Roadmap Changes" without actionable body content don't warrant a suggestion.
+- **`hasSectionConcreteDelta` uses whole-section text** (not per-sentence), so a section with a concrete delta anywhere still keeps project_update even if other sentences are strategy-only. This is conservative — if any sentence is a schedule mutation, treat the section as such.
+
+### Alternatives Rejected
+
+- **Require explicit strategy vocabulary (shift/pivot/narrow) in `isStrategyOnlySection`**: Rejected — would miss sections with "prioritize", "automate", "framework" language that are still clearly strategic. The imperative-action guard is a cleaner way to exempt legitimate task sections.
+- **Exempt ALL non-actionable plan_change sections from the bypass**: Rejected — strategy-only sections that DO pass the actionability gate on their own merit (high new_workstream score) should still get classified correctly.
+- **Keep project_update for all plan_change, change only the title prefix**: Rejected — type carries semantic meaning downstream (routing, UI rendering). A strategic pivot is genuinely better represented as `idea`.
+
+### Future Options Preserved
+
+- `isStrategyOnlySection` and `hasSectionConcreteDelta` are exported for use in tests and future classifiers.
+- The imperative-action exemption (`hasExplicitImperativeAction`) is checked at the override site only, not baked into `isStrategyOnlySection`, keeping the function simple and reusable.
+
+---
+
 ## 2026-02-21: Title Prefix Standardization — Stage 7, normalizeTitlePrefix
 
 ### Context
