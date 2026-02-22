@@ -463,6 +463,97 @@ export function hasPlanChangeEligibility(text: string): boolean {
 }
 
 /**
+ * Returns true when the section text (full body) contains a concrete delta.
+ * Used at the section level to gate the ACTIONABILITY bypass and type tie-breaking.
+ *
+ * This is intentionally identical to hasPlanChangeEligibility applied to the
+ * full section text — so that sections with ANY sentence containing a concrete
+ * delta qualify, even if other sentences are strategy-only.
+ */
+export function hasSectionConcreteDelta(sectionText: string): boolean {
+  return PLAN_CHANGE_CONCRETE_DELTA.test(sectionText);
+}
+
+/**
+ * Delay/launch/ETA signal words.  When these appear in a section, the section
+ * describes a concrete schedule event (deployment, launch, ETA) rather than a
+ * strategic direction — so it should still be classified as project_update even
+ * if no numeric delta is present.
+ */
+const SCHEDULE_EVENT_WORDS = /\b(?:delay(?:ed|ing)?|launch(?:ed|ing)?|deploy(?:ed|ing|ment)?|release(?:d|ing)?|ship(?:ped|ping)?|eta|go-live|go\s+live|target\s+date|due\s+date|deadline|milestone)\b/i;
+
+/**
+ * Returns true when the section text contains schedule-event language (delay,
+ * launch, deploy, ETA, etc.) without requiring a numeric delta.
+ */
+function hasSectionScheduleEvent(sectionText: string): boolean {
+  return SCHEDULE_EVENT_WORDS.test(sectionText);
+}
+
+/**
+ * Returns true when the section is "strategy-only" — it has change-operator
+ * language that classifies it as plan_change at the intent level, but it
+ * contains NO concrete delta (date movement, duration, ETA) and NO schedule-event
+ * words.  In that case the section is better represented as an idea.
+ *
+ * Important: callers are responsible for excluding sections with explicit imperative
+ * actions (e.g. "Remove deprecated feature flags") which may accidentally score high
+ * on plan_change due to substring matches in V3_CHANGE_OPERATORS.  Use
+ * hasExplicitImperativeAction(section) at the call site to guard those cases.
+ *
+ * Examples that return true (strategy-only → should be idea):
+ *   "We should shift from enterprise to SMB customers."
+ *   "The team plans to pivot the go-to-market approach."
+ *   "We need to refocus engineering on the core platform."
+ *
+ * Examples that return false (has delta or schedule event → keep project_update):
+ *   "Move the launch from 12th to 19th."   ← concrete delta
+ *   "Delay by 4 weeks due to vendor issues."   ← concrete delta
+ *   "Ham Light deployment is scheduled for next week."   ← schedule-event word
+ */
+export function isStrategyOnlySection(sectionText: string): boolean {
+  if (hasSectionConcreteDelta(sectionText)) return false;
+  if (hasSectionScheduleEvent(sectionText)) return false;
+  return true;
+}
+
+/**
+ * Mechanism verbs that indicate a real initiative or feature proposal.
+ * These are concrete construction/implementation verbs, not vague directional verbs.
+ */
+const INITIATIVE_MECHANISM_VERBS = /\b(build|implement|add|introduce|create|design|automate|integrate|ship|launch|deploy|roll\s+out|parse|score|prioritize|calculate)\b/i;
+
+/**
+ * System/feature nouns that anchor a strategy discussion to a concrete artifact.
+ */
+const INITIATIVE_SYSTEM_NOUNS = /\b(system|workflow|scoring|prioritization|automation|integration|parser|dashboard|overlay|trigger|contract\s+signing)\b/i;
+
+/**
+ * Concrete example patterns: currency symbols, percentages, time units, area units,
+ * or a numeric value followed by a unit token.
+ */
+const INITIATIVE_CONCRETE_EXAMPLES = /(?:€|%|minutes?|hectares?|fields?)|\b\d+\s*(?:€|%|min|minutes?|hectares?|fields?)\b/i;
+
+/**
+ * Returns true when the text contains at least one "initiative quality" signal —
+ * a mechanism verb, a system/feature noun, or a concrete example (units/numbers).
+ *
+ * This guards the strategy-only plan_change early-return path so that generic
+ * fluff ("We discussed strategy and alignment for Q2") does not inflate idea
+ * counts, while real initiative proposals ("Netflix-style; show earning potential
+ * per field (€300, 2 minutes)") still get emitted as ideas.
+ *
+ * Only applied to the strategy-only early-return path — no other classification
+ * paths are affected.
+ */
+export function hasInitiativeQualitySignal(text: string): boolean {
+  if (INITIATIVE_MECHANISM_VERBS.test(text)) return true;
+  if (INITIATIVE_SYSTEM_NOUNS.test(text)) return true;
+  if (INITIATIVE_CONCRETE_EXAMPLES.test(text)) return true;
+  return false;
+}
+
+/**
  * V3 Status/progress markers
  */
 const V3_STATUS_MARKERS = [
@@ -1457,14 +1548,25 @@ export function isActionable(
   const isPlanChange = isPlanChangeIntentLabel(intent);
 
   if (isPlanChange) {
-    // PLAN_CHANGE OVERRIDE: never drop at ACTIONABILITY gate
-    return {
-      actionable: true,
-      reason: `plan_change override: bypass ACTIONABILITY gate (signal=${actionableSignal.toFixed(3)}, outOfScope=${outOfScopeSignal.toFixed(3)}, T_action=${effectiveThreshold.toFixed(3)})`,
-      actionableSignal,
-      outOfScopeSignal,
-      rescuedByBSignal: false,
-    };
+    // PLAN_CHANGE OVERRIDE: bypass ACTIONABILITY gate only when the section
+    // contains a concrete delta (date movement, duration, ETA) or a schedule
+    // event word.  Strategy-only language ("shift from enterprise to SMB",
+    // "pivot the go-to-market approach") does NOT qualify for the bypass.
+    // Without a concrete delta, the section still participates in normal
+    // actionability evaluation so vague pivots don't force-emit project_update.
+    const sectionText = ((section.heading_text || '') + ' ' + section.raw_text);
+    const hasConcreteDelta = !isStrategyOnlySection(sectionText);
+    if (hasConcreteDelta) {
+      return {
+        actionable: true,
+        reason: `plan_change override: bypass ACTIONABILITY gate (signal=${actionableSignal.toFixed(3)}, outOfScope=${outOfScopeSignal.toFixed(3)}, T_action=${effectiveThreshold.toFixed(3)})`,
+        actionableSignal,
+        outOfScopeSignal,
+        rescuedByBSignal: false,
+      };
+    }
+    // Strategy-only plan_change: fall through to normal actionability evaluation.
+    // The section may still pass on its own merits (e.g. high actionableSignal).
   }
 
   // Existing non-plan_change gates remain as-is
@@ -1691,6 +1793,24 @@ export function computeTypeLabel(
     return 'project_update';
   }
   if (isPlanChangeIntentLabel(intent)) {
+    // Strategy-only language ("shift from enterprise to SMB", "pivot the go-to-market
+    // approach") has change operators but no concrete delta or schedule event.
+    // These sections describe strategic direction, not a schedule mutation, so they
+    // are better represented as ideas.
+    //
+    // A section keeps project_update when it has:
+    //   - A concrete delta (date movement, duration): "delay by 4 weeks"
+    //   - A schedule event word (launch, deploy, ETA): "Ham Light deployment"
+    //   - A structured task / heading + bullet cluster (role assignments, decision markers
+    //     are already handled above via forceDecisionMarker / forceRoleAssignment)
+    const sectionText = ((section.heading_text || '') + ' ' + section.raw_text);
+    if (isStrategyOnlySection(sectionText)) {
+      // Also require that the section does not have structured tasks (bullets with
+      // change operators are typically action plans, not strategy descriptions).
+      if (!section.structural_features || section.structural_features.bullet_count === 0) {
+        return 'idea';
+      }
+    }
     return 'project_update';
   }
   return 'idea';
@@ -1714,7 +1834,11 @@ export function classifySection(
 
   // If actionability thinks not actionable BUT intent label is plan_change,
   // upgrade to actionable and rely on downgrade semantics later.
-  if (!actionabilityResult.actionable && isPlanChange) {
+  // Exception: strategy-only sections (no concrete delta or schedule event) do NOT
+  // get forced project_update here — they should resolve via normal type classification.
+  const _sectionTextForTypeGuard = ((section.heading_text || '') + ' ' + section.raw_text);
+  const _isStrategyOnly = isStrategyOnlySection(_sectionTextForTypeGuard);
+  if (!actionabilityResult.actionable && isPlanChange && !_isStrategyOnly) {
     return {
       ...section,
       intent,
@@ -1728,6 +1852,31 @@ export function classifySection(
     };
   }
 
+  // Strategy-only plan_change sections: not actionable by normal signal, but still
+  // emit as idea so that strategy pivots are captured rather than silently dropped.
+  // INITIATIVE QUALITY GUARD: only emit when the text contains at least one concrete
+  // signal (mechanism verb, system/feature noun, or concrete example with units/numbers).
+  // Generic fluff ("We discussed strategy and alignment for Q2") is blocked here.
+  if (!actionabilityResult.actionable && isPlanChange && _isStrategyOnly) {
+    const _hasInitiativeQuality = hasInitiativeQualitySignal(_sectionTextForTypeGuard);
+    if (_hasInitiativeQuality) {
+      const typeLabel = computeTypeLabel(section, intent);
+      return {
+        ...section,
+        intent,
+        is_actionable: true,
+        actionability_reason: `${actionabilityResult.reason} (strategy-only plan_change: emit as idea)`,
+        actionable_signal: actionabilityResult.actionableSignal,
+        out_of_scope_signal: actionabilityResult.outOfScopeSignal,
+        suggested_type: 'idea',
+        type_confidence: 0.5,
+        typeLabel,
+      };
+    }
+    // No initiative quality signal: fall through to normal non-actionable handling
+    // (the section will not be emitted as idea via this path).
+  }
+
   // Classify type if actionable
   let suggestedType: SectionType | undefined;
   let typeConfidence: number | undefined;
@@ -1736,9 +1885,10 @@ export function classifySection(
     const typeResult = classifyType(section, intent);
 
     if (typeResult.type === 'non_actionable') {
-      if (isPlanChange) {
+      if (isPlanChange && !_isStrategyOnly) {
         // Strengthened PLAN_CHANGE PROTECTION at TYPE stage
         // Force project_update type and ensure actionability stays true
+        // Exception: strategy-only plan_change sections fall through to idea/new_workstream path.
         suggestedType = 'project_update';
         typeConfidence = 0.3;
         // Return early with forced project_update to prevent any drop
@@ -1810,14 +1960,27 @@ export function classifySection(
       suggestedType = typeResult.type;
       typeConfidence = typeResult.confidence;
 
-      // For plan_change sections, force to project_update
-      if (isPlanChange && suggestedType !== 'project_update') {
+      // For plan_change sections, force to project_update —
+      // unless the section is strategy-only (no concrete delta or schedule event).
+      if (isPlanChange && !_isStrategyOnly && suggestedType !== 'project_update') {
         suggestedType = 'project_update';
       }
 
       // OVERRIDE: Force project_update for decision markers and role assignments
       if ((intent.flags?.forceDecisionMarker || intent.flags?.forceRoleAssignment) && suggestedType !== 'project_update') {
         suggestedType = 'project_update';
+      }
+
+      // STRATEGY-ONLY OVERRIDE: If classifyType returned project_update but the section
+      // is strategy-only (no concrete delta or schedule event), downgrade to idea.
+      // This handles the case where PLAN_MUTATION_PATTERNS match strategic language like
+      // "prioritize" that makes p_mutation > p_artifact but without a real schedule mutation.
+      // Decision markers and role assignments are always exempt (already handled above).
+      // Sections with explicit imperative actions are also exempt: imperatives represent
+      // concrete tasks (e.g. "Remove deprecated feature flags"), not strategic pivots.
+      const _hasImperative = hasExplicitImperativeAction(section);
+      if (_isStrategyOnly && suggestedType === 'project_update' && !intent.flags?.forceDecisionMarker && !intent.flags?.forceRoleAssignment && !_hasImperative) {
+        suggestedType = 'idea';
       }
 
       // Guard: project_update only for plan_change intent OR forced overrides.
@@ -1828,8 +1991,9 @@ export function classifySection(
     }
   }
 
-  // For plan_change sections with no suggested type, force project_update
-  if (isPlanChange && !suggestedType) {
+  // For plan_change sections with no suggested type, force project_update —
+  // unless the section is strategy-only (no concrete delta or schedule event).
+  if (isPlanChange && !_isStrategyOnly && !suggestedType) {
     suggestedType = 'project_update';
     typeConfidence = 0.2; // explicit "fallback" confidence
   }

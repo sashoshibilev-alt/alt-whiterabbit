@@ -580,13 +580,15 @@ Target is to complete the changes by early Q3.
   it('should fallback to default extraction when no impact line exists', () => {
     const note: NoteInput = {
       note_id: 'test-no-impact-fallback',
+      // Note: Section has a concrete delta ("slipped by 2 sprints") to ensure
+      // it is classified as project_update (not strategy-only idea).
       raw_markdown: `# Planning
 
-## Strategic Shift
+## Q2 Scope Changes
 
-Shift from enterprise to SMB focus for Q2.
+The self-service milestone has slipped by 2 sprints due to integration complexity.
 
-This aligns better with market opportunities.
+This affects the overall delivery timeline.
 `,
     };
 
@@ -601,8 +603,8 @@ This aligns better with market opportunities.
 
     const body = suggestion.suggestion!.body;
 
-    // Body should use fallback extraction (shift pattern)
-    expect(body.toLowerCase()).toMatch(/shift|enterprise|smb/);
+    // Body should use fallback extraction (slip pattern or related content)
+    expect(body.toLowerCase()).toMatch(/slip|sprint|self-service|scope|integration|milestone/);
 
     // Body should be well-formed
     expect(body.length).toBeGreaterThan(20);
@@ -756,13 +758,15 @@ Target is to complete the changes by early Q3.
   it('project_update title fallback when no impact line exists', () => {
     const note: NoteInput = {
       note_id: 'test-title-fallback-no-impact',
+      // Note: Section has a concrete delta ("pushed by 3 weeks") to ensure
+      // it is classified as project_update (not strategy-only idea).
       raw_markdown: `# Planning
 
 ## Leadership Alignment
 
-Shift from enterprise to SMB focus for Q2.
+VP confirmed the roadmap has been pushed by 3 weeks due to resource constraints.
 
-This aligns better with market opportunities.
+This affects the overall delivery timeline.
 `,
     };
 
@@ -782,7 +786,7 @@ This aligns better with market opportunities.
     expect(title.length).toBeGreaterThan(10);
 
     // This is a fallback case, so we accept current template behavior
-    expect(title).toMatch(/update|shift|leadership|alignment|smb/i);
+    expect(title).toMatch(/update|pushed|roadmap|leadership|alignment|weeks/i);
   });
 
   it('should respect 300 character limit even with impact lines', () => {

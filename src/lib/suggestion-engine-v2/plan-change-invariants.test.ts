@@ -233,7 +233,10 @@ describe('ACTIONABILITY Invariants', () => {
 
       // Should be actionable despite low signal
       expect(classified.is_actionable).toBe(true);
-      expect(classified.suggested_type).toBe('project_update');
+      // Strategy-only plan_change sections (no concrete delta or schedule event)
+      // are now classified as idea rather than forced to project_update.
+      // The invariant is that they are ACTIONABLE and EMITTED, not their type.
+      expect(classified.suggested_type).toMatch(/^(idea|project_update)$/);
 
       // Should pass filter
       const filtered = filterActionableSections([classified]);
@@ -243,9 +246,8 @@ describe('ACTIONABILITY Invariants', () => {
   });
 
   describe('Invariant A2: type classification never drops plan_change', () => {
-    it('should force project_update type for plan_change section (rule-based)', () => {
-      // Create a section with explicit plan_change keywords
-      // to ensure it classifies as plan_change intent
+    it('should classify plan_change section as actionable (rule-based)', () => {
+      // Create a section with explicit plan_change keywords (strategy-only, no concrete delta)
       const mockSection: Section = {
         section_id: 'test-section',
         note_id: 'test-note',
@@ -278,8 +280,9 @@ describe('ACTIONABILITY Invariants', () => {
       // Should be actionable
       expect(classified.is_actionable).toBe(true);
 
-      // Should have project_update type, not non_actionable
-      expect(classified.suggested_type).toBe('project_update');
+      // Strategy-only sections may emit as idea or project_update — must not be dropped
+      // The key invariant is actionability, not the specific type label.
+      expect(classified.suggested_type).toMatch(/^(idea|project_update)$/);
     });
 
     it('should force project_update type for plan_change section (LLM)', async () => {
@@ -710,12 +713,14 @@ describe('End-to-End Invariants (Debug JSON)', () => {
       }
     }
 
-    // Check that project_update suggestions are in the result
-    const planMutationSuggestions = result.suggestions.filter(s => s.type === 'project_update');
-    expect(planMutationSuggestions.length).toBeGreaterThan(0);
+    // Strategy-only plan_change sections (no concrete delta) now emit as idea rather than
+    // project_update. The key invariant is that suggestions are emitted (not dropped).
+    // project_update suggestions are only expected when a concrete delta is present.
+    const allSuggestions = result.suggestions;
+    expect(allSuggestions.length).toBeGreaterThan(0);
 
     // Downgraded suggestions should have needs_clarification
-    const lowConfidenceSuggestions = planMutationSuggestions.filter(s => !s.is_high_confidence);
+    const lowConfidenceSuggestions = allSuggestions.filter(s => !s.is_high_confidence);
     if (lowConfidenceSuggestions.length > 0) {
       for (const suggestion of lowConfidenceSuggestions) {
         expect(suggestion.needs_clarification).toBe(true);

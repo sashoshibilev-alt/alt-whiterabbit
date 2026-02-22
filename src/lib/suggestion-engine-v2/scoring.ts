@@ -19,7 +19,7 @@ import type {
   GeneratorConfig,
   ClarificationReason,
 } from './types';
-import { isPlanChangeIntentLabel, isPlanChangeCandidate } from './classifiers';
+import { isPlanChangeIntentLabel, isPlanChangeCandidate, isStrategyOnlySection } from './classifiers';
 
 // ============================================
 // Score Computation
@@ -579,8 +579,14 @@ export function runScoringPipeline(
     const isPlanChangeSection = isPlanChangeIntentLabel(section.intent);
 
     if (isPlanChangeSection && s.type !== 'project_update') {
-      // Force plan_change semantics by type
-      return { ...s, type: 'project_update' as const };
+      // Strategy-only sections (no concrete delta or schedule-event word) should
+      // remain as idea even if their intent is plan_change.  Only force
+      // project_update when the section has a concrete schedule mutation.
+      const sectionText = ((section.heading_text || '') + ' ' + section.raw_text);
+      if (!isStrategyOnlySection(sectionText)) {
+        // Force plan_change semantics by type
+        return { ...s, type: 'project_update' as const };
+      }
     }
 
     // Candidate-level plan_change override: if this candidate's own anchor text
