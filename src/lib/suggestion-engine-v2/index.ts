@@ -382,11 +382,28 @@ export function generateSuggestions(
       }
     }
 
+    // Build a set of evidence spans already used for project_update candidates in this section,
+    // to prevent emitting a duplicate risk for the same span (dedup: risk vs project_update).
+    const projectUpdateSpans = new Set<string>();
+    for (const existing of filteredValidatedSuggestions) {
+      if (existing.section_id !== section.section_id) continue;
+      if (existing.type !== 'project_update') continue;
+      for (const span of existing.evidence_spans) {
+        projectUpdateSpans.add(span.text.trim());
+      }
+    }
+
     const bSignalCandidates = seedCandidatesFromBSignals(section);
     for (const candidate of bSignalCandidates) {
-      // Skip if this signal's sentence is already covered by an existing candidate
       const signalSentence = candidate.evidence_spans[0]?.text?.trim() ?? '';
-      if (signalSentence && coveredTexts.has(signalSentence)) continue;
+      if (candidate.type === 'risk') {
+        // Risk candidates: only suppress if the same span was already used for a project_update.
+        // Risk is permitted to co-exist with idea/bug on the same span (different signal type).
+        if (signalSentence && projectUpdateSpans.has(signalSentence)) continue;
+      } else {
+        // Non-risk candidates: skip if this signal's sentence is already covered by any candidate.
+        if (signalSentence && coveredTexts.has(signalSentence)) continue;
+      }
       filteredValidatedSuggestions.push(candidate);
     }
   }
