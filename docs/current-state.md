@@ -1,5 +1,60 @@
 # Current State
 
+## Risk Extraction: Lexical First, Structure Assist — Stage 4.60 (2026-02-22)
+
+**Files**: `signals/extractScopeRisk.ts`, `bSignalSeeding.ts`, `index.ts`, `risk-extraction-lexical.test.ts`
+
+### Problem
+
+Risk recall was limited to conditional-phrase patterns (Path A/B). Sentences containing explicit domain risk vocabulary — PII, GDPR, compliance, security, vulnerability, exposure, blocker, concern, risk — were not being detected unless they also contained an "if/unless" structure or a strong consequence reference. Sentences under risk-domain headings ("Security", "Compliance", "Risk", "Considerations") used no heading context for title generation.
+
+### Solution
+
+**`extractScopeRisk.ts` — Path C (Lexical Risk Tokens):**
+- Added a new trigger path that fires when a sentence contains at least one of:
+  `risk, concern, PII, GDPR, compliance, security, vulnerability, exposure, blocker`
+- High-confidence (0.85) when PII + `logging` or `user IDs` co-occur (precise PII-in-logs pattern).
+- Base confidence: 0.7.
+- Extended `SUBJECTIVE_CONCERN_PREFIX` to catch "some [adjective] concern that" patterns.
+- Added two Path C guards (skip Path C when):
+  1. Sentence is a plan-change: shift verb + time unit (e.g., "slip by 2 sprints due to security review")
+  2. Sentence is a feature ask: "request to add X", "users need better Y" (lexical token is contextual, not the primary topic)
+
+**`bSignalSeeding.ts` — Heading-Based Title (Structure Assist):**
+- Added `RISK_SECTION_HEADING_PATTERN = /\b(security|compliance|risk|considerations)\b/i`
+- `titleForRiskSignal(signal, headingText)`: if heading matches, title = `"Risk: <heading>"`.
+- `titleFromSignal()` now accepts `headingText` and delegates SCOPE_RISK to `titleForRiskSignal`.
+- `candidateFromSignal()` passes `section.heading_text` to `titleFromSignal`.
+
+**`index.ts` — Risk Deduplication (B-Signal Stage 4.5):**
+- Risk candidates are no longer suppressed by `coveredTexts` (which blocked all same-span candidates).
+- Instead, risk candidates are suppressed only if the same span was already used for a `project_update` candidate.
+- Non-risk B-signal candidates retain the original `coveredTexts` check.
+- Added `projectUpdateSpans` set built from existing `filteredValidatedSuggestions` of type `project_update`.
+
+### Behavior Change
+
+| Sentence | Before | After |
+|---|---|---|
+| `"Database logging includes user IDs (PII concern)"` | No risk | Risk: high-confidence (0.85) |
+| `"GDPR requirements not mapped out"` | No risk (no conditional) | Risk (GDPR token) |
+| `"Security review identified gaps"` | No risk | Risk (security token) |
+| `"slip by 2 sprints due to security review"` | No risk | No risk (plan-change guard) |
+| `"Request to add logging for compliance"` | No risk | No risk (feature-ask guard) |
+| Risk under "Security considerations" heading | `Risk: <object>` | `Risk: Security considerations` |
+| Same PII span used for project_update | — | Risk suppressed (dedup) |
+| Same PII span used for idea | Risk suppressed (old coveredTexts) | Risk emitted (new behavior) |
+
+### Tests
+
+**New file**: `risk-extraction-lexical.test.ts` (22 tests)
+- 14 unit tests for `extractScopeRisk` Path C (all 9 tokens, PII high-confidence, subjective suppression, plan-change guard)
+- 4 V2 integration tests (structured notes with risk-domain headings)
+- 3 V3 integration tests (flattened notes, no risk-domain heading)
+- 1 deduplication test (risk not emitted when same span used for project_update)
+
+---
+
 ## Type Tie-Breaker & Plan-Change Tightening — Stage 4.59 (2026-02-22)
 
 **Files**: `classifiers.ts`, `scoring.ts`, `type-tiebreaker.test.ts`

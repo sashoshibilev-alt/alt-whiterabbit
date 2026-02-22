@@ -61,22 +61,47 @@ function extractObjectFromSentence(sentence: string): string | null {
   return obj.length >= 3 ? obj : null;
 }
 
+// Headings that suggest a dedicated risk/security/compliance section.
+// When present, the heading itself becomes the title base for risk signals.
+const RISK_SECTION_HEADING_PATTERN = /\b(security|compliance|risk|considerations)\b/i;
+
+/**
+ * Generate a risk signal title using structure-assist when available.
+ *
+ * If the section heading contains a risk-domain keyword (Security, Compliance,
+ * Risk, Considerations), use the heading as the title base:
+ *   "Risk: <Heading>"
+ * Otherwise derive the title from the sentence content.
+ */
+function titleForRiskSignal(signal: Signal, headingText: string): string {
+  if (headingText && RISK_SECTION_HEADING_PATTERN.test(headingText)) {
+    return `Risk: ${headingText}`;
+  }
+  const obj = extractObjectFromSentence(signal.sentence);
+  return obj ? `Risk: ${obj}` : 'Mitigate release risk';
+}
+
 /**
  * Generate a deterministic title from a B-signal using simple regex extraction.
  * Falls back to type-specific defaults when object extraction fails.
+ * For SCOPE_RISK, heading-based title logic is handled separately via titleForRiskSignal.
  */
-export function titleFromSignal(signal: Signal): string {
-  const obj = extractObjectFromSentence(signal.sentence);
-
+export function titleFromSignal(signal: Signal, headingText: string = ''): string {
   switch (signal.signalType) {
-    case 'FEATURE_DEMAND':
+    case 'FEATURE_DEMAND': {
+      const obj = extractObjectFromSentence(signal.sentence);
       return obj ? `Implement ${obj}` : 'Implement requested feature';
-    case 'PLAN_CHANGE':
+    }
+    case 'PLAN_CHANGE': {
+      const obj = extractObjectFromSentence(signal.sentence);
       return obj ? `Update: ${obj}` : 'Update: project plan';
+    }
     case 'SCOPE_RISK':
-      return obj ? `Risk: ${obj}` : 'Mitigate release risk';
-    case 'BUG':
+      return titleForRiskSignal(signal, headingText);
+    case 'BUG': {
+      const obj = extractObjectFromSentence(signal.sentence);
       return obj ? `Fix ${obj} issue` : 'Fix reported issue';
+    }
   }
 }
 
@@ -88,7 +113,8 @@ export function titleFromSignal(signal: Signal): string {
  * Create a Suggestion candidate from a B-signal and its parent section.
  */
 function candidateFromSignal(signal: Signal, section: ClassifiedSection): Suggestion {
-  const title = titleFromSignal(signal);
+  const headingText = section.heading_text?.trim() ?? '';
+  const title = titleFromSignal(signal, headingText);
   const type = signal.proposedType;
 
   const payload: SuggestionPayload =
