@@ -631,16 +631,32 @@ export function hasInitiativeQualitySignal(text: string): boolean {
 const STRUCTURAL_BYPASS_OPERATIONAL_KEYWORDS = /\b(deployment|deploy|release|rollout|roll\s+out|timeline|schedule|notes|discussion)\b/i;
 
 /**
+ * Generic single-word headings that carry no meaningful concept signal.
+ * A heading that is exactly one of these words (case-insensitive) is excluded
+ * from the structural idea bypass.
+ */
+const STRUCTURAL_BYPASS_GENERIC_HEADINGS = new Set([
+  'general',
+  'notes',
+  'discussion',
+  'other',
+  'summary',
+  'updates',
+  'misc',
+]);
+
+/**
  * Returns true when a section qualifies for the structural idea bypass (Stage 4.59):
  * a conceptual section that has enough structure to emit an idea even when its
  * actionability signal is 0.
  *
- * All six conditions must hold:
+ * All conditions must hold:
  *   1. heading_level <= 3 (not a deeply nested sub-section)
  *   2. num_list_items >= 3 (enough bullets to signal a structured concept)
  *   3. hasDeltaSignal is false (no concrete delta → this is conceptual, not a change)
  *   4. heading does not contain operational keywords (deployment, release, rollout, etc.)
- *   5. heading does not contain generic low-signal words (notes, discussion)
+ *   5. heading is not a generic low-signal word (General, Notes, Discussion, Other,
+ *      Summary, Updates, Misc)
  *   6. raw_text.length >= 150 (enough content to justify an idea)
  */
 export function qualifiesForStructuralIdeaBypass(
@@ -651,6 +667,7 @@ export function qualifiesForStructuralIdeaBypass(
   if ((section.structural_features?.num_list_items ?? 0) < 3) return false;
   if (hasDeltaSignal) return false;
   if (STRUCTURAL_BYPASS_OPERATIONAL_KEYWORDS.test(section.heading_text ?? '')) return false;
+  if (STRUCTURAL_BYPASS_GENERIC_HEADINGS.has((section.heading_text ?? '').trim().toLowerCase())) return false;
   if ((section.raw_text ?? '').length < 150) return false;
   return true;
 }
