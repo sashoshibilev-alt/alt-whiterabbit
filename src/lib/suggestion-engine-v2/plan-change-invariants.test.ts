@@ -346,7 +346,7 @@ describe('THRESHOLD Invariants', () => {
   });
 
   describe('Invariant T1: plan_change never dropped at THRESHOLD', () => {
-    it('should downgrade low-score plan_change to needs_clarification instead of dropping', () => {
+    it('should emit low-score plan_change without dropping (no clarification badge for low score alone)', () => {
       const mockSection = createMockPlanChangeSection({
         // Set low scores
         actionable_signal: 0.4,
@@ -398,13 +398,9 @@ describe('THRESHOLD Invariants', () => {
       // Should be flagged as low confidence
       expect(processed.is_high_confidence).toBe(false);
 
-      // Should have clarification flags
-      expect(processed.needs_clarification).toBe(true);
-      expect(processed.clarification_reasons).toBeDefined();
-      expect(processed.clarification_reasons!.length).toBeGreaterThan(0);
-
-      // Should have action='comment' metadata
-      expect((processed as any).action).toBe('comment');
+      // Per new policy: low score alone does NOT trigger needs_clarification badge
+      // Badge only appears when V3 validator failed or dropReason exists
+      expect(processed.needs_clarification).toBe(false);
 
       // Evidence should be preserved
       expect(processed.evidence_spans).toEqual(mockSuggestion.evidence_spans);
@@ -567,11 +563,11 @@ describe('THRESHOLD Invariants', () => {
     expect(resultWithSections.dropped).toHaveLength(0);
     expect(resultWithSections.passed).toHaveLength(1);
 
-    // Should be downgraded to clarification (low confidence)
+    // Should be emitted with low confidence flag (not dropped)
     const processed = resultWithSections.passed[0];
     expect(processed.is_high_confidence).toBe(false);
-    expect(processed.needs_clarification).toBe(true);
-    expect(processed.clarification_reasons!.length).toBeGreaterThan(0);
+    // Per new policy: low score alone does NOT trigger needs_clarification badge
+    expect(processed.needs_clarification).toBe(false);
   });
 
   it('should only cap idea suggestions, never plan_change', () => {

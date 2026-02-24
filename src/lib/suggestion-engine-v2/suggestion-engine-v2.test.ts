@@ -1387,7 +1387,7 @@ describe('Suggestion Suppression Fix', () => {
     });
 
     describe('Case C: low confidence project_update', () => {
-      it('should KEEP project_update with low actionability and require clarification', () => {
+      it('should KEEP project_update with low actionability (no badge for score alone)', () => {
         const suggestions = [
           createTestSuggestion('project_update', 0.4, 0.7),
         ];
@@ -1397,12 +1397,11 @@ describe('Suggestion Suppression Fix', () => {
         expect(result.passed).toHaveLength(1);
         expect(result.dropped).toHaveLength(0);
         expect(result.passed[0].is_high_confidence).toBe(false);
-        expect(result.passed[0].needs_clarification).toBe(true);
-        expect(result.passed[0].clarification_reasons).toContain('low_actionability_score');
-        expect(result.downgraded).toBe(1);
+        // Per new policy: low score alone does NOT trigger needs_clarification
+        expect(result.passed[0].needs_clarification).toBe(false);
       });
 
-      it('should KEEP project_update with low overall and require clarification', () => {
+      it('should KEEP project_update with low overall (no badge for score alone)', () => {
         const suggestions = [
           createTestSuggestion('project_update', 0.7, 0.5),
         ];
@@ -1412,12 +1411,11 @@ describe('Suggestion Suppression Fix', () => {
         expect(result.passed).toHaveLength(1);
         expect(result.dropped).toHaveLength(0);
         expect(result.passed[0].is_high_confidence).toBe(false);
-        expect(result.passed[0].needs_clarification).toBe(true);
-        expect(result.passed[0].clarification_reasons).toContain('low_overall_score');
-        expect(result.downgraded).toBe(1);
+        // Per new policy: low score alone does NOT trigger needs_clarification
+        expect(result.passed[0].needs_clarification).toBe(false);
       });
 
-      it('should KEEP project_update with both scores low and require clarification with both reasons', () => {
+      it('should KEEP project_update with both scores low (no badge for score alone)', () => {
         const suggestions = [
           createTestSuggestion('project_update', 0.3, 0.3),
         ];
@@ -1427,10 +1425,8 @@ describe('Suggestion Suppression Fix', () => {
         expect(result.passed).toHaveLength(1);
         expect(result.dropped).toHaveLength(0);
         expect(result.passed[0].is_high_confidence).toBe(false);
-        expect(result.passed[0].needs_clarification).toBe(true);
-        expect(result.passed[0].clarification_reasons).toContain('low_actionability_score');
-        expect(result.passed[0].clarification_reasons).toContain('low_overall_score');
-        expect(result.downgraded).toBe(1);
+        // Per new policy: low score alone does NOT trigger needs_clarification
+        expect(result.passed[0].needs_clarification).toBe(false);
       });
     });
 
@@ -1448,11 +1444,10 @@ describe('Suggestion Suppression Fix', () => {
         // ALL project_update suggestions must be kept
         expect(result.passed).toHaveLength(4);
         expect(result.dropped).toHaveLength(0);
-        
-        // All should require clarification due to low scores
+
+        // Per new policy: low score alone does NOT trigger needs_clarification badge
         for (const suggestion of result.passed) {
-          expect(suggestion.needs_clarification).toBe(true);
-          expect(suggestion.clarification_reasons!.length).toBeGreaterThan(0);
+          expect(suggestion.needs_clarification).toBe(false);
         }
       });
 
@@ -1465,7 +1460,7 @@ describe('Suggestion Suppression Fix', () => {
         const lowThresholds = { ...DEFAULT_THRESHOLDS, T_section_min: 0.3, T_overall_min: 0.3 };
         const resultLow = applyConfidenceBasedProcessing(suggestions, lowThresholds);
 
-        // High thresholds - should still NOT be dropped (but will need clarification)
+        // High thresholds - should still NOT be dropped
         const highThresholds = { ...DEFAULT_THRESHOLDS, T_section_min: 0.9, T_overall_min: 0.9 };
         const resultHigh = applyConfidenceBasedProcessing(suggestions, highThresholds);
 
@@ -1477,9 +1472,9 @@ describe('Suggestion Suppression Fix', () => {
         expect(resultLow.passed[0].is_high_confidence).toBe(true);
         expect(resultLow.passed[0].needs_clarification).toBe(false);
 
-        // High thresholds - low confidence, needs clarification
+        // High thresholds - low confidence, but still no badge (score alone)
         expect(resultHigh.passed[0].is_high_confidence).toBe(false);
-        expect(resultHigh.passed[0].needs_clarification).toBe(true);
+        expect(resultHigh.passed[0].needs_clarification).toBe(false);
       });
     });
 
@@ -1487,7 +1482,7 @@ describe('Suggestion Suppression Fix', () => {
       it('should handle mixed project_update and idea correctly', () => {
         const suggestions = [
           createTestSuggestion('project_update', 0.7, 0.7),     // High conf plan - keep
-          createTestSuggestion('project_update', 0.3, 0.3),     // Low conf plan - keep with clarification
+          createTestSuggestion('project_update', 0.3, 0.3),     // Low conf plan - keep (no badge)
           createTestSuggestion('idea', 0.7, 0.7), // High conf artifact - keep
           createTestSuggestion('idea', 0.3, 0.3), // Low conf artifact - drop
         ];
@@ -1496,13 +1491,13 @@ describe('Suggestion Suppression Fix', () => {
 
         // 3 passed (2 project_update + 1 idea)
         expect(result.passed).toHaveLength(3);
-        
+
         // 1 dropped (low conf idea)
         expect(result.dropped).toHaveLength(1);
         expect(result.dropped[0].suggestion.type).toBe('idea');
-        
-        // 1 downgraded (low conf project_update)
-        expect(result.downgraded).toBe(1);
+
+        // 0 downgraded (low conf plan_change kept but no badge for score alone)
+        expect(result.downgraded).toBe(0);
       });
     });
   });
@@ -1529,8 +1524,8 @@ describe('Suggestion Suppression Fix', () => {
       expect(result.debug!.invariant_plan_change_always_emitted).toBe(true);
     });
 
-    it('should set needs_clarification and clarification_reasons on low-confidence project_update suggestions', () => {
-      // Use low thresholds to make suggestions pass, then high thresholds to trigger clarification
+    it('should emit low-confidence project_update suggestions without needs_clarification badge (score alone is insufficient)', () => {
+      // Use high thresholds to make all suggestions low-confidence
       const highThresholdConfig: Partial<GeneratorConfig> = {
         enable_debug: true,
         thresholds: {
@@ -1542,15 +1537,21 @@ describe('Suggestion Suppression Fix', () => {
 
       const result = generateSuggestions(PLAN_MUTATION_NOTE, {}, highThresholdConfig);
 
-      // If there are project_update suggestions, they should have clarification set
+      // Per new policy: plan_change suggestions are never dropped, but low score alone
+      // does NOT trigger the needs_clarification badge
       const planMutationSuggestions = result.suggestions.filter(s => s.type === 'project_update');
 
       for (const suggestion of planMutationSuggestions) {
-        // With high thresholds, most should need clarification
         if (!suggestion.is_high_confidence) {
-          expect(suggestion.needs_clarification).toBe(true);
-          expect(suggestion.clarification_reasons).toBeDefined();
-          expect(suggestion.clarification_reasons!.length).toBeGreaterThan(0);
+          // Low score alone must NOT trigger needs_clarification
+          // (it's only triggered by V3 failure or dropReason)
+          const hasV3Failure = suggestion.validation_results?.some(
+            (r) => r.validator === 'V3_evidence_sanity' && !r.passed
+          ) ?? false;
+          const hasDropReason = !!(suggestion.dropReason || suggestion.drop_reason);
+          if (!hasV3Failure && !hasDropReason) {
+            expect(suggestion.needs_clarification).toBe(false);
+          }
         }
       }
     });
@@ -2746,7 +2747,7 @@ V1 launch has been pushed from 12th to 19th due to vendor dependency.
   });
 
   describe('THRESHOLD Invariants (per fix-plan-change-suppression plan)', () => {
-    it('never drops plan_change suggestions at THRESHOLD, only downgrades', () => {
+    it('never drops plan_change suggestions at THRESHOLD (emits with low confidence flag)', () => {
       // Create test suggestions with low scores
       const testSuggestions: any[] = [
         {
@@ -2773,7 +2774,7 @@ V1 launch has been pushed from 12th to 19th due to vendor dependency.
         },
       ];
 
-      const { passed, dropped, downgraded } = applyConfidenceBasedProcessing(
+      const { passed, dropped } = applyConfidenceBasedProcessing(
         testSuggestions,
         DEFAULT_THRESHOLDS
       );
@@ -2782,14 +2783,14 @@ V1 launch has been pushed from 12th to 19th due to vendor dependency.
       expect(passed.length).toBe(testSuggestions.length);
       expect(dropped.length).toBe(0);
 
-      // INVARIANT: Low-confidence suggestions must be downgraded
-      expect(downgraded).toBeGreaterThan(0);
-
-      // INVARIANT: All passed suggestions must have needs_clarification set
+      // INVARIANT: Low-confidence flag is set
       passed.forEach(s => {
-        expect(s.needs_clarification).toBe(true);
-        expect(s.clarification_reasons).toBeDefined();
-        expect(s.clarification_reasons.length).toBeGreaterThan(0);
+        expect(s.is_high_confidence).toBe(false);
+      });
+
+      // Per new policy: low score alone does NOT trigger needs_clarification badge
+      passed.forEach(s => {
+        expect(s.needs_clarification).toBe(false);
       });
     });
 
