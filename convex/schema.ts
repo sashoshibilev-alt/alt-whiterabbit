@@ -164,7 +164,7 @@ export default defineSchema({
     noteId: v.id("notes"), // FK to notes
     content: v.string(), // The suggestion text (legacy; kept for backward compatibility)
     // Structured suggestion fields (v2 engine output)
-    suggestionType: v.optional(v.union(v.literal("idea"), v.literal("project_update"))),
+    suggestionType: v.optional(v.union(v.literal("idea"), v.literal("project_update"), v.literal("bug"), v.literal("risk"))),
     title: v.optional(v.string()),
     body: v.optional(v.string()),
     evidencePreview: v.optional(v.string()),
