@@ -534,8 +534,12 @@ export function isStrategyOnlySection(sectionText: string): boolean {
  *   "## Data Collection Automation"
  *   "## Playbook for At-Risk Customers"
  *   "## Product Vision"
+ *   "## Scoring Rubric for Field Prioritization"
+ *   "## Decision Criteria for Customer Triage"
+ *   "## Weighting Methodology"
+ *   "## Claims Decisioning Heuristics"
  */
-const STRATEGY_HEADING_PATTERN = /\b(strategy|strategies|approach|framework|system|philosophy|direction|principles?|prioritization|automation|playbook|vision)\b/i;
+const STRATEGY_HEADING_PATTERN = /\b(strategy|strategies|approach|framework|system|philosophy|direction|principles?|prioriti[sz]ation|automation|playbook|vision|scoring|scorecard|rubric|criteria|weighting|model|methodology|decisioning|heuristics)\b/i;
 
 /**
  * Explicit timeline token pattern — used to gate the strategy-heading override.
@@ -2106,6 +2110,14 @@ export function classifySection(
   // Compute typeLabel for validator behavior
   const typeLabel = computeTypeLabel(section, intent);
 
+  // STRATEGY HEADING GUARD: computeTypeLabel is the canonical type arbiter.
+  // If it decided 'idea' (e.g. strategy heading + no delta), ensure suggested_type
+  // agrees — prevents synthesis from using project_update title/body format when
+  // the section is a strategy-direction block, not a schedule mutation.
+  if (typeLabel === 'idea' && suggestedType === 'project_update') {
+    suggestedType = 'idea';
+  }
+
   return {
     ...section,
     intent,
@@ -2140,11 +2152,22 @@ export function classifySections(
 export function filterActionableSections(
   classifiedSections: ClassifiedSection[]
 ): ClassifiedSection[] {
-  // First pass: heal any plan_change sections that are marked non-actionable
+  // First pass: heal any plan_change sections that are marked non-actionable.
+  // Exception: strategy-only sections (no concrete delta or schedule event) must NOT
+  // be force-healed here — they are emitted as ideas via normal actionability or the
+  // strategy-only plan_change path in classifySection, and forcing them through without
+  // a corrected typeLabel would let them reach synthesis as project_update.
   const upgraded = classifiedSections.map((s) => {
     const isPlanChange = isPlanChangeIntentLabel(s.intent);
     if (isPlanChange && !s.is_actionable) {
-      // Force actionable and document the override
+      const sectionText = ((s.heading_text || '') + ' ' + s.raw_text);
+      const isStrategyOnly = isStrategyOnlySection(sectionText);
+      if (isStrategyOnly) {
+        // Strategy-only plan_change: do not force-heal here; keep existing actionability
+        // so the section is filtered out rather than reaching synthesis as project_update.
+        return s;
+      }
+      // Non-strategy plan_change: force actionable and document the override
       return {
         ...s,
         is_actionable: true,
@@ -2156,10 +2179,18 @@ export function filterActionableSections(
     return s;
   });
 
-  // Second pass: filter to include plan_change or actionable sections
+  // Second pass: filter to include non-strategy plan_change or actionable sections.
+  // Strategy-only plan_change sections that failed actionability are excluded here
+  // (they were never valid project_update candidates).
   return upgraded.filter((s) => {
     const isPlanChange = isPlanChangeIntentLabel(s.intent);
-    return isPlanChange || s.is_actionable;
+    if (isPlanChange) {
+      const sectionText = ((s.heading_text || '') + ' ' + s.raw_text);
+      const isStrategyOnly = isStrategyOnlySection(sectionText);
+      // Only force-include non-strategy plan_change sections
+      return !isStrategyOnly || s.is_actionable;
+    }
+    return s.is_actionable;
   });
 }
 

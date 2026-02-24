@@ -426,3 +426,353 @@ describe('computeTypeLabel — extended keywords emit idea not project_update', 
     expect(computeTypeLabel(section, intent)).toBe('project_update');
   });
 });
+
+// ============================================
+// classifySection: suggested_type must agree with typeLabel for strategy sections
+// (regression guard: fixes plan_change override forcing strategy sections to project_update
+//  even when computeTypeLabel correctly returns 'idea')
+// ============================================
+
+describe('classifySection — suggested_type consistent with typeLabel for strategy headings', () => {
+  beforeEach(() => {
+    resetSectionCounter();
+    resetSuggestionCounter();
+  });
+
+  function makeStrategySection(headingText: string, bullets: string[]): Section {
+    return {
+      section_id: 'strategy-test',
+      note_id: 'test-note',
+      heading_text: headingText,
+      heading_level: 3,
+      start_line: 0,
+      end_line: bullets.length + 1,
+      body_lines: bullets.map((text, i) => ({
+        index: i + 1,
+        text,
+        line_type: 'list_item' as const,
+        indent_level: 0,
+      })),
+      structural_features: {
+        num_lines: bullets.length + 1,
+        num_list_items: bullets.length,
+        has_dates: false,
+        has_metrics: false,
+        has_quarter_refs: false,
+        has_version_refs: false,
+        has_launch_keywords: false,
+        initiative_phrase_density: 0,
+      },
+      raw_text: bullets.join('\n'),
+    };
+  }
+
+  it('Agatha Gamification Strategy: suggested_type is idea (not project_update)', () => {
+    const section = makeStrategySection('Agatha Gamification Strategy', [
+      'Move away from showing total farm data burden',
+      'Focus on immediate reward',
+      'Show earnings potential',
+      'Show recent activity',
+    ]);
+    const result = classifySection(section, DEFAULT_THRESHOLDS);
+    expect(result.typeLabel).toBe('idea');
+    expect(result.suggested_type).toBe('idea');
+    expect(result.suggested_type).not.toBe('project_update');
+  });
+
+  it('Black Box Prioritization System: suggested_type is idea (not project_update)', () => {
+    // Numbered list — same logic must apply
+    const section = makeStrategySection('Black Box Prioritization System', [
+      'From current 1-year to 5-year assessment',
+      'Build score-based ranking system',
+      'Automate the prioritization process',
+      'Integrate with existing workflow',
+    ]);
+    const result = classifySection(section, DEFAULT_THRESHOLDS);
+    expect(result.typeLabel).toBe('idea');
+    expect(result.suggested_type).toBe('idea');
+    expect(result.suggested_type).not.toBe('project_update');
+  });
+
+  it('Control: strategy heading + concrete delta keeps project_update', () => {
+    const section = makeStrategySection('Agatha Gamification Strategy', [
+      'Rollout pushed from Jan 12 to Jan 19 due to QA blockers',
+      'Focus on immediate reward',
+      'Show earnings potential',
+    ]);
+    const result = classifySection(section, DEFAULT_THRESHOLDS);
+    // Concrete delta ("from Jan 12 to Jan 19") wins — section remains project_update
+    expect(result.typeLabel).toBe('project_update');
+  });
+});
+
+// ============================================
+// End-to-end: generateSuggestions with strategy sections + numbered lists
+// ============================================
+
+describe('generateSuggestions — strategy sections with numbered lists emit idea', () => {
+  beforeEach(() => {
+    resetSectionCounter();
+    resetSuggestionCounter();
+  });
+
+  it('Agatha strategy heading + bullet list + no delta => idea (not project_update)', () => {
+    const note: NoteInput = {
+      note_id: 'agatha-strategy-bullets',
+      raw_markdown: `# Product Notes
+
+### Agatha Gamification Strategy
+
+- Move away from showing total farm data burden
+- Focus on immediate reward
+- Show earnings potential
+- Show recent activity
+`,
+    };
+    const result = generateSuggestions(note, undefined, DEFAULT_CONFIG);
+    const projectUpdates = result.suggestions.filter(
+      (s) => s.type === 'project_update' &&
+        [s.title, ...s.evidence_spans.map((e) => e.text)].join(' ').toLowerCase().match(/gamification|farm data|earnings|reward/)
+    );
+    expect(projectUpdates.length).toBe(0);
+    const ideas = result.suggestions.filter((s) => s.type === 'idea');
+    expect(ideas.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Black Box Prioritization System + numbered list + no delta => idea (not project_update)', () => {
+    const note: NoteInput = {
+      note_id: 'blackbox-prioritization-numbered',
+      raw_markdown: `# Product Notes
+
+## Black Box Prioritization System
+
+1. Build score-based ranking system
+2. Automate the prioritization process
+3. Integrate with existing workflow
+4. Deploy to all teams
+`,
+    };
+    const result = generateSuggestions(note, undefined, DEFAULT_CONFIG);
+    const projectUpdates = result.suggestions.filter(
+      (s) => s.type === 'project_update' &&
+        [s.title, ...s.evidence_spans.map((e) => e.text)].join(' ').toLowerCase().match(/prioritization|black box|ranking/)
+    );
+    expect(projectUpdates.length).toBe(0);
+    const ideas = result.suggestions.filter((s) => s.type === 'idea');
+    expect(ideas.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Control: strategy heading + concrete delta ("pushed from Jan 12 to Jan 19") => project_update', () => {
+    const note: NoteInput = {
+      note_id: 'agatha-strategy-with-delta',
+      raw_markdown: `# Product Notes
+
+### Agatha Gamification Strategy
+
+The rollout has been pushed from Jan 12 to Jan 19 due to QA blockers.
+
+- Focus on immediate reward
+- Show earnings potential
+- Show recent activity
+`,
+    };
+    const result = generateSuggestions(note, undefined, DEFAULT_CONFIG);
+    // Concrete delta present → must emit project_update
+    const projectUpdates = result.suggestions.filter((s) => s.type === 'project_update');
+    expect(projectUpdates.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ============================================
+// isStrategyHeadingSection — newly expanded keyword coverage
+// (scoring, rubric, criteria, weighting, model, methodology,
+//  decisioning, heuristics, prioritisation)
+// ============================================
+
+describe('isStrategyHeadingSection — expanded keyword coverage (scoring/rubric/criteria/etc.)', () => {
+  it('returns true for heading containing "Scoring" (scorecard variant)', () => {
+    const heading = 'Scoring Rubric for Field Prioritization';
+    const sectionText = 'Scoring Rubric for Field Prioritization Weight urgency Score impact Apply recency factor Normalise across regions';
+    expect(isStrategyHeadingSection(heading, sectionText, 4)).toBe(true);
+  });
+
+  it('returns true for heading containing "Rubric"', () => {
+    const heading = 'Evaluation Rubric';
+    const sectionText = 'Evaluation Rubric Assess technical feasibility Evaluate business value Consider risk Grade implementation complexity';
+    expect(isStrategyHeadingSection(heading, sectionText, 4)).toBe(true);
+  });
+
+  it('returns true for heading containing "Criteria"', () => {
+    const heading = 'Acceptance Criteria Framework';
+    const sectionText = 'Acceptance Criteria Framework Define done conditions Require test coverage Mandate performance benchmarks Review with stakeholders';
+    expect(isStrategyHeadingSection(heading, sectionText, 4)).toBe(true);
+  });
+
+  it('returns true for heading containing "Weighting"', () => {
+    const heading = 'Weighting Methodology';
+    const sectionText = 'Weighting Methodology Assign higher weight to revenue impact Discount operational complexity Factor in customer urgency Normalise final scores';
+    expect(isStrategyHeadingSection(heading, sectionText, 4)).toBe(true);
+  });
+
+  it('returns true for heading containing "Methodology"', () => {
+    const heading = 'Triage Methodology';
+    const sectionText = 'Triage Methodology Identify severity class Apply standard impact formula Route to correct team Document decision rationale';
+    expect(isStrategyHeadingSection(heading, sectionText, 4)).toBe(true);
+  });
+
+  it('returns true for heading containing "Decisioning"', () => {
+    const heading = 'Claims Decisioning Heuristics';
+    const sectionText = 'Claims Decisioning Heuristics Apply threshold-based routing Use confidence score for auto-approval Escalate low-confidence cases Log all decisions';
+    expect(isStrategyHeadingSection(heading, sectionText, 4)).toBe(true);
+  });
+
+  it('returns true for heading containing "Heuristics"', () => {
+    const heading = 'Prioritization Heuristics';
+    const sectionText = 'Prioritization Heuristics Prefer quick wins over large bets Deprioritise items blocked on third parties Review daily against OKRs Apply tiebreaker rules';
+    expect(isStrategyHeadingSection(heading, sectionText, 4)).toBe(true);
+  });
+
+  it('returns true for British spelling "prioritisation"', () => {
+    const heading = 'Black Box Prioritisation System';
+    const sectionText = 'Black Box Prioritisation System Score claims Use algorithm Automate triage Reduce manual work';
+    expect(isStrategyHeadingSection(heading, sectionText, 4)).toBe(true);
+  });
+
+  it('returns false for expanded keyword heading when concrete delta exists', () => {
+    const heading = 'Scoring Rubric for Field Prioritization';
+    const sectionText = 'Scoring Rubric for Field Prioritization Delay by 4 weeks due to vendor issues Score impact Apply recency factor';
+    expect(isStrategyHeadingSection(heading, sectionText, 3)).toBe(false);
+  });
+});
+
+// ============================================
+// computeTypeLabel — Black Box Prioritization System (primary + negative control)
+// Spec-required tests: explicit typeLabel assertions
+// ============================================
+
+describe('computeTypeLabel — Black Box Prioritization System spec tests', () => {
+  function makeSection(headingText: string, rawText: string, numListItems: number): Section {
+    return {
+      section_id: 'test',
+      note_id: 'test-note',
+      heading_text: headingText,
+      heading_level: 2,
+      start_line: 0,
+      end_line: numListItems + 1,
+      body_lines: [],
+      structural_features: {
+        num_lines: numListItems + 1,
+        num_list_items: numListItems,
+        has_dates: false,
+        has_metrics: false,
+        has_quarter_refs: false,
+        has_version_refs: false,
+        has_launch_keywords: false,
+        initiative_phrase_density: 0,
+      },
+      raw_text: rawText,
+    };
+  }
+
+  function makePlanChangeIntent() {
+    return {
+      plan_change: 0.65,
+      new_workstream: 0.15,
+      status_informational: 0.1,
+      communication: 0.05,
+      research: 0.03,
+      calendar: 0.01,
+      micro_tasks: 0.01,
+    };
+  }
+
+  it('Black Box Prioritization System + numbered list + no delta => typeLabel idea', () => {
+    const section = makeSection(
+      'Black Box Prioritization System',
+      'Three-factor scoring for field prioritization\nScore each claim automatically\nRank by severity and impact\nFilter out duplicates\nNotify agents of top-priority items',
+      5
+    );
+    const intent = makePlanChangeIntent();
+    const result = computeTypeLabel(section, intent);
+    expect(result).toBe('idea');
+  });
+
+  it('Negative control: Black Box Prioritization System + concrete delta => project_update', () => {
+    const section = makeSection(
+      'Black Box Prioritization System',
+      'Three-factor scoring for field prioritization\nPushed from Jan 12 to Jan 19 due to QA blockers\nScore each claim automatically\nRank by severity and impact',
+      4
+    );
+    const intent = makePlanChangeIntent();
+    const result = computeTypeLabel(section, intent);
+    expect(result).toBe('project_update');
+  });
+});
+
+// ============================================
+// classifySection — Black Box Prioritization System: suggested_type must be idea
+// ============================================
+
+describe('classifySection — Black Box Prioritization System emits idea candidate', () => {
+  beforeEach(() => {
+    resetSectionCounter();
+    resetSuggestionCounter();
+  });
+
+  function makeStrategySection(headingText: string, bullets: string[]): Section {
+    return {
+      section_id: 'blackbox-test',
+      note_id: 'test-note',
+      heading_text: headingText,
+      heading_level: 2,
+      start_line: 0,
+      end_line: bullets.length + 1,
+      body_lines: bullets.map((text, i) => ({
+        index: i + 1,
+        text,
+        line_type: 'list_item' as const,
+        indent_level: 0,
+      })),
+      structural_features: {
+        num_lines: bullets.length + 1,
+        num_list_items: bullets.length,
+        has_dates: false,
+        has_metrics: false,
+        has_quarter_refs: false,
+        has_version_refs: false,
+        has_launch_keywords: false,
+        initiative_phrase_density: 0,
+      },
+      raw_text: bullets.join('\n'),
+    };
+  }
+
+  it('Black Box Prioritization System: typeLabel=idea and suggested_type=idea', () => {
+    // Use bullets with change-operator language and mechanism verbs so that:
+    //   1. plan_change intent is detected (triggers the type-arbitration path)
+    //   2. hasInitiativeQualitySignal returns true (mechanism verbs: build, automate, integrate)
+    //   3. isStrategyOnlySection returns true (no concrete delta or schedule event)
+    // → computeTypeLabel returns 'idea', and the strategy-only early-return sets suggested_type = 'idea'
+    const section = makeStrategySection('Black Box Prioritization System', [
+      'Move from manual triage to automated scoring system',
+      'Build score-based ranking system for field prioritization',
+      'Automate the prioritization process to reduce manual work',
+      'Integrate with existing claims workflow',
+    ]);
+    const result = classifySection(section, DEFAULT_THRESHOLDS);
+    expect(result.typeLabel).toBe('idea');
+    expect(result.suggested_type).toBe('idea');
+    expect(result.suggested_type).not.toBe('project_update');
+  });
+
+  it('Negative control: same heading + concrete delta ("pushed from Jan 12 to Jan 19") => project_update', () => {
+    const section = makeStrategySection('Black Box Prioritization System', [
+      'Pushed from Jan 12 to Jan 19 due to QA blockers',
+      'Score each claim automatically',
+      'Rank by severity and impact',
+      'Filter out duplicates',
+    ]);
+    const result = classifySection(section, DEFAULT_THRESHOLDS);
+    expect(result.typeLabel).toBe('project_update');
+  });
+});
