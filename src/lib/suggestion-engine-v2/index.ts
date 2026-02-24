@@ -26,7 +26,7 @@ import type {
 } from './types';
 import { DEFAULT_CONFIG as defaultConfig } from './types';
 import { preprocessNote, resetSectionCounter } from './preprocessing';
-import { classifySections, filterActionableSections } from './classifiers';
+import { classifySections, filterActionableSections, qualifiesForStructuralIdeaBypass } from './classifiers';
 import { synthesizeSuggestions, resetSuggestionCounter, shouldSplitByTopic, splitSectionByTopic, checkSectionSuppression, shouldSplitDenseParagraph, splitDenseParagraphIntoSentences } from './synthesis';
 import { runQualityValidators } from './validators';
 import { runScoringPipeline, refineSuggestionScores } from './scoring';
@@ -35,7 +35,9 @@ import { seedCandidatesFromBSignals, resetBSignalCounter } from './bSignalSeedin
 import { shouldSuppressProcessSentence } from './processNoiseSuppression';
 import { extractDenseParagraphCandidates, isDenseParagraphSection, resetDenseParagraphCounter } from './denseParagraphExtraction';
 import { extractIdeaCandidates, resetIdeaSemanticCounter } from './extractIdeaCandidates';
+import { consolidateBySection, resetConsolidationCounter, sectionHasDeltaSignal } from './consolidateBySection';
 import { enforceTitleContract, normalizeTitlePrefix, truncateTitleSmart, ensureUpdateTitleIncludesDelta, stripKnownPrefix } from './title-normalization';
+import { computeSuggestionKey } from '../suggestion-keys';
 
 // Re-export types
 export * from './types';
@@ -59,7 +61,7 @@ export type { DebugGeneratorOptions, DebugGeneratorResult } from './debugGenerat
 
 // Re-export modules for advanced usage
 export { preprocessNote } from './preprocessing';
-export { classifySections, classifySection, classifyIntent, classifyType, filterActionableSections, isActionable, computeActionabilitySignals, isPlanChangeIntentLabel, isPlanChangeCandidate, hasPlanChangeEligibility, classifySectionWithLLM, classifySectionsWithLLM, isStrategyHeadingSection, computeTypeLabel } from './classifiers';
+export { classifySections, classifySection, classifyIntent, classifyType, filterActionableSections, isActionable, computeActionabilitySignals, isPlanChangeIntentLabel, isPlanChangeCandidate, hasPlanChangeEligibility, isStrategyHeadingSection, qualifiesForStructuralIdeaBypass, computeTypeLabel, classifySectionWithLLM, classifySectionsWithLLM } from './classifiers';
 export type { LLMClassificationOptions } from './classifiers';
 export { classifyIntentWithLLM, classifyTypeWithLLM, blendIntentScores, MockLLMProvider } from './llmClassifiers';
 export type { LLMProvider, LLMIntentResponse, LLMTypeResponse } from './llmClassifiers';
@@ -90,6 +92,20 @@ export {
   generateReport,
   quickEvaluate,
 } from './evaluation';
+
+// ============================================
+// Structural Idea Bypass ID counter
+// ============================================
+
+let structuralBypassCounter = 0;
+
+function resetStructuralBypassCounter(): void {
+  structuralBypassCounter = 0;
+}
+
+function generateStructuralBypassId(noteId: string): string {
+  return `sug_struct_bypass_${noteId.slice(0, 8)}_${++structuralBypassCounter}`;
+}
 
 // ============================================
 // Grounding Invariant
@@ -150,6 +166,8 @@ export function generateSuggestions(
   resetBSignalCounter();
   resetDenseParagraphCounter();
   resetIdeaSemanticCounter();
+  resetConsolidationCounter();
+  resetStructuralBypassCounter();
 
   // Merge config with defaults
   const finalConfig: GeneratorConfig = {
@@ -198,7 +216,20 @@ export function generateSuggestions(
   const actionableSections = filterActionableSections(classifiedSections);
   debug.actionable_sections_count = actionableSections.length;
 
-  if (actionableSections.length === 0) {
+  // Check if any classified section qualifies for the structural idea bypass before
+  // short-circuiting. If so, continue the pipeline so Stage 4.59 can emit candidates
+  // even when no section passes the normal actionability gate.
+  const hasStructuralBypassCandidate = actionableSections.length === 0 &&
+    classifiedSections.some((s) => {
+      const heading = (s.heading_text ?? '').trim();
+      const hasForceRole = s.intent.flags?.forceRoleAssignment ?? false;
+      if (checkSectionSuppression(heading, s.structural_features, s.raw_text, hasForceRole, s.body_lines)) {
+        return false;
+      }
+      return qualifiesForStructuralIdeaBypass(s, sectionHasDeltaSignal(s.raw_text));
+    });
+
+  if (actionableSections.length === 0 && !hasStructuralBypassCandidate) {
     return buildResult([], debug, finalConfig.enable_debug);
   }
 
@@ -223,11 +254,9 @@ export function generateSuggestions(
   const synthesizedSuggestions = synthesizeSuggestions(expandedSections);
   debug.suggestions_before_validation = synthesizedSuggestions.length;
 
-  if (synthesizedSuggestions.length === 0) {
-    return buildResult([], debug, finalConfig.enable_debug);
-  }
-
   // Build section lookup map (include both original classified sections and expanded subsections)
+  // NOTE: built before the empty-synthesis check so that Stage 4.59 (structural idea bypass)
+  // can look up sections even when normal synthesis produces nothing.
   const sectionMap = new Map<string, ClassifiedSection>();
   for (const section of classifiedSections) {
     sectionMap.set(section.section_id, section);
@@ -237,6 +266,12 @@ export function generateSuggestions(
     if (!sectionMap.has(section.section_id)) {
       sectionMap.set(section.section_id, section);
     }
+  }
+
+  // When synthesis is empty AND there are no structural bypass candidates, exit early.
+  // If structural bypass candidates exist we continue so Stage 4.59 can emit them.
+  if (synthesizedSuggestions.length === 0 && !hasStructuralBypassCandidate) {
+    return buildResult([], debug, finalConfig.enable_debug);
   }
 
   // ============================================
@@ -469,6 +504,111 @@ export function generateSuggestions(
   }
 
   // ============================================
+  // Stage 4.59: Structural Idea Bypass (additive)
+  // ============================================
+  // For structured conceptual sections (heading level ≤ 3, ≥ 3 bullets, no
+  // delta/timeline tokens, non-operational heading, non-generic heading,
+  // charCount ≥ 150) that still have NO coverage after all prior stages,
+  // emit exactly ONE idea candidate grounded in the first 2–4 list items.
+  //
+  // This bypass fires regardless of actionabilitySignal, so sections like
+  // "Black Box Prioritization System" or "Data Collection Automation" with
+  // rich structured content are never silently dropped just because their
+  // actionability signal is 0.
+  //
+  // Iterates ALL classifiedSections (not just actionable ones).
+  // Suppressed sections are excluded via checkSectionSuppression.
+  for (const section of classifiedSections) {
+    // Skip suppressed sections (e.g., "Next Steps", "Summary")
+    const headingText = section.heading_text?.trim() ?? '';
+    const hasForceRoleAssignment = section.intent.flags?.forceRoleAssignment ?? false;
+    if (checkSectionSuppression(headingText, section.structural_features, section.raw_text, hasForceRoleAssignment, section.body_lines)) {
+      continue;
+    }
+
+    // Check if this section already has any coverage
+    const alreadyCovered = filteredValidatedSuggestions.some(
+      (s) => s.section_id === section.section_id
+    );
+    if (alreadyCovered) continue;
+
+    // Check the 6-condition structural bypass eligibility
+    const hasDelta = sectionHasDeltaSignal(section.raw_text);
+    if (!qualifiesForStructuralIdeaBypass(section, hasDelta)) continue;
+
+    // Collect the first 2–4 list item texts as the body
+    const listItems = section.body_lines
+      .filter((l) => l.line_type === 'list_item')
+      .slice(0, 4)
+      .map((l) => {
+        // Strip leading list markers (-, *, +, digits.) and trim
+        return l.text.replace(/^[\s\-*+]+/, '').replace(/^\d+\.\s*/, '').trim();
+      })
+      .filter((t) => t.length > 0);
+
+    if (listItems.length === 0) continue;
+
+    const bodyText = listItems.join('. ').replace(/\.+/g, '.').replace(/\.\s*$/, '') + '.';
+
+    // Title from heading (normalizeTitlePrefix handles prefix)
+    const rawTitle = section.heading_text?.trim() || listItems[0];
+    const title = normalizeTitlePrefix('idea', rawTitle);
+
+    // Evidence span: first list item line for grounding
+    const firstListLine = section.body_lines.find((l) => l.line_type === 'list_item');
+    const spanStartLine = firstListLine ? firstListLine.index : section.start_line;
+    const spanEndLine = firstListLine ? firstListLine.index : section.end_line;
+    // Use the first list item text (stripped) as span text for grounding
+    const spanText = listItems[0];
+
+    const suggestionKey = computeSuggestionKey({
+      noteId: section.note_id,
+      sourceSectionId: section.section_id,
+      type: 'idea',
+      title,
+    });
+
+    const bypassCandidate: Suggestion = {
+      suggestion_id: generateStructuralBypassId(section.note_id),
+      note_id: section.note_id,
+      section_id: section.section_id,
+      type: 'idea',
+      title,
+      payload: {
+        draft_initiative: {
+          title: rawTitle,
+          description: bodyText,
+        },
+      },
+      evidence_spans: [{ start_line: spanStartLine, end_line: spanEndLine, text: spanText }],
+      scores: {
+        section_actionability: 0.65,
+        type_choice_confidence: 0.65,
+        synthesis_confidence: 0.65,
+        overall: 0.65,
+      },
+      routing: { create_new: true },
+      suggestionKey,
+      metadata: {
+        source: 'structural-idea-bypass',
+        type: 'idea',
+        label: 'idea',
+        confidence: 0.65,
+        explicitType: true,
+      },
+      suggestion: {
+        title,
+        body: bodyText,
+        evidencePreview: [spanText],
+        sourceSectionId: section.section_id,
+        sourceHeading: headingText,
+      },
+    };
+
+    filteredValidatedSuggestions.push(bypassCandidate);
+  }
+
+  // ============================================
   // Stage 4.6: Grounding Invariant (anti-hallucination hard gate)
   // ============================================
   const groundedSuggestions: Suggestion[] = [];
@@ -566,11 +706,24 @@ export function generateSuggestions(
   }
 
   // ============================================
+  // Stage 6.5: Section Consolidation
+  // ============================================
+  // Collapses fragmented idea candidates from the same structured section
+  // (heading level <= 3, >= 3 bullets, no delta/timeline tokens) into a single
+  // consolidated idea suggestion.  Risk and project_update candidates are never
+  // merged.  Runs after scoring so only candidates that passed quality gates are
+  // considered.
+  const consolidatedSuggestions = consolidateBySection(
+    scoringResult.suggestions,
+    sectionMap
+  );
+
+  // ============================================
   // Stage 6: Routing
   // ============================================
   const initiatives = context?.initiatives || [];
   const routedSuggestions = routeSuggestions(
-    scoringResult.suggestions,
+    consolidatedSuggestions,
     initiatives,
     finalConfig.thresholds
   );

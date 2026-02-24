@@ -1,5 +1,121 @@
 # Decision Log
 
+## 2026-02-24: UI Clarification Policy — Badge Gating Change
+
+### Context
+
+`applyConfidenceBasedProcessing` previously set `needs_clarification=true` for any plan_change or actionable-section suggestion whose scores fell below thresholds. This caused "Needs clarification" UI noise on suggestions that were perfectly valid but scored conservatively.
+
+### Decision
+
+**`needs_clarification=true` is now gated on V3 evidence failure or `dropReason` — NOT on score alone.**
+
+- V3_evidence_sanity failure (evidence doesn't match section text) is a meaningful signal that the suggestion body may be wrong.
+- `dropReason` being set signals the suggestion was almost dropped (renderable only as "apply anyway").
+- Low `overallScore` alone does not indicate a bad suggestion — it indicates uncertain confidence in the type classification, not that the suggestion content is wrong.
+
+### Alternatives Rejected
+
+- **Keep old behavior (badge for any low score)**: Produces too many false "Needs clarification" labels, reducing trust in the badge signal.
+- **Remove badge entirely**: V3 failures are real quality concerns users should see; removing the badge entirely would hide them.
+
+### Tests Updated
+
+- 12 existing tests updated across `plan-change-invariants.test.ts` and `suggestion-engine-v2.test.ts`.
+- New test in `consolidate-by-section.test.ts` verifies: V3 failure → badge, low score alone → no badge.
+
+## 2026-02-24: Structural Idea Bypass — pipeline early-return modification
+
+### Context
+
+Sections with `actionabilitySignal=0` (no plan_change or new_workstream signal) were dropped by the ACTIONABILITY gate in Stage 2. Two early returns in `generateSuggestions` reinforced this: one after `filterActionableSections`, one after `synthesizeSuggestions`. Stage 4.58 (`extractIdeaCandidates`) already iterates ALL classified sections but still requires ≥2 strategy/mechanism signal tokens — a gate those sections may not pass.
+
+### Decision
+
+**Bypass is placed in Stage 4.59, not inside `filterActionableSections`.**
+
+Integrating the bypass into `filterActionableSections` would change the contract of that function (it currently returns strictly actionable + plan_change sections). Introducing bypass-flagged sections into `expandedSections` would route them through all downstream stages including synthesis, validation, B-signal, and scoring — with side effects that are hard to audit.
+
+Instead, Stage 4.59 is additive: it emits exactly ONE bypass candidate per qualifying section and adds it to `filteredValidatedSuggestions` directly, bypassing Stages 2–4 entirely. This is the same pattern used by Stages 4.5 and 4.58.
+
+**Two early-returns in `index.ts` are now guarded by `hasStructuralBypassCandidate`.**
+
+The `actionableSections.length === 0` return and the `synthesizedSuggestions.length === 0` return were short-circuiting before Stage 4.59 could run. Adding the bypass check before each prevents the pipeline from exiting early while remaining correct for all-zero bypass cases (still returns early).
+
+### Alternatives Rejected
+
+- **Raising actionabilitySignal threshold globally**: Would cause other sections to also bypass, inflating output uncontrollably.
+- **Adding bypass logic inside `filterActionableSections`**: Changes a well-tested pure function; requires synthesis/scoring to handle bypass sections specially throughout.
+- **Modifying `extractIdeaCandidates` to loosen its composite gate**: That gate is correct for prose sections; loosening it for structured list sections would re-introduce noise.
+
+### Score Preservation in Scoring.ts
+
+Bypass candidates have preset scores (0.65). `refineSuggestionScores` is guarded to skip re-scoring for `structural-idea-bypass` and `idea-semantic` candidates on non-actionable sections. Reason: recomputing from `section.actionable_signal=0` would produce overall=0 and drop the candidate at the threshold gate.
+
+---
+
+## 2026-02-24: Strategy Heading Override — why bullet_count guard was widened
+
+### Context
+
+`computeTypeLabel()` had a rule: strategy-only sections (no delta, no schedule event) return `'idea'`. But the rule required `bullet_count === 0` — making it ineffective for strategy headings with imperative bullet lists ("Create …", "Present …", "Always show …").
+
+The intent was to exempt "action plan" bullet sections (e.g., "shift from enterprise to SMB with tasks") from the idea path. However, when the heading itself names a strategy workstream (e.g., "Agatha Gamification Strategy"), the bullets are elaboration of the strategy, not a concrete plan mutation. They must remain `'idea'`.
+
+### Decision
+
+**Add `isStrategyHeadingSection` as an early-return override inside the strategy-only branch of `computeTypeLabel()`.**
+
+Fires before the `bullet_count === 0` check. This means:
+- Strategy-named headings + any number of bullets + no delta → `'idea'`
+- Strategy-named headings + bullets + concrete delta → `isStrategyOnlySection` returns `false`, override never fires → `'project_update'` correctly returned
+
+### Alternatives Rejected
+
+- **Removing the bullet_count guard entirely**: Would cause unintended reclassification of genuine action-plan sections that happen to lack a schedule event word but have bullets with change operators.
+- **Using body text heuristics instead of heading text**: Heading text is the most reliable signal for named workstream sections. Body text could match too broadly.
+- **Adding strategy keyword to INITIATIVE_SYSTEM_NOUNS**: That only guards the early-return path for non-actionable sections; the bug was in the main `computeTypeLabel()` type decision path.
+
+### Scope Constraint
+
+`STRATEGY_HEADING_KEYWORDS` is intentionally broad (`strategy | approach | initiative | roadmap | framework | vision | direction | plan | proposal`) to minimize false negatives. The delta guard remains the primary safety valve — any section with concrete dates/durations is still correctly `project_update`.
+
+---
+
+## 2026-02-24: Section Consolidation — Stage 6.5 Placement and Rules
+
+### Context
+
+Structured sections with level ≤ 3 headings and 3+ bullets (e.g. `### Black Box Prioritization System`) could emit multiple idea candidates — one per sentence or bullet — from Stages 4.58 and 4.5. This fragmentation made the output noisy without adding information.
+
+### Decision
+
+**Stage 6.5 runs after Stage 5 (Scoring), before Stage 6 (Routing).**
+
+Post-scoring placement is intentional: we only consolidate candidates that have already passed all quality gates (validation, grounding, process-noise suppression, scoring threshold). Consolidating earlier would risk merging a low-quality candidate with a high-quality one and discarding the distinction.
+
+**Consolidation rule (all conditions must hold):**
+1. `heading_level <= 3`
+2. `num_list_items >= 3`
+3. No delta/timeline tokens in section `raw_text`
+4. More than 1 candidate for the section
+5. ALL candidates are type `idea`
+
+**Title strategy:** use `normalizeTitlePrefix('idea', section.heading_text)` — anchored to the section heading rather than any individual bullet title. This is the correct signal: the heading names the idea, the bullets are its sub-points.
+
+### Alternatives Rejected
+
+- **Stage 4 placement (pre-validation)**: Rejected — merging before quality gates means a merged candidate could survive validation on the strength of multiple bullet spans, masking a single weak one.
+- **Stage 3 placement (synthesis)**: Rejected — synthesis doesn't know how many candidates other stages will emit per section. Consolidation needs to see the final candidate pool.
+- **Consolidate risk/project_update types too**: Rejected — risks describe distinct failure modes; project_updates represent concrete timeline events. Both are identity-bearing; merging would lose precision.
+
+### Future Options Preserved
+
+- `TIMELINE_PATTERNS` in `consolidateBySection.ts` can be extended independently if new delta signal patterns are added to `title-normalization.ts`.
+- `resetConsolidationCounter()` follows the same determinism reset pattern as other counter-based stages.
+
+---
+
 ## 2026-02-22: Type Tie-Breaker — Strategy-Only Sections Emit as Idea
 
 ### Context

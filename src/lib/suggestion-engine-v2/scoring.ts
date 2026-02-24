@@ -290,11 +290,13 @@ export function refineSuggestionScores(
   suggestion: Suggestion,
   section: ClassifiedSection
 ): Suggestion {
-  // Preserve scores for idea-semantic candidates on non-actionable sections.
-  // The semantic extractor already computed confidence from signal token count;
-  // re-scoring from section actionability (which is 0 for non-actionable) would
+  // Preserve scores for idea-semantic and structural-idea-bypass candidates on
+  // non-actionable sections.  Both extractors compute confidence independently
+  // of section actionability signal; re-scoring from actionability=0 would
   // incorrectly drop valid strategy/mechanism detections.
-  if (suggestion.metadata?.source === 'idea-semantic' && !section.is_actionable) {
+  if (!section.is_actionable &&
+      (suggestion.metadata?.source === 'idea-semantic' ||
+       suggestion.metadata?.source === 'structural-idea-bypass')) {
     return suggestion;
   }
 
@@ -405,11 +407,33 @@ export function passesThresholds(
 }
 
 /**
+ * Determine whether a suggestion should show "Needs clarification" in the UI.
+ *
+ * Policy (Part B):
+ * - Show badge ONLY if a V3 validator failed (V3_evidence_sanity) OR
+ *   if dropReason exists (suggestion is renderable but has a known drop cause).
+ * - Do NOT show badge for low overallScore alone.
+ * - Do NOT show badge for low synthesisScore alone.
+ */
+function requiresClarificationBadge(suggestion: Suggestion): boolean {
+  // Check if V3_evidence_sanity failed (stored in validation_results)
+  const v3Failed = suggestion.validation_results?.some(
+    (r) => r.validator === 'V3_evidence_sanity' && !r.passed
+  ) ?? false;
+  if (v3Failed) return true;
+
+  // Check if dropReason is set (still renderable = "apply anyway" case)
+  if (suggestion.dropReason || suggestion.drop_reason) return true;
+
+  return false;
+}
+
+/**
  * Apply confidence-based processing to suggestions
  *
  * Per the suggestion-suppression-fix plan:
  * - project_update suggestions are NEVER dropped at THRESHOLD stage
- * - Low confidence downgrades to needs_clarification with reasons (and optionally action: 'comment')
+ * - Low confidence downgrades to needs_clarification (only if V3 fails or dropReason exists)
  * - idea suggestions may still be dropped by thresholds
  *
  * INVARIANT: If section.is_actionable === true, suggestion MUST NOT be dropped at THRESHOLD.
@@ -418,8 +442,9 @@ export function passesThresholds(
  * Decision matrix:
  * - Case A: non-plan_change (idea) → may be dropped if below threshold
  * - Case B: plan_change (project_update) + high confidence → emit as-is
- * - Case C: plan_change (project_update) + low confidence → emit with needs_clarification=true and action='comment'
- * - Case D: actionable section (is_actionable=true) → bypass THRESHOLD, downgrade if low confidence
+ * - Case C: plan_change (project_update) + low confidence → emit without clarification badge
+ *           (unless V3 failed or dropReason exists)
+ * - Case D: actionable section (is_actionable=true) → bypass THRESHOLD, no badge for low score
  */
 export function applyConfidenceBasedProcessing(
   suggestions: Suggestion[],
@@ -449,21 +474,19 @@ export function applyConfidenceBasedProcessing(
         is_high_confidence: highConf,
       };
 
-      if (!highConf) {
-        // Case C & D: Low confidence → downgrade to clarification with action='comment'
-        // Per the plan: "downgrade to action: 'comment' + needs_clarification: true"
+      // Clarification badge: only when V3 failed or dropReason exists — NOT for low score alone.
+      const needsBadge = requiresClarificationBadge(suggestion);
+      if (needsBadge) {
         processedSuggestion.needs_clarification = true;
         processedSuggestion.clarification_reasons = computeClarificationReasons(suggestion, thresholds);
 
         // Add legacy v0 action field for compatibility (if needed by downstream consumers)
-        // Note: This is a metadata field, not part of the core suggestion type in v2
         if (processedSuggestion.payload) {
           (processedSuggestion as any).action = 'comment';
         }
 
         downgraded++;
       } else {
-        // Case B: High confidence → no clarification needed
         processedSuggestion.needs_clarification = false;
         processedSuggestion.clarification_reasons = [];
       }
