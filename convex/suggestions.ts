@@ -39,7 +39,7 @@ function computeStructuredFingerprint(type: string, title: string, body: string)
  * Structured suggestion record from the v2 engine.
  */
 type SuggestionRecord = {
-  type: "idea" | "project_update";
+  type: "idea" | "project_update" | "bug" | "risk";
   title: string;
   body: string;
   evidencePreview: string;
@@ -95,7 +95,7 @@ export const get = query({
 
 // Validator for a structured suggestion record
 const suggestionRecordValidator = v.object({
-  type: v.union(v.literal("idea"), v.literal("project_update")),
+  type: v.union(v.literal("idea"), v.literal("project_update"), v.literal("bug"), v.literal("risk")),
   title: v.string(),
   body: v.string(),
   evidencePreview: v.string(),
