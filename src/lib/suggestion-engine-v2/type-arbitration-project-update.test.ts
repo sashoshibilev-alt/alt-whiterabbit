@@ -290,3 +290,139 @@ The product launch moved from January to February due to infra delays.
     expect(launchUpdate).toBeDefined();
   });
 });
+
+// ============================================
+// Tests for extended strategy heading keywords
+// (prioritization, automation, playbook, vision)
+// ============================================
+
+describe('isStrategyHeadingSection — extended keyword coverage', () => {
+  it('returns true for heading containing "Prioritization"', () => {
+    const heading = 'Black Box Prioritization System';
+    const sectionText = 'Black Box Prioritization System Score claims Use algorithm Automate triage Reduce manual work';
+    expect(isStrategyHeadingSection(heading, sectionText, 4)).toBe(true);
+  });
+
+  it('returns true for heading containing "Automation"', () => {
+    const heading = 'Data Collection Automation';
+    const sectionText = 'Data Collection Automation Parse field data Integrate with sensors Generate reports Normalize input';
+    expect(isStrategyHeadingSection(heading, sectionText, 4)).toBe(true);
+  });
+
+  it('returns true for heading containing "Playbook"', () => {
+    const heading = 'Customer Success Playbook';
+    const sectionText = 'Customer Success Playbook Identify at-risk accounts Escalate early Provide dedicated support Review monthly';
+    expect(isStrategyHeadingSection(heading, sectionText, 4)).toBe(true);
+  });
+
+  it('returns true for heading containing "Vision"', () => {
+    const heading = 'Product Vision';
+    const sectionText = 'Product Vision Move toward self-serve model Reduce sales dependency Enable global scale Automate onboarding';
+    expect(isStrategyHeadingSection(heading, sectionText, 4)).toBe(true);
+  });
+
+  it('returns false for prioritization heading when concrete delta exists', () => {
+    const heading = 'Claims Prioritization System';
+    const sectionText = 'Claims Prioritization System Delay by 4 weeks due to vendor issues Score claims Automate triage';
+    expect(isStrategyHeadingSection(heading, sectionText, 3)).toBe(false);
+  });
+});
+
+describe('computeTypeLabel — extended keywords emit idea not project_update', () => {
+  function makeSection(headingText: string, rawText: string, numListItems: number): Section {
+    return {
+      section_id: 'test',
+      note_id: 'test-note',
+      heading_text: headingText,
+      heading_level: 3,
+      start_line: 0,
+      end_line: numListItems + 1,
+      body_lines: [],
+      structural_features: {
+        num_lines: numListItems + 1,
+        num_list_items: numListItems,
+        has_dates: false,
+        has_metrics: false,
+        has_quarter_refs: false,
+        has_version_refs: false,
+        has_launch_keywords: false,
+        initiative_phrase_density: 0,
+      },
+      raw_text: rawText,
+    };
+  }
+
+  function makePlanChangeIntent() {
+    return {
+      plan_change: 0.6,
+      new_workstream: 0.2,
+      status_informational: 0.1,
+      communication: 0.05,
+      research: 0.03,
+      calendar: 0.01,
+      micro_tasks: 0.01,
+    };
+  }
+
+  it('Strategy heading + bullets + imperatives + no delta => idea', () => {
+    // Imperatives like "Create", "Present", "Show" must NOT prevent idea emission
+    const section = makeSection(
+      'Agatha Gamification Strategy',
+      'Create a points system that rewards key user actions\nPresent weekly leaderboards to drive engagement\nAlways show earning potential on every screen',
+      3
+    );
+    const intent = makePlanChangeIntent();
+    expect(computeTypeLabel(section, intent)).toBe('idea');
+  });
+
+  it('Strategy heading + bullets + imperatives + concrete date change => project_update', () => {
+    const section = makeSection(
+      'Agatha Gamification Strategy',
+      'Create a points system\nPresent weekly leaderboards\nRollout moved from January to February due to QA blockers',
+      3
+    );
+    const intent = makePlanChangeIntent();
+    expect(computeTypeLabel(section, intent)).toBe('project_update');
+  });
+
+  it('Prioritization heading + 3+ bullets + no delta => idea', () => {
+    const section = makeSection(
+      'Black Box Prioritization System',
+      'Score each claim automatically\nRank by severity and impact\nFilter out duplicates\nNotify agents of top-priority items',
+      4
+    );
+    const intent = makePlanChangeIntent();
+    expect(computeTypeLabel(section, intent)).toBe('idea');
+  });
+
+  it('Automation heading + 3+ bullets + no delta => idea', () => {
+    const section = makeSection(
+      'Data Collection Automation',
+      'Parse incoming field data\nIntegrate with IoT sensors\nNormalize data formats\nGenerate daily reports',
+      4
+    );
+    const intent = makePlanChangeIntent();
+    expect(computeTypeLabel(section, intent)).toBe('idea');
+  });
+
+  it('num_list_items field is present and used as list-density gate', () => {
+    // Verify the canonical field name is num_list_items (not bullet_count or bulletCount)
+    const section = makeSection('Engagement Strategy', 'Focus on daily users\nReduce friction\nImprove notifications', 3);
+    expect(section.structural_features.num_list_items).toBe(3);
+    // With 3+ items and no delta, result should be idea
+    const intent = makePlanChangeIntent();
+    expect(computeTypeLabel(section, intent)).toBe('idea');
+  });
+
+  it('num_list_items < 3 does NOT trigger strategy heading override (falls through)', () => {
+    // With only 2 bullets, isStrategyHeadingSection returns false regardless of heading
+    const section = makeSection(
+      'Agatha Gamification Strategy',
+      'Create a points system\nPresent leaderboards',
+      2
+    );
+    const intent = makePlanChangeIntent();
+    // Falls through — isStrategyOnlySection is true but heading guard fails => project_update
+    expect(computeTypeLabel(section, intent)).toBe('project_update');
+  });
+});

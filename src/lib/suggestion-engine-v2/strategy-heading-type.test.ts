@@ -30,24 +30,24 @@ describe('isStrategyHeadingSection', () => {
     expect(isStrategyHeadingSection('Agatha Gamification Strategy', '', 3)).toBe(true);
   });
 
-  it('returns true for heading containing "Approach"', () => {
-    expect(isStrategyHeadingSection('Go-To-Market Approach', '', 0)).toBe(true);
+  it('returns true for heading containing "Approach" with 3+ bullets', () => {
+    expect(isStrategyHeadingSection('Go-To-Market Approach', 'Focus on SMB segment\nReduce sales cycle\nPartner with resellers', 3)).toBe(true);
   });
 
-  it('returns true for heading containing "Initiative"', () => {
-    expect(isStrategyHeadingSection('Pricing Initiative', '', 2)).toBe(true);
+  it('returns false for heading containing "Initiative" (not a strategy keyword)', () => {
+    expect(isStrategyHeadingSection('Pricing Initiative', '', 2)).toBe(false);
   });
 
-  it('returns true for heading containing "Roadmap"', () => {
-    expect(isStrategyHeadingSection('Product Roadmap v2', '', 5)).toBe(true);
+  it('returns false for heading containing "Roadmap" (not a strategy keyword)', () => {
+    expect(isStrategyHeadingSection('Product Roadmap v2', '', 5)).toBe(false);
   });
 
   it('returns true for heading containing "Framework"', () => {
     expect(isStrategyHeadingSection('Engagement Framework', '', 4)).toBe(true);
   });
 
-  it('returns true for heading containing "Plan"', () => {
-    expect(isStrategyHeadingSection('Q3 Execution Plan', '', 0)).toBe(true);
+  it('returns false for heading containing "Plan" (not a strategy keyword)', () => {
+    expect(isStrategyHeadingSection('Q3 Execution Plan', '', 0)).toBe(false);
   });
 
   it('returns false for a generic noun heading without strategy keyword', () => {
