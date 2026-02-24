@@ -61,7 +61,7 @@ export type { DebugGeneratorOptions, DebugGeneratorResult } from './debugGenerat
 
 // Re-export modules for advanced usage
 export { preprocessNote } from './preprocessing';
-export { classifySections, classifySection, classifyIntent, classifyType, filterActionableSections, isActionable, computeActionabilitySignals, isPlanChangeIntentLabel, isPlanChangeCandidate, hasPlanChangeEligibility, isStrategyHeadingSection, qualifiesForStructuralIdeaBypass, classifySectionWithLLM, classifySectionsWithLLM } from './classifiers';
+export { classifySections, classifySection, classifyIntent, classifyType, filterActionableSections, isActionable, computeActionabilitySignals, isPlanChangeIntentLabel, isPlanChangeCandidate, hasPlanChangeEligibility, isStrategyHeadingSection, qualifiesForStructuralIdeaBypass, computeTypeLabel, classifySectionWithLLM, classifySectionsWithLLM } from './classifiers';
 export type { LLMClassificationOptions } from './classifiers';
 export { classifyIntentWithLLM, classifyTypeWithLLM, blendIntentScores, MockLLMProvider } from './llmClassifiers';
 export type { LLMProvider, LLMIntentResponse, LLMTypeResponse } from './llmClassifiers';

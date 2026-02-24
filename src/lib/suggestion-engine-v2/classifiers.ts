@@ -518,42 +518,66 @@ export function isStrategyOnlySection(sectionText: string): boolean {
 }
 
 /**
- * Heading keywords that explicitly name a strategic planning section.
- * When a heading contains one of these words the section is a named strategy
- * workstream, not a concrete execution plan or schedule mutation.
+ * Strategy heading pattern for the TYPE ARBITRATION layer.
+ *
+ * A section whose heading contains one of these words is a strategic-direction
+ * section, not a schedule-mutation section.  When the section also has no
+ * concrete delta and no timeline tokens (i.e. isStrategyOnlySection returns
+ * true) the section should be classified as idea regardless of bullet count.
  *
  * Examples that match:
- *   "Agatha Gamification Strategy"
- *   "Go-To-Market Approach"
- *   "Pricing Initiative"
- *   "Product Roadmap v2"
- *   "Engagement Framework"
+ *   "### Agatha Gamification Strategy"
+ *   "## Engagement Approach"
+ *   "## Technical Framework"
+ *   "## Content System"
  */
-const STRATEGY_HEADING_KEYWORDS =
-  /\b(strategy|approach|initiative|roadmap|framework|vision|direction|plan|proposal)\b/i;
+const STRATEGY_HEADING_PATTERN = /\b(strategy|strategies|approach|framework|system|philosophy|direction|principles?)\b/i;
 
 /**
- * Returns true when the section heading explicitly names a strategic planning
- * section (e.g. "Agatha Gamification Strategy", "Go-To-Market Approach").
+ * Explicit timeline token pattern — used to gate the strategy-heading override.
  *
- * This is used in computeTypeLabel to let strategy-named sections with
- * imperative bullets remain typed as 'idea' when there is no concrete
- * delta / timeline change.  Without this guard those sections fall through
- * to 'project_update' because the bullet_count > 0 condition prevents the
- * existing strategy-only idea path from firing.
+ * If the heading itself contains a timeline reference (e.g. "Q3 Strategy",
+ * "Sprint 4 Approach") the section may still describe a scheduled block of
+ * work rather than pure direction, so the override should NOT apply.
+ */
+const TIMELINE_TOKEN_PATTERN = /\b(q[1-4]|sprint\s*\d+|h[12]\s+\d{4}|week\s*\d+|by\s+(?:end\s+of\s+)?(?:q[1-4]|january|february|march|april|may|june|july|august|september|october|november|december))\b/i;
+
+/**
+ * Returns true when:
+ *   1. The section heading matches STRATEGY_HEADING_PATTERN, AND
+ *   2. The section body has >= 3 bullet items (is a strategy list, not a
+ *      single-sentence direction statement), AND
+ *   3. The full section text contains no concrete delta or schedule event
+ *      (isStrategyOnlySection returns true), AND
+ *   4. The heading itself contains no explicit timeline token.
  *
- * Parameters mirror the task spec signature:
- *   heading_text   — section.heading_text (may be undefined)
- *   raw_text       — section.raw_text
- *   num_list_items — section.structural_features.num_list_items
+ * Used as part of the TYPE ARBITRATION layer in computeTypeLabel:
+ * sections that match are forced to 'idea' even when bullet_count >= 3,
+ * overriding the default "bullets = action plan = project_update" assumption.
+ *
+ * Examples that return true (strategy heading + bullets, no delta):
+ *   "### Agatha Gamification Strategy\n- Move away from farm data burden\n- Focus on immediate reward\n..."
+ *   "## Engagement Approach\n- Prioritize daily active users\n- Reduce friction\n..."
+ *
+ * Examples that return false (has delta, schedule event, or no strategy heading):
+ *   "## Launch Timeline\n- Q3 rollout\n- ..."   ← has timeline token in heading
+ *   "## Scope Changes\n- Defer to Q3 due to 4-week slip\n..."   ← has concrete delta
+ *   "## Bug Fixes\n- Fix login redirect\n..."   ← heading not a strategy word
  */
 export function isStrategyHeadingSection(
-  heading_text: string | undefined,
-  _raw_text: string,
-  _num_list_items: number
+  headingText: string,
+  sectionText: string,
+  numListItems: number
 ): boolean {
-  if (!heading_text) return false;
-  return STRATEGY_HEADING_KEYWORDS.test(heading_text);
+  // Heading must match a strategy/direction word
+  if (!STRATEGY_HEADING_PATTERN.test(headingText)) return false;
+  // Must have >= 3 bullets (otherwise it's a single-item note, not a strategy block)
+  if (numListItems < 3) return false;
+  // Heading must NOT contain a timeline token (e.g. "Q3 Strategy" is still a plan)
+  if (TIMELINE_TOKEN_PATTERN.test(headingText)) return false;
+  // Full section text must have no concrete delta or schedule event
+  if (!isStrategyOnlySection(sectionText)) return false;
+  return true;
 }
 
 /**
@@ -1842,20 +1866,18 @@ export function computeTypeLabel(
     //   - A schedule event word (launch, deploy, ETA): "Ham Light deployment"
     //   - A structured task / heading + bullet cluster (role assignments, decision markers
     //     are already handled above via forceDecisionMarker / forceRoleAssignment)
-    const sectionText = ((section.heading_text || '') + ' ' + section.raw_text);
+    const headingText = section.heading_text || '';
+    const sectionText = (headingText + ' ' + section.raw_text);
+    const numListItems = section.structural_features?.num_list_items ?? 0;
     if (isStrategyOnlySection(sectionText)) {
-      // Strategy-named headings (e.g. "Agatha Gamification Strategy") with imperative
-      // bullets but NO concrete delta describe a strategic workstream plan, not a
-      // schedule mutation.  They must remain typed as 'idea' regardless of bullet_count.
-      const numListItems = section.structural_features?.num_list_items ?? 0;
-      if (
-        isStrategyHeadingSection(section.heading_text, section.raw_text, numListItems)
-      ) {
+      // TYPE ARBITRATION: Strategy heading + bullet list + no delta → force idea.
+      // Sections like "### Agatha Gamification Strategy" with 3+ bullet points are
+      // strategic direction blocks, not schedule mutations, even though they have bullets.
+      if (isStrategyHeadingSection(headingText, sectionText, numListItems)) {
         return 'idea';
       }
-      // Also require that the section does not have structured tasks (bullets with
-      // change operators are typically action plans, not strategy descriptions).
-      if (!section.structural_features || section.structural_features.bullet_count === 0) {
+      // Also treat zero-bullet strategy sections as ideas (single-sentence pivots).
+      if (numListItems === 0) {
         return 'idea';
       }
     }
@@ -2323,73 +2345,6 @@ export async function classifySectionWithLLM(
     type_confidence: typeConfidence,
     typeLabel,
   };
-}
-
-// ============================================
-// Structural Idea Bypass
-// ============================================
-
-/**
- * Operational heading keywords that disqualify a section from the structural idea bypass.
- * Sections whose heading matches any of these are NOT bypass-eligible because they represent
- * concrete delivery/operational artefacts rather than conceptual idea clusters.
- */
-const STRUCTURAL_BYPASS_OPERATIONAL_HEADINGS = /\b(deployment|release|rollout|migration|launch|incident|retro|qa|testing|security\s+review|production|implementation\s+timeline)\b/i;
-
-/**
- * Generic heading words that disqualify a section from the structural idea bypass.
- * These headings add no meaningful conceptual signal, so bypassing for them would produce
- * low-value, undifferentiated ideas.
- */
-const STRUCTURAL_BYPASS_GENERIC_HEADINGS = /^(general|notes|discussion|misc|other)$/i;
-
-/**
- * Check whether a section qualifies for the structural idea bypass.
- *
- * A section may bypass ACTIONABILITY gating and emit a single `idea` if and only if
- * ALL six conditions hold:
- *   1. heading_level <= 3
- *   2. num_list_items >= 3
- *   3. No concrete delta/timeline tokens in raw_text (reuses TIMELINE_PATTERNS from consolidateBySection)
- *   4. Heading does NOT match operational keywords (deployment, release, rollout, ...)
- *   5. Heading is NOT generic (general, notes, discussion, misc, other)
- *   6. raw_text charCount >= 150
- *
- * When true, the pipeline (Stage 4.59) emits exactly one idea candidate grounded in the
- * section content and skips normal actionability gating.
- *
- * IMPORTANT: The delta/timeline check is delegated to the caller via the `hasDeltaSignal`
- * parameter to avoid coupling classifiers.ts to consolidateBySection.ts.
- *
- * @param section        - The classified section to evaluate
- * @param hasDeltaSignal - Pre-computed result of sectionHasDeltaSignal(section.raw_text)
- */
-export function qualifiesForStructuralIdeaBypass(
-  section: { heading_level?: number; structural_features: { num_list_items: number }; heading_text?: string; raw_text: string },
-  hasDeltaSignal: boolean
-): boolean {
-  // 1. Heading level must be <= 3
-  const level = section.heading_level ?? 999;
-  if (level > 3) return false;
-
-  // 2. Must have >= 3 list items
-  if (section.structural_features.num_list_items < 3) return false;
-
-  // 3. No delta/timeline tokens (caller provides)
-  if (hasDeltaSignal) return false;
-
-  // 4. Heading must not be operational
-  const heading = (section.heading_text ?? '').trim();
-  if (STRUCTURAL_BYPASS_OPERATIONAL_HEADINGS.test(heading)) return false;
-
-  // 5. Heading must not be generic
-  const headingLower = heading.toLowerCase();
-  if (STRUCTURAL_BYPASS_GENERIC_HEADINGS.test(headingLower)) return false;
-
-  // 6. Section body must be at least 150 chars
-  if (section.raw_text.length < 150) return false;
-
-  return true;
 }
 
 /**

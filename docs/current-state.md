@@ -1,189 +1,40 @@
 # Current State
 
-## Span/Body Consistency + UI Clarification Policy (2026-02-24)
+## Type Arbitration Layer: Strategy Sections → idea (2026-02-24)
 
-**Files**: `consolidateBySection.ts`, `scoring.ts`, `consolidate-by-section.test.ts`, `suggestion-engine-v2.test.ts`, `plan-change-invariants.test.ts`
-
-### Part A — Engine: Body Construction Fix
-
-**Problem**: `consolidateBySection` inherited `suggestion.body` from the anchor candidate, so the consolidated body reflected only one candidate's synthesis, not the merged spans.
-
-**Fix** (`consolidateBySection.ts`):
-- Added `buildConsolidatedBody(spans, maxSpans=4)`: builds body by joining stripped text from top 2–4 evidence spans, capped at 320 chars.
-- Added `findMismatchedEvidencePreview(previews, normalizedSectionText)`: invariant checker — returns first preview that is not a substring of the normalized section text.
-- `consolidateBySection()` now builds `suggestion.body` via `buildConsolidatedBody(mergedSpans)` and `suggestion.evidencePreview` from `mergedSpans.slice(0, 4)`, replacing the anchor-body inheritance.
-
-### Part B — UI: Clarification Policy Change
-
-**Problem**: `applyConfidenceBasedProcessing` set `needs_clarification=true` for any low-confidence plan_change or actionable-section suggestion, causing "Needs clarification" badge noise for low-score-but-valid suggestions.
-
-**New rule** (`scoring.ts`):
-- `needs_clarification=true` only when:
-  - A V3_evidence_sanity validator failed (checked via `validation_results`), OR
-  - `dropReason` / `drop_reason` is set (renderable "apply anyway" case)
-- Low `overallScore` or `synthesisScore` alone does NOT trigger the badge.
-- `is_high_confidence=false` is still set correctly for ordering/display purposes.
-
-### Tests Updated
-
-- `plan-change-invariants.test.ts`: 2 tests updated — "low confidence" now asserts `needs_clarification=false`.
-- `suggestion-engine-v2.test.ts`: 8 tests updated — "Case C" and INVARIANT tests now match new policy.
-
-### New Tests Added (`consolidate-by-section.test.ts`)
-
-- `buildConsolidatedBody`: multi-bullet body, marker stripping, 320-char cap, 4-span limit
-- Consolidated suggestion body contains text from multiple candidates (not anchor only)
-- `evidencePreview` contains texts from multiple spans
-- `findMismatchedEvidencePreview` invariant (null on pass, returns failing preview on mismatch)
-- Evidence-in-section invariant: passes for consolidated idea whose spans are in section raw_text
-- Timeline section (Ham Light + user IDs): correct suggestions, no cross-mixed bodies
-- UI policy: low-score-valid → no badge; V3 failure → badge
-
-## Structural Idea Bypass — Stage 4.59 (2026-02-24)
-
-**Files**: `classifiers.ts`, `consolidateBySection.ts`, `scoring.ts`, `index.ts`, `structural-idea-bypass.test.ts` (new)
+**Files**: `classifiers.ts`, `index.ts`, `type-arbitration-project-update.test.ts`
 
 ### Problem
 
-Structured conceptual sections like "Black Box Prioritization System" or "Data Collection Automation" with 3+ descriptive bullets were silently dropped at the ACTIONABILITY gate (actionabilitySignal=0). Neither Stage 4.58 (semantic idea extraction) nor any earlier stage covered them when the pipeline short-circuited before synthesis.
+Sections like "### Agatha Gamification Strategy" with 3+ bullet points were classified as `typeLabel: project_update` despite containing no concrete delta (date change, duration, ETA). The existing `isStrategyOnlySection` check was gated behind `bullet_count === 0` (which also referenced a non-existent field, making it always false for bulleted sections).
 
 ### Solution
 
-**`classifiers.ts` — `qualifiesForStructuralIdeaBypass(section, hasDeltaSignal)`:**
-- New exported function checking 6 conditions (all must hold):
-  1. `heading_level <= 3`
-  2. `num_list_items >= 3`
-  3. No delta/timeline tokens (caller supplies result of `sectionHasDeltaSignal`)
-  4. Heading does NOT match operational keywords: `deployment|release|rollout|migration|launch|incident|retro|qa|testing|security review|production|implementation timeline`
-  5. Heading is NOT generic: `general|notes|discussion|misc|other`
-  6. `raw_text.length >= 150`
+**New function `isStrategyHeadingSection(heading, sectionText, numListItems)`:**
+- Returns `true` when heading matches `STRATEGY_HEADING_PATTERN` (strategy/approach/framework/system/philosophy/direction/principles), AND bullet count >= 3, AND no concrete delta or schedule event in section text, AND heading contains no timeline token.
+- Used in `computeTypeLabel` as an override: if `isPlanChange && isStrategyOnly && isStrategyHeadingSection` → force `idea`.
 
-**`consolidateBySection.ts`:** Exported `sectionHasDeltaSignal` (was private) so other modules can reuse it.
-
-**`index.ts` — pipeline changes:**
-- Early-return at "actionableSections.length === 0" now checks for bypass-eligible sections first; if any exist, continues the pipeline instead of returning early.
-- Synthesis empty-check similarly guarded by `hasStructuralBypassCandidate`.
-- `sectionMap` is now built before the synthesis empty-check so Stage 4.59 can look up sections.
-- **Stage 4.59** (after 4.58): iterates ALL `classifiedSections`, skips suppressed and already-covered sections, checks `qualifiesForStructuralIdeaBypass`, emits exactly ONE idea candidate grounded in the first 1–4 list items. `metadata.source = 'structural-idea-bypass'`.
-- Counter `structuralBypassCounter` added for deterministic IDs.
-- Imports: `qualifiesForStructuralIdeaBypass` from `classifiers.ts`, `sectionHasDeltaSignal` from `consolidateBySection.ts`, `computeSuggestionKey` from `../suggestion-keys`.
-
-**`scoring.ts` — `refineSuggestionScores`:**
-- Score preservation guard extended from `idea-semantic` only to also cover `structural-idea-bypass` candidates on non-actionable sections. Without this, re-scoring from section actionability=0 would drop the bypass candidate.
+**Fixed `computeTypeLabel`:**
+- Replaced inaccessible `structural_features.bullet_count` with `structural_features.num_list_items`.
+- Added `isStrategyHeadingSection` check before the zero-bullet check so bulleted strategy sections are also classified as `idea`.
 
 ### Behavior Change
 
 | Section | Before | After |
 |---|---|---|
-| 3+ bullet conceptual section, actionabilitySignal=0 | Dropped at ACTIONABILITY | Emits 1 idea |
-| "Deployment Plan" with bullets | Normal flow (no bypass) | Normal flow (no bypass) |
-| Single paragraph, no bullets | Dropped | Dropped (no list items, bypass does not fire) |
-| 2-bullet section | Dropped | Dropped (< 3 items) |
+| `### Agatha Gamification Strategy` + 4 bullets | `project_update` | `idea` |
+| `### Engagement Approach` + 3 bullets, no delta | `project_update` | `idea` |
+| `## Launch Status` + "moved from Jan to Feb" | `project_update` | `project_update` (unchanged) |
+| `## Scope Changes` + no strategy heading + bullets | `project_update` | `project_update` (unchanged) |
+| Strategy heading + `Q3` in heading | unchanged | unchanged (timeline token guard) |
 
 ### Tests
 
-**New file**: `structural-idea-bypass.test.ts` (18 tests)
-- 10 unit tests for `qualifiesForStructuralIdeaBypass`
-- Integration: "Black Box Prioritization System" → ≥1 idea
-- Integration: "Data Collection Automation" → ≥1 idea with matching title
-- Negative: "Deployment Plan" (operational heading) → 0 bypass candidates
-- Negative: single paragraph section → 0 bypass candidates
-- Negative: 2-bullet section → 0 bypass candidates
-
----
-
-## Strategy Heading Type Override — computeTypeLabel fix (2026-02-24)
-
-**Files**: `classifiers.ts`, `index.ts` (re-export), `strategy-heading-type.test.ts` (new)
-
-### Problem
-
-Sections whose heading explicitly names a strategy workstream (e.g. "Agatha Gamification Strategy") were classified as `project_update` instead of `idea` when the section body contained imperative-style bullets ("Create a points system", "Present weekly leaderboards").
-
-Root cause: `computeTypeLabel()` had an early-return for strategy-only sections (`isStrategyOnlySection` true), but the return was gated on `bullet_count === 0`. Any strategy heading with bullets fell through to `return 'project_update'`.
-
-### Solution
-
-Added `isStrategyHeadingSection(heading_text, raw_text, num_list_items)` to `classifiers.ts`:
-- Matches heading text against `STRATEGY_HEADING_KEYWORDS`: `strategy | approach | initiative | roadmap | framework | vision | direction | plan | proposal`
-- Returns `true` when the heading explicitly names a strategic planning section
-
-In `computeTypeLabel()`, inside the `isStrategyOnlySection` branch, a new early-return fires **before** the `bullet_count === 0` check:
-- If `isStrategyHeadingSection` is true → return `'idea'` regardless of bullet count
-- Control case preserved: if the section also contains a concrete delta (e.g., "pushed from Jan 12 to Jan 19"), `isStrategyOnlySection` returns `false` and the override never fires → `'project_update'` is correctly returned
-
-### Behavior Change
-
-| Section | Before | After |
-|---|---|---|
-| Strategy heading + imperative bullets + no delta | `project_update` | `idea` |
-| Strategy heading + imperative bullets + explicit delta | `project_update` | `project_update` (unchanged) |
-| Non-strategy heading + bullets + no delta | unchanged | unchanged |
-| Strategy heading + no bullets + no delta | `idea` | `idea` (unchanged) |
-
-### Tests
-
-**New file**: `strategy-heading-type.test.ts` (14 tests)
-- 10 unit tests for `isStrategyHeadingSection` (true/false for various keywords and edge cases)
-- Integration: strategy heading + imperative bullets + no delta → ≥1 idea, 0 project_updates
-- Control: strategy heading + bullets + delta ("pushed from Jan 12 to Jan 19") → ≥1 project_update
-- Regression: non-strategy heading prose section still emits a suggestion
-
----
-
-## Section Consolidation — Stage 6.5 (2026-02-24)
-
-**Files**: `consolidateBySection.ts` (new), `index.ts`
-
-### Problem
-
-Structured sections with a clear heading (level ≤ 3) and 3+ bullet points were emitting multiple fragmented idea candidates — one per bullet — from Stage 4.58 (semantic idea extraction) and other additive stages. This created noise and fragmentation, e.g.:
-- Section: `### Black Box Prioritization System` with 3 bullets → 3 idea suggestions
-- Expected: 1 consolidated idea titled "Idea: Black Box Prioritization System"
-
-### Solution
-
-Added **Stage 6.5: `consolidateBySection()`** in `index.ts` between Stage 5 (Scoring) and Stage 6 (Routing).
-
-**`consolidateBySection.ts`:**
-- Groups scored suggestions by `section_id`
-- For each group with >1 candidate where ALL are type `idea`:
-  - Checks section: `heading_level <= 3` AND `num_list_items >= 3` AND no delta/timeline tokens in `raw_text`
-  - If all conditions met: collapses the group into one suggestion
-    - Title: `normalizeTitlePrefix('idea', section.heading_text)`
-    - Evidence: `mergeTopSpansFromCandidates(candidates, 5)` (up to 5 unique spans)
-    - `metadata.source = 'consolidated-section'`
-- Risk, project_update, and mixed-type groups are never merged
-- Sections with timeline tokens (e.g., "from 1-year to 5-year", "Q1 2025") are never consolidated
-
-### Exclusion Conditions
-
-A section is NOT consolidated when any of:
-- `heading_level > 3`
-- `num_list_items < 3`
-- `raw_text` matches any of `TIMELINE_PATTERNS` (year/month/week/day spans, quarter refs, date ranges)
-- Candidates are not all `type === 'idea'`
-- Only 1 candidate from the section
-
-### Behavior Change
-
-| Before | After |
-|---|---|
-| 3 idea fragments from same section | 1 consolidated idea with merged spans |
-| Mixed idea+risk in same section | Unchanged (pass-through) |
-| Section with "1-year to 5-year" | Unchanged (timeline guard fires) |
-| Single idea | Unchanged (pass-through) |
-
-### Tests
-
-**New file**: `consolidate-by-section.test.ts` (16 tests)
-- Test 1: 3 idea fragments → 1 consolidated idea (title, type, span count, metadata, id uniqueness)
-- Test 2: Mixed idea + risk → no merge (all 3 candidates preserved)
-- Test 3: Timeline sections (4 variants) → no consolidation
-- Test 4: Single idea → unchanged
-- Test 5: Heading level > 3 → no consolidation
-- Test 6: Fewer than 3 bullets → no consolidation
-- Integration test: end-to-end via `generateSuggestions`
+**New file**: `type-arbitration-project-update.test.ts` (17 tests)
+- `isStrategyHeadingSection` positive/negative unit tests
+- `computeTypeLabel` arbitration tests (all 4 spec scenarios)
+- `classifySection` integration test for the Agatha example
+- `generateSuggestions` end-to-end tests (strategy → idea, date change → project_update)
 
 ---
 
