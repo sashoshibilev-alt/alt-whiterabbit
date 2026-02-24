@@ -1,5 +1,43 @@
 # Current State
 
+## Type Arbitration Layer: Strategy Sections → idea (2026-02-24)
+
+**Files**: `classifiers.ts`, `index.ts`, `type-arbitration-project-update.test.ts`
+
+### Problem
+
+Sections like "### Agatha Gamification Strategy" with 3+ bullet points were classified as `typeLabel: project_update` despite containing no concrete delta (date change, duration, ETA). The existing `isStrategyOnlySection` check was gated behind `bullet_count === 0` (which also referenced a non-existent field, making it always false for bulleted sections).
+
+### Solution
+
+**New function `isStrategyHeadingSection(heading, sectionText, numListItems)`:**
+- Returns `true` when heading matches `STRATEGY_HEADING_PATTERN` (strategy/approach/framework/system/philosophy/direction/principles), AND bullet count >= 3, AND no concrete delta or schedule event in section text, AND heading contains no timeline token.
+- Used in `computeTypeLabel` as an override: if `isPlanChange && isStrategyOnly && isStrategyHeadingSection` → force `idea`.
+
+**Fixed `computeTypeLabel`:**
+- Replaced inaccessible `structural_features.bullet_count` with `structural_features.num_list_items`.
+- Added `isStrategyHeadingSection` check before the zero-bullet check so bulleted strategy sections are also classified as `idea`.
+
+### Behavior Change
+
+| Section | Before | After |
+|---|---|---|
+| `### Agatha Gamification Strategy` + 4 bullets | `project_update` | `idea` |
+| `### Engagement Approach` + 3 bullets, no delta | `project_update` | `idea` |
+| `## Launch Status` + "moved from Jan to Feb" | `project_update` | `project_update` (unchanged) |
+| `## Scope Changes` + no strategy heading + bullets | `project_update` | `project_update` (unchanged) |
+| Strategy heading + `Q3` in heading | unchanged | unchanged (timeline token guard) |
+
+### Tests
+
+**New file**: `type-arbitration-project-update.test.ts` (17 tests)
+- `isStrategyHeadingSection` positive/negative unit tests
+- `computeTypeLabel` arbitration tests (all 4 spec scenarios)
+- `classifySection` integration test for the Agatha example
+- `generateSuggestions` end-to-end tests (strategy → idea, date change → project_update)
+
+---
+
 ## Risk Extraction: Lexical First, Structure Assist — Stage 4.60 (2026-02-22)
 
 **Files**: `signals/extractScopeRisk.ts`, `bSignalSeeding.ts`, `index.ts`, `risk-extraction-lexical.test.ts`
