@@ -617,6 +617,37 @@ export function hasInitiativeQualitySignal(text: string): boolean {
 }
 
 /**
+ * Operational heading keywords that disqualify a section from the structural idea bypass.
+ * Sections with these words in their heading are plan/execution sections, not conceptual ideas.
+ */
+const STRUCTURAL_BYPASS_OPERATIONAL_KEYWORDS = /\b(deployment|deploy|release|rollout|roll\s+out|timeline|schedule|notes|discussion)\b/i;
+
+/**
+ * Returns true when a section qualifies for the structural idea bypass (Stage 4.59):
+ * a conceptual section that has enough structure to emit an idea even when its
+ * actionability signal is 0.
+ *
+ * All six conditions must hold:
+ *   1. heading_level <= 3 (not a deeply nested sub-section)
+ *   2. num_list_items >= 3 (enough bullets to signal a structured concept)
+ *   3. hasDeltaSignal is false (no concrete delta → this is conceptual, not a change)
+ *   4. heading does not contain operational keywords (deployment, release, rollout, etc.)
+ *   5. heading does not contain generic low-signal words (notes, discussion)
+ *   6. raw_text.length >= 150 (enough content to justify an idea)
+ */
+export function qualifiesForStructuralIdeaBypass(
+  section: { heading_level?: number; structural_features?: { num_list_items?: number }; heading_text?: string; raw_text?: string },
+  hasDeltaSignal: boolean
+): boolean {
+  if ((section.heading_level ?? 0) > 3) return false;
+  if ((section.structural_features?.num_list_items ?? 0) < 3) return false;
+  if (hasDeltaSignal) return false;
+  if (STRUCTURAL_BYPASS_OPERATIONAL_KEYWORDS.test(section.heading_text ?? '')) return false;
+  if ((section.raw_text ?? '').length < 150) return false;
+  return true;
+}
+
+/**
  * V3 Status/progress markers
  */
 const V3_STATUS_MARKERS = [
