@@ -22,7 +22,11 @@ import {
   sectionToDebug,
 } from "./DebugLedger";
 import { preprocessNote, resetSectionCounter } from "./preprocessing";
-import { classifySections, filterActionableSections, isPlanChangeIntentLabel } from "./classifiers";
+import { classifySections, filterActionableSections, isPlanChangeIntentLabel, qualifiesForStructuralIdeaBypass } from "./classifiers";
+import { sectionHasDeltaSignal } from "./consolidateBySection";
+import { normalizeTitlePrefix } from "./title-normalization";
+import { extractIdeaCandidates, resetIdeaSemanticCounter } from "./extractIdeaCandidates";
+import { computeSuggestionKey } from "../suggestion-keys";
 import { extractSignalsFromSentences } from "./signals";
 import { seedCandidatesFromBSignals, resetBSignalCounter } from "./bSignalSeeding";
 import {
@@ -55,6 +59,20 @@ export interface DebugGeneratorResult extends GeneratorResult {
 }
 
 // ============================================
+// Structural bypass ID generation
+// ============================================
+
+let debugBypassCounter = 0;
+
+function resetDebugBypassCounter(): void {
+  debugBypassCounter = 0;
+}
+
+function generateDebugBypassId(noteId: string): string {
+  return `sug_struct_bypass_${noteId.slice(0, 8)}_${++debugBypassCounter}`;
+}
+
+// ============================================
 // Instrumented Generator
 // ============================================
 
@@ -74,6 +92,8 @@ export function generateSuggestionsWithDebug(
   resetSectionCounter();
   resetSuggestionCounter();
   resetBSignalCounter();
+  resetIdeaSemanticCounter();
+  resetDebugBypassCounter();
 
   // Merge config with defaults
   const finalConfig: GeneratorConfig = {
@@ -193,7 +213,19 @@ export function generateSuggestionsWithDebug(
       }
     }
 
-    if (actionableSections.length === 0) {
+    // Check if any classified section qualifies for structural idea bypass.
+    // Used to prevent premature pipeline exit — Stages 4.58 and 4.59 can emit
+    // candidates for sections regardless of whether normal synthesis succeeded.
+    const hasStructuralBypassCandidate = classifiedSections.some((s) => {
+      const heading = (s.heading_text ?? '').trim();
+      const hasForceRole = s.intent.flags?.forceRoleAssignment ?? false;
+      if (checkSectionSuppression(heading, s.structural_features, s.raw_text, hasForceRole, s.body_lines)) {
+        return false;
+      }
+      return qualifiesForStructuralIdeaBypass(s, sectionHasDeltaSignal(s.raw_text));
+    });
+
+    if (actionableSections.length === 0 && !hasStructuralBypassCandidate) {
       return buildResult([], ledger, finalConfig.enable_debug);
     }
 
@@ -776,11 +808,9 @@ export function generateSuggestionsWithDebug(
       ledger.recordStageTiming(DropStage.SYNTHESIS, Date.now() - synthStart);
     }
 
-    if (synthesizedSuggestions.length === 0) {
-      return buildResult([], ledger, finalConfig.enable_debug);
-    }
-
     // Build section lookup map (include both original classified sections and expanded subsections)
+    // NOTE: built before the empty-synthesis check so that Stage 4.59 (structural idea bypass)
+    // can look up sections even when normal synthesis produces nothing.
     const sectionMap = new Map<string, ClassifiedSection>();
     for (const section of classifiedSections) {
       sectionMap.set(section.section_id, section);
@@ -790,6 +820,10 @@ export function generateSuggestionsWithDebug(
       if (!sectionMap.has(section.section_id)) {
         sectionMap.set(section.section_id, section);
       }
+    }
+
+    if (synthesizedSuggestions.length === 0 && !hasStructuralBypassCandidate) {
+      return buildResult([], ledger, finalConfig.enable_debug);
     }
 
     // ============================================
@@ -876,7 +910,7 @@ export function generateSuggestionsWithDebug(
       ledger.recordStageTiming(DropStage.VALIDATION, Date.now() - validStart);
     }
 
-    if (validatedSuggestions.length === 0) {
+    if (validatedSuggestions.length === 0 && !hasStructuralBypassCandidate) {
       return buildResult([], ledger, finalConfig.enable_debug);
     }
 
@@ -914,6 +948,147 @@ export function generateSuggestionsWithDebug(
           if (sectionDebug) {
             ledger.afterSynthesis(sectionDebug, candidate);
           }
+        }
+      }
+    }
+
+    // ============================================
+    // Stage 4.58: Semantic Idea Candidate Extraction (additive)
+    // ============================================
+    // Mirror production pipeline: for sections with strategy/mechanism/feature language,
+    // emit one idea candidate grounded in the best matching sentence.
+    // Iterates ALL classified sections (not just actionable ones).
+    for (const section of classifiedSections) {
+      const headingText = section.heading_text?.trim() ?? '';
+      const hasForceRoleAssignment = section.intent.flags?.forceRoleAssignment ?? false;
+      if (checkSectionSuppression(headingText, section.structural_features, section.raw_text, hasForceRoleAssignment, section.body_lines)) {
+        continue;
+      }
+
+      // Collect covered texts for this section to avoid duplicate evidence
+      const icCoveredTexts = new Set<string>();
+      for (const existing of validatedSuggestions) {
+        if (existing.section_id !== section.section_id) continue;
+        for (const span of existing.evidence_spans) {
+          icCoveredTexts.add(span.text.trim());
+        }
+      }
+
+      const ideaCandidates = extractIdeaCandidates(section, icCoveredTexts);
+      for (const candidate of ideaCandidates) {
+        validatedSuggestions.push(candidate);
+        if (ledger) {
+          const sectionDebug = ledger.getSection(section.section_id);
+          if (sectionDebug) {
+            ledger.afterSynthesis(sectionDebug, candidate);
+          }
+        }
+      }
+    }
+
+    // ============================================
+    // Stage 4.59: Structural Idea Bypass (additive)
+    // ============================================
+    // For structured conceptual sections (heading level ≤ 3, ≥ 3 bullets, no
+    // delta/timeline tokens, non-operational/non-generic heading, charCount ≥ 150)
+    // that still have NO coverage after all prior stages, emit exactly ONE idea
+    // candidate grounded in the first 2–4 list items.
+    // Iterates ALL classifiedSections (not just actionable ones).
+    for (const section of classifiedSections) {
+      const headingText = section.heading_text?.trim() ?? '';
+      const hasForceRoleAssignment = section.intent.flags?.forceRoleAssignment ?? false;
+      if (checkSectionSuppression(headingText, section.structural_features, section.raw_text, hasForceRoleAssignment, section.body_lines)) {
+        continue;
+      }
+
+      // Skip if this section already has any coverage
+      const alreadyCovered = validatedSuggestions.some(
+        (s) => s.section_id === section.section_id
+      );
+      if (alreadyCovered) continue;
+
+      // Check 6-condition structural bypass eligibility
+      const hasDelta = sectionHasDeltaSignal(section.raw_text);
+      if (!qualifiesForStructuralIdeaBypass(section, hasDelta)) continue;
+
+      // Collect the first 2–4 list item texts as the body
+      const listItems = section.body_lines
+        .filter((l) => l.line_type === 'list_item')
+        .slice(0, 4)
+        .map((l) => l.text.replace(/^[\s\-*+]+/, '').replace(/^\d+\.\s*/, '').trim())
+        .filter((t) => t.length > 0);
+
+      if (listItems.length === 0) continue;
+
+      const bodyText = listItems.join('. ').replace(/\.+/g, '.').replace(/\.\s*$/, '') + '.';
+      const rawTitle = section.heading_text?.trim() || listItems[0];
+      const title = normalizeTitlePrefix('idea', rawTitle);
+
+      const firstListLine = section.body_lines.find((l) => l.line_type === 'list_item');
+      const spanStartLine = firstListLine ? firstListLine.index : section.start_line;
+      const spanEndLine = firstListLine ? firstListLine.index : section.end_line;
+      const spanText = listItems[0];
+
+      const suggestionKey = computeSuggestionKey({
+        noteId: section.note_id,
+        sourceSectionId: section.section_id,
+        type: 'idea',
+        title,
+      });
+
+      const bypassCandidate: Suggestion = {
+        suggestion_id: generateDebugBypassId(section.note_id),
+        note_id: section.note_id,
+        section_id: section.section_id,
+        type: 'idea',
+        title,
+        payload: {
+          draft_initiative: {
+            title: rawTitle,
+            description: bodyText,
+          },
+        },
+        evidence_spans: [{ start_line: spanStartLine, end_line: spanEndLine, text: spanText }],
+        scores: {
+          section_actionability: 0.65,
+          type_choice_confidence: 0.70,
+          synthesis_confidence: 0.65,
+          overall: 0.65,
+        },
+        routing: { create_new: true },
+        suggestionKey,
+        metadata: {
+          source: 'structural-idea-bypass',
+          type: 'idea',
+          label: 'idea',
+          confidence: 0.65,
+          explicitType: true,
+        },
+        suggestion: {
+          title,
+          body: bodyText,
+          evidencePreview: [spanText],
+          sourceSectionId: section.section_id,
+          sourceHeading: section.heading_text || '',
+        },
+      };
+
+      validatedSuggestions.push(bypassCandidate);
+
+      // Heal debug ledger: mark this section as emitted via structural bypass
+      if (ledger) {
+        const sectionDebug = ledger.getSection(section.section_id);
+        if (sectionDebug) {
+          // Un-drop the section if it was previously marked as NOT_ACTIONABLE
+          if (!sectionDebug.emitted && sectionDebug.dropReason === DropReason.NOT_ACTIONABLE) {
+            sectionDebug.emitted = true;
+            sectionDebug.dropStage = undefined;
+            sectionDebug.dropReason = undefined;
+            sectionDebug.decisions.isActionable = true;
+            sectionDebug.decisions.actionabilityReason =
+              'structural-idea-bypass: qualifies (≥3 bullets, non-generic heading, no delta)';
+          }
+          ledger.afterSynthesis(sectionDebug, bypassCandidate);
         }
       }
     }

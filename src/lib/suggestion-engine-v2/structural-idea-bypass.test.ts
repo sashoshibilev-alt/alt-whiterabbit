@@ -11,12 +11,15 @@
  *   3. "Deployment Plan" with bullets → does NOT bypass (operational heading)
  *   4. Single paragraph descriptive section → still dropped (no list items)
  *   5. Tiny 2-bullet section → still dropped (< 3 list items)
+ *   6. Generic headings (General, Other, Summary, Updates, Misc) → do NOT bypass
+ *   7. Debug generator emits structural-idea-bypass source for qualifying sections
  *
  * Unit tests for qualifiesForStructuralIdeaBypass are also included.
  */
 
 import { describe, it, expect } from 'vitest';
 import { generateSuggestions } from './index';
+import { generateSuggestionsWithDebug } from './debugGenerator';
 import { qualifiesForStructuralIdeaBypass } from './classifiers';
 import type { NoteInput } from './types';
 
@@ -247,5 +250,145 @@ describe('structural idea bypass: 2-bullet section is not bypassed', () => {
       bypassCandidates.length,
       `Expected 0 bypass candidates for 2-bullet section, got: ${bypassCandidates.map((s) => s.title).join(', ')}`
     ).toBe(0);
+  });
+});
+
+// ============================================
+// Test 6: Generic heading blocklist
+// ============================================
+
+describe('qualifiesForStructuralIdeaBypass: generic heading blocklist', () => {
+  const BASE = {
+    heading_level: 2,
+    structural_features: { num_list_items: 4 },
+    raw_text: 'a'.repeat(200),
+  };
+
+  it.each([
+    ['General'],
+    ['Other'],
+    ['Summary'],
+    ['Updates'],
+    ['Misc'],
+    ['general'],
+    ['SUMMARY'],
+    ['misc'],
+  ])('returns false for generic heading "%s"', (heading) => {
+    expect(
+      qualifiesForStructuralIdeaBypass({ ...BASE, heading_text: heading }, false)
+    ).toBe(false);
+  });
+
+  it('returns true for specific heading that happens to contain a blocklist word as part of a phrase', () => {
+    // "Data Summary Dashboard" is specific enough — only exact single-word matches are blocked
+    expect(
+      qualifiesForStructuralIdeaBypass({ ...BASE, heading_text: 'Data Summary Dashboard' }, false)
+    ).toBe(true);
+  });
+});
+
+// ============================================
+// Test 7: Debug generator emits structural-idea-bypass
+// ============================================
+
+describe('structural idea bypass: debug generator emits bypass for 9-bullet Data Collection Automation', () => {
+  // Reproduces the observed debug JSON case: 9 bullets, actionableSignal=0
+  const MARKDOWN = `
+### Data Collection Automation
+
+- Automated CSV ingestion: parse uploaded spreadsheets and populate the database without manual entry
+- Photo capture integration: use mobile camera APIs to photograph physical receipts and extract line items
+- Webhook event pipeline: receive real-time transactions from partner platforms and normalize them for storage
+- Reconciliation engine: automatically match incoming records against existing ledger entries to flag discrepancies
+- Audit trail generation: create immutable log entries for every data modification to support compliance requirements
+- Duplicate detection: compare incoming records against historical data to prevent double-counting of transactions
+- Batch processing: queue large data imports for overnight processing to avoid peak-hour performance degradation
+- Schema validation: enforce field-type constraints on all imported data before committing to the database
+- Error recovery: automatically retry failed ingestion jobs with exponential backoff and alerting on persistent failures
+`.trim();
+
+  it('emits at least one idea suggestion (production path)', () => {
+    const result = generateSuggestions(
+      { note_id: 'note-dca-9b-001', raw_markdown: MARKDOWN }
+    );
+    const ideas = result.suggestions.filter((s) => s.type === 'idea');
+    expect(ideas.length, `Expected ≥1 idea for 9-bullet Data Collection Automation, got 0`).toBeGreaterThanOrEqual(1);
+    expect(ideas[0].title.toLowerCase()).toContain('data collection automation');
+  });
+
+  it('debug generator: section is NOT dropped at ACTIONABILITY — emits idea', () => {
+    const result = generateSuggestionsWithDebug(
+      { note_id: 'note-dca-9b-debug-001', raw_markdown: MARKDOWN },
+      undefined,
+      undefined,
+      { verbosity: 'FULL' }
+    );
+    const ideas = result.suggestions.filter((s) => s.type === 'idea');
+    expect(ideas.length, `Expected ≥1 idea in debug path, got 0`).toBeGreaterThanOrEqual(1);
+    expect(ideas[0].title.toLowerCase()).toContain('data collection automation');
+  });
+
+  it('debug generator: section is NOT marked as dropped at ACTIONABILITY in debugRun', () => {
+    const result = generateSuggestionsWithDebug(
+      { note_id: 'note-dca-9b-debug-002', raw_markdown: MARKDOWN },
+      undefined,
+      undefined,
+      { verbosity: 'FULL' }
+    );
+    const sections = result.debugRun?.sections ?? [];
+    // The heading is stored in headingTextPreview in SectionDebug
+    const dcaSection = sections.find((s) =>
+      (s.headingTextPreview ?? '').toLowerCase().includes('data collection automation')
+    );
+    expect(dcaSection, 'Expected to find a debug section for Data Collection Automation').toBeTruthy();
+    // The section must NOT be dropped at ACTIONABILITY — bypass should prevent it
+    expect(
+      dcaSection?.dropStage,
+      `Expected section not dropped at ACTIONABILITY, got dropStage=${dcaSection?.dropStage}`
+    ).not.toBe('ACTIONABILITY');
+  });
+});
+
+// ============================================
+// Test 8: Generic heading + bullets does NOT bypass (negative control)
+// ============================================
+
+describe('structural idea bypass: "Summary" heading with bullets does not bypass', () => {
+  const MARKDOWN = `
+### Summary
+
+- Automated CSV ingestion: parse uploaded spreadsheets and populate the database without manual entry
+- Photo capture integration: use mobile camera APIs to photograph physical receipts and extract line items
+- Webhook event pipeline: receive real-time transactions from partner platforms and normalize them for storage
+- Reconciliation engine: automatically match incoming records against existing ledger entries to flag discrepancies
+`.trim();
+
+  it('does not emit a structural-idea-bypass candidate for "Summary" heading', () => {
+    const note: NoteInput = { note_id: 'note-summary-bypass-001', raw_markdown: MARKDOWN };
+    const result = generateSuggestions(note);
+    const bypassCandidates = result.suggestions.filter(
+      (s) => s.metadata?.source === 'structural-idea-bypass'
+    );
+    expect(
+      bypassCandidates.length,
+      `Expected 0 bypass candidates for "Summary" heading, got: ${bypassCandidates.map((s) => s.title).join(', ')}`
+    ).toBe(0);
+  });
+
+  it('does not emit any idea for "Other" heading with bullets', () => {
+    const otherMarkdown = `
+### Other
+
+- Automated CSV ingestion: parse uploaded spreadsheets and populate the database without manual entry
+- Photo capture integration: use mobile camera APIs to photograph physical receipts and extract line items
+- Webhook event pipeline: receive real-time transactions from partner platforms and normalize them for storage
+- Reconciliation engine: automatically match incoming records against existing ledger entries to flag discrepancies
+`.trim();
+    const note: NoteInput = { note_id: 'note-other-bypass-001', raw_markdown: otherMarkdown };
+    const result = generateSuggestions(note);
+    const bypassCandidates = result.suggestions.filter(
+      (s) => s.metadata?.source === 'structural-idea-bypass'
+    );
+    expect(bypassCandidates.length).toBe(0);
   });
 });
