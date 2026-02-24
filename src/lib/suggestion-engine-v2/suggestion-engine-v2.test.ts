@@ -204,7 +204,7 @@ describe('Preprocessing', () => {
     expect(features.has_quarter_refs).toBe(true); // Q2, Q3 mentioned
   });
 
-  it('should recognize numbered headings (1. Title format)', () => {
+  it('should treat numbered list items (1. Title format) as list_item, not heading', () => {
     const numberedNote: NoteInput = {
       note_id: 'test-numbered',
       raw_markdown: `1. Customer Feedback
@@ -234,27 +234,19 @@ Move forward with simplified 3-tier structure. Launch in 6 weeks.
 
     const result = preprocessNote(numberedNote);
 
-    // Should detect all 5 numbered headings as separate sections
-    expect(result.sections.length).toBeGreaterThanOrEqual(5);
-
-    // Verify heading texts are correctly extracted (without number prefix)
-    const headingTexts = result.sections.map((s) => s.heading_text);
-    expect(headingTexts).toContain('Customer Feedback');
-    expect(headingTexts).toContain('Options Discussed');
-    expect(headingTexts).toContain('Leadership Alignment');
-    expect(headingTexts).toContain('Decision');
-    expect(headingTexts).toContain('Next Steps');
-
-    // Next Steps section should contain the action bullets
-    const nextStepsSection = result.sections.find((s) =>
-      s.heading_text === 'Next Steps'
-    );
-    expect(nextStepsSection).toBeDefined();
-    expect(nextStepsSection!.structural_features.num_list_items).toBe(3);
-
-    // Lines should be marked as heading type, not list_item
+    // Numbered list items must NOT be classified as headings
     const headingLines = result.lines.filter((l) => l.line_type === 'heading');
-    expect(headingLines.length).toBeGreaterThanOrEqual(5);
+    expect(headingLines.length).toBe(0);
+
+    // Numbered items must be classified as list_item
+    const listLines = result.lines.filter((l) => l.line_type === 'list_item');
+    // 5 numbered items + 6 bullet items = 11 list items
+    expect(listLines.length).toBeGreaterThanOrEqual(5);
+
+    // No section heading should ever be a numbered list item
+    for (const section of result.sections) {
+      expect(section.heading_text).not.toMatch(/^\d+\.\s/);
+    }
   });
 });
 

@@ -530,8 +530,12 @@ export function isStrategyOnlySection(sectionText: string): boolean {
  *   "## Engagement Approach"
  *   "## Technical Framework"
  *   "## Content System"
+ *   "## Black Box Prioritization System"
+ *   "## Data Collection Automation"
+ *   "## Playbook for At-Risk Customers"
+ *   "## Product Vision"
  */
-const STRATEGY_HEADING_PATTERN = /\b(strategy|strategies|approach|framework|system|philosophy|direction|principles?)\b/i;
+const STRATEGY_HEADING_PATTERN = /\b(strategy|strategies|approach|framework|system|philosophy|direction|principles?|prioritization|automation|playbook|vision)\b/i;
 
 /**
  * Explicit timeline token pattern — used to gate the strategy-heading override.
