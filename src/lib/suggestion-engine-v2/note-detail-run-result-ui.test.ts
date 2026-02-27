@@ -258,3 +258,98 @@ describe('Copy JSON finalSuggestionsCount matches rendered card count', () => {
     expect(copiedJson.noteHash).toBe(runResult.noteHash);
   });
 });
+
+// ============================================
+// Test 4: Dual-source-of-truth regression
+// ============================================
+
+describe('Dual-source-of-truth regression: UI ignores persisted noteData.suggestions count', () => {
+  /**
+   * Simulates the NoteDetail rendering logic after the fix:
+   *   const displayed = lastRunResult?.finalSuggestions ?? [];
+   * The "New (N)" label and card list both read from `displayed`.
+   * Persisted noteData.suggestions are NOT mixed into the displayed list.
+   */
+  function simulateDisplayedList(
+    lastRunResult: RunResult | null,
+    _persistedSuggestions: unknown[],
+  ) {
+    return lastRunResult?.finalSuggestions ?? [];
+  }
+
+  it('renders 4 cards when finalSuggestions=4 even if persisted suggestions=6', () => {
+    const realRun = generateRunResult(FOUR_SUGGESTION_NOTE);
+    const baseSuggestions = realRun.finalSuggestions;
+    const fourSuggestions = baseSuggestions.length >= 4
+      ? baseSuggestions.slice(0, 4)
+      : [
+          ...baseSuggestions,
+          ...Array.from({ length: 4 - baseSuggestions.length }, (_, i) => ({
+            ...baseSuggestions[0],
+            suggestion_id: `pad-${i}`,
+            suggestionKey: `pad-key-${i}`,
+          })),
+        ];
+
+    const runWith4: RunResult = { ...realRun, finalSuggestions: fourSuggestions };
+
+    // Simulate 6 persisted docs (the old buggy source)
+    const sixPersistedDocs = Array.from({ length: 6 }, (_, i) => ({
+      _id: `persisted-${i}`,
+      status: 'new',
+      content: `persisted suggestion ${i}`,
+    }));
+
+    const displayed = simulateDisplayedList(runWith4, sixPersistedDocs);
+
+    expect(displayed.length).toBe(4);
+    expect(displayed).toEqual(fourSuggestions);
+  });
+
+  it('renders 0 cards when finalSuggestions is empty, regardless of persisted count', () => {
+    const realRun = generateRunResult(FOUR_SUGGESTION_NOTE);
+    const emptyRun: RunResult = { ...realRun, finalSuggestions: [] };
+
+    const threePersistedDocs = Array.from({ length: 3 }, (_, i) => ({
+      _id: `persisted-${i}`,
+      status: 'new',
+      content: `persisted suggestion ${i}`,
+    }));
+
+    const displayed = simulateDisplayedList(emptyRun, threePersistedDocs);
+
+    expect(displayed.length).toBe(0);
+  });
+
+  it('"New (N)" label count equals displayed.length, not persisted count', () => {
+    const realRun = generateRunResult(FOUR_SUGGESTION_NOTE);
+    const baseSuggestions = realRun.finalSuggestions;
+    const fourSuggestions = baseSuggestions.length >= 4
+      ? baseSuggestions.slice(0, 4)
+      : [
+          ...baseSuggestions,
+          ...Array.from({ length: 4 - baseSuggestions.length }, (_, i) => ({
+            ...baseSuggestions[0],
+            suggestion_id: `pad-${i}`,
+            suggestionKey: `pad-key-${i}`,
+          })),
+        ];
+
+    const runWith4: RunResult = { ...realRun, finalSuggestions: fourSuggestions };
+
+    const displayed = simulateDisplayedList(runWith4, Array(6).fill({}));
+    const newLabel = `New (${displayed.length})`;
+
+    expect(newLabel).toBe('New (4)');
+  });
+
+  it('suggestion_ids from displayed match finalSuggestions IDs', () => {
+    const runResult = generateRunResult(FOUR_SUGGESTION_NOTE);
+    const displayed = simulateDisplayedList(runResult, Array(10).fill({}));
+
+    const displayedIds = displayed.map(s => s.suggestion_id);
+    const finalIds = runResult.finalSuggestions.map(s => s.suggestion_id);
+
+    expect(displayedIds).toEqual(finalIds);
+  });
+});

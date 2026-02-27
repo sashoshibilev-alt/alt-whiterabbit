@@ -18,7 +18,8 @@ import { ArrowLeft, Calendar, Clock, FileText, CheckCircle2, XCircle, Sparkles, 
 import { SuggestionDebugPanel } from "@/components/debug/SuggestionDebugPanel";
 import { format, formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
-import type { RunResult } from "@/lib/suggestion-engine-v2/types";
+import { V0_DISMISS_REASON_LABELS } from "@/types";
+import type { RunResult, Suggestion as RunSuggestion } from "@/lib/suggestion-engine-v2/types";
 
 export default function NoteDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -85,7 +86,6 @@ export default function NoteDetailPage() {
   
   // Initiative selection modal state
   const [initiativeModalOpen, setInitiativeModalOpen] = useState(false);
-  const [applyingSuggestionId, setApplyingSuggestionId] = useState<Id<"suggestions"> | null>(null);
   const [applyingSuggestionContent, setApplyingSuggestionContent] = useState<string>("");
   const [initiativeTab, setInitiativeTab] = useState<"existing" | "new">("existing");
   const [selectedInitiativeId, setSelectedInitiativeId] = useState<string>("");
@@ -105,7 +105,7 @@ export default function NoteDetailPage() {
   // Delete confirmation modal state
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   
-  // Clarification modal state
+  // Clarification modal state (legacy — requires persisted suggestion)
   const [clarificationModalOpen, setClarificationModalOpen] = useState(false);
   const [clarifyingSuggestionId, setClarifyingSuggestionId] = useState<Id<"suggestions"> | null>(null);
   const [clarificationText, setClarificationText] = useState("");
@@ -156,15 +156,17 @@ export default function NoteDetailPage() {
     );
   }
 
-  const { note, suggestions, runResult } = noteData;
-  const noteHash = runResult?.noteHash || "unknown";
-  const newSuggestions = suggestions.filter((s) => s.status === "new");
+  const { note, suggestions } = noteData;
+
+  // Single source of truth: render from lastRunResult.finalSuggestions
+  const displayed: RunSuggestion[] = lastRunResult?.finalSuggestions ?? [];
+
+  // Persisted suggestions for the "Saved" section (applied/dismissed only)
   const appliedSuggestions = suggestions.filter((s) => s.status === "applied");
   const dismissedSuggestions = suggestions.filter((s) => s.status === "dismissed");
 
   // Opens the initiative selection modal for adding to existing initiative
-  const handleAddToExistingClick = (suggestionId: Id<"suggestions">, suggestionKey: string, content: string) => {
-    setApplyingSuggestionId(suggestionId);
+  const handleAddToExistingClick = (suggestionKey: string, content: string) => {
     setApplyingSuggestionKey(suggestionKey);
     setApplyingSuggestionContent(content);
     setInitiativeTab("existing");
@@ -173,8 +175,7 @@ export default function NoteDetailPage() {
   };
 
   // Opens the initiative creation modal
-  const handleCreateNewClick = (suggestionId: Id<"suggestions">, suggestionKey: string, content: string) => {
-    setApplyingSuggestionId(suggestionId);
+  const handleCreateNewClick = (suggestionKey: string, content: string) => {
     setApplyingSuggestionKey(suggestionKey);
     setApplyingSuggestionContent(content);
     // Pre-populate new initiative fields from suggestion content
@@ -186,8 +187,7 @@ export default function NoteDetailPage() {
   };
 
   // Legacy handler for backwards compatibility (Apply anyway button)
-  const handleApplyClick = (suggestionId: Id<"suggestions">, suggestionKey: string, content: string) => {
-    setApplyingSuggestionId(suggestionId);
+  const handleApplyClick = (suggestionKey: string, content: string) => {
     setApplyingSuggestionKey(suggestionKey);
     setApplyingSuggestionContent(content);
     const suggestedTitle = content.length > 60 ? content.slice(0, 60) + "..." : content;
@@ -200,7 +200,7 @@ export default function NoteDetailPage() {
 
   // Handles the actual apply after initiative selection
   const handleInitiativeSubmit = async () => {
-    if (!applyingSuggestionId || !applyingSuggestionKey || !id) return;
+    if (!applyingSuggestionKey || !id) return;
 
     setIsProcessing(true);
     try {
@@ -244,7 +244,6 @@ export default function NoteDetailPage() {
       refetchNoteData();
 
       // Clean up state
-      setApplyingSuggestionId(null);
       setApplyingSuggestionKey(null);
       setApplyingSuggestionContent("");
       setNewInitiativeTitle("");
@@ -462,19 +461,12 @@ export default function NoteDetailPage() {
             <div className="flex items-center justify-between">
               <h2 className="font-semibold flex items-center gap-2">
                 <Sparkles className="h-4 w-4" />
-<<<<<<< HEAD
-                Suggestions ({suggestions.length})
-                <span className="text-xs font-normal text-muted-foreground">
-                  hash:{noteHash}
-                </span>
-=======
-                Suggestions ({lastRunResult ? lastRunResult.finalSuggestions.length : suggestions.length})
+                Suggestions ({lastRunResult?.finalSuggestions?.length ?? 0})
                 {lastRunResult && (
                   <span className="text-xs font-normal text-muted-foreground ml-1">
                     run:{lastRunResult.runId.slice(0, 8)} hash:{lastRunResult.noteHash}
                   </span>
                 )}
->>>>>>> origin/main
               </h2>
               <Button
                 variant="outline"
@@ -492,31 +484,28 @@ export default function NoteDetailPage() {
             </div>
           </div>
           <ScrollArea className="flex-1 p-4">
-            {suggestions.length === 0 ? (
+            {displayed.length === 0 && appliedSuggestions.length === 0 && dismissedSuggestions.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
                 <Sparkles className="h-8 w-8 mx-auto mb-3 opacity-50" />
                 <p>No suggestions yet for this note</p>
               </div>
             ) : (
               <div className="space-y-3">
-                {/* New Suggestions */}
-                {newSuggestions.length > 0 && (
+                {/* New Suggestions — rendered from lastRunResult.finalSuggestions */}
+                {displayed.length > 0 && (
                   <div className="space-y-3">
                     <h3 className="text-sm font-medium text-muted-foreground">
-                      New ({newSuggestions.length})
+                      New ({displayed.length})
                     </h3>
-                    {newSuggestions.map((suggestion) => {
-                      const needsClarification = suggestion.clarificationState === "suggested";
-                      const clarificationRequested = suggestion.clarificationState === "requested";
-                      const clarified = suggestion.clarificationState === "answered";
+                    {displayed.map((suggestion) => {
+                      const needsClarification = suggestion.needs_clarification === true;
 
-                      // Use suggestion context if available, otherwise fall back to legacy content
-                      const displayTitle = suggestion.suggestion?.title || suggestion.content;
+                      const displayTitle = suggestion.suggestion?.title || suggestion.title;
                       const displayBody = suggestion.suggestion?.body;
                       const evidencePreview = suggestion.suggestion?.evidencePreview;
 
                       return (
-                        <Card key={suggestion._id} className={needsClarification ? "border-warning dark:bg-surface-elevated dark:border-border" : "dark:bg-surface-elevated dark:border-border"}>
+                        <Card key={suggestion.suggestion_id} className={needsClarification ? "border-warning dark:bg-surface-elevated dark:border-border" : "dark:bg-surface-elevated dark:border-border"}>
                           <CardContent className="p-4">
                             <p className="text-sm font-medium mb-2">{displayTitle}</p>
                             {displayBody && (
@@ -531,12 +520,6 @@ export default function NoteDetailPage() {
                                 ))}
                               </div>
                             )}
-                            {suggestion.clarificationPrompt && needsClarification && (
-                              <div className="mb-3 p-2 bg-warning-subtle-bg rounded text-xs">
-                                <Info className="h-3 w-3 inline mr-1" />
-                                {suggestion.clarificationPrompt}
-                              </div>
-                            )}
                             <div className="flex items-center justify-between gap-2">
                               <div className="flex gap-2 flex-wrap">
                                 <Badge variant="secondary">New</Badge>
@@ -545,34 +528,13 @@ export default function NoteDetailPage() {
                                     Needs clarification
                                   </Badge>
                                 )}
-                                {clarificationRequested && (
-                                  <Badge variant="outline" className="border-info text-info">
-                                    Clarification requested
-                                  </Badge>
-                                )}
-                                {clarified && (
-                                  <Badge variant="outline" className="border-success text-success">
-                                    Clarified
-                                  </Badge>
-                                )}
                               </div>
                               <div className="flex gap-2">
-                                {needsClarification && (
-                                  <Button
-                                    size="sm"
-                                    variant="default"
-                                    onClick={() => handleRequestClarification(suggestion._id)}
-                                    disabled={isProcessing}
-                                  >
-                                    <Info className="h-4 w-4 mr-1" />
-                                    Ask Shipit to clarify
-                                  </Button>
-                                )}
                                 <Button
                                   size="sm"
                                   variant="outline"
-                                  onClick={() => handleDismissClick(suggestion.suggestionKey || "")}
-                                  disabled={isProcessing || !suggestion.suggestionKey}
+                                  onClick={() => handleDismissClick(suggestion.suggestionKey)}
+                                  disabled={isProcessing}
                                 >
                                   <XCircle className="h-4 w-4 mr-1" />
                                   Dismiss
@@ -581,27 +543,27 @@ export default function NoteDetailPage() {
                                   <>
                                     <Button
                                       size="sm"
-                                      onClick={() => handleAddToExistingClick(suggestion._id, suggestion.suggestionKey || "", suggestion.content)}
-                                      disabled={isProcessing || !suggestion.suggestionKey}
+                                      onClick={() => handleAddToExistingClick(suggestion.suggestionKey, suggestion.title)}
+                                      disabled={isProcessing}
                                     >
                                       Add to existing initiative
                                     </Button>
                                     <Button
                                       size="sm"
                                       variant="secondary"
-                                      onClick={() => handleCreateNewClick(suggestion._id, suggestion.suggestionKey || "", suggestion.content)}
-                                      disabled={isProcessing || !suggestion.suggestionKey}
+                                      onClick={() => handleCreateNewClick(suggestion.suggestionKey, suggestion.title)}
+                                      disabled={isProcessing}
                                     >
                                       Create new initiative
                                     </Button>
                                   </>
                                 )}
-                                {(needsClarification || clarificationRequested) && (
+                                {needsClarification && (
                                   <Button
                                     size="sm"
                                     variant="secondary"
-                                    onClick={() => handleApplyClick(suggestion._id, suggestion.suggestionKey || "", suggestion.content)}
-                                    disabled={isProcessing || !suggestion.suggestionKey}
+                                    onClick={() => handleApplyClick(suggestion.suggestionKey, suggestion.title)}
+                                    disabled={isProcessing}
                                   >
                                     <CheckCircle2 className="h-4 w-4 mr-1" />
                                     Apply anyway
@@ -616,11 +578,18 @@ export default function NoteDetailPage() {
                   </div>
                 )}
 
+                {/* Saved — persisted suggestions (applied/dismissed) */}
+                {(appliedSuggestions.length > 0 || dismissedSuggestions.length > 0) && (
+                  <>
+                    <Separator className="my-4" />
+                    <h3 className="text-sm font-medium text-muted-foreground">Saved</h3>
+                  </>
+                )}
+
                 {/* Applied Suggestions */}
                 {appliedSuggestions.length > 0 && (
                   <div className="space-y-3">
-                    <Separator className="my-4" />
-                    <h3 className="text-sm font-medium text-muted-foreground">
+                    <h3 className="text-xs font-medium text-muted-foreground">
                       Applied ({appliedSuggestions.length})
                     </h3>
                     {appliedSuggestions.map((suggestion) => {
@@ -659,8 +628,7 @@ export default function NoteDetailPage() {
                 {/* Dismissed Suggestions */}
                 {dismissedSuggestions.length > 0 && (
                   <div className="space-y-3">
-                    <Separator className="my-4" />
-                    <h3 className="text-sm font-medium text-muted-foreground">
+                    <h3 className="text-xs font-medium text-muted-foreground">
                       Dismissed ({dismissedSuggestions.length})
                     </h3>
                     {dismissedSuggestions.map((suggestion) => {
