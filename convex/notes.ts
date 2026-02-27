@@ -149,6 +149,8 @@ export const getWithComputedSuggestions = action({
     return {
       note,
       suggestions: filteredSuggestions,
+      noteHash: result.noteHash,
+      finalSuggestionsCount: result.suggestions.length,
     };
   },
 });

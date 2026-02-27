@@ -31,6 +31,8 @@ export default function NoteDetailPage() {
   const [noteData, setNoteData] = useState<{
     note: any;
     suggestions: any[];
+    noteHash: string;
+    finalSuggestionsCount: number;
   } | null | undefined>(undefined);
 
   // Trigger to refetch note data
@@ -140,7 +142,7 @@ export default function NoteDetailPage() {
     );
   }
 
-  const { note, suggestions } = noteData;
+  const { note, suggestions, noteHash } = noteData;
   const newSuggestions = suggestions.filter((s) => s.status === "new");
   const appliedSuggestions = suggestions.filter((s) => s.status === "applied");
   const dismissedSuggestions = suggestions.filter((s) => s.status === "dismissed");
@@ -446,6 +448,9 @@ export default function NoteDetailPage() {
               <h2 className="font-semibold flex items-center gap-2">
                 <Sparkles className="h-4 w-4" />
                 Suggestions ({suggestions.length})
+                <span className="text-xs font-normal text-muted-foreground">
+                  hash:{noteHash}
+                </span>
               </h2>
               <Button
                 variant="outline"
