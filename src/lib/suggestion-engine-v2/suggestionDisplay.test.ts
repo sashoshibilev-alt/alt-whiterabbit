@@ -82,6 +82,36 @@ describe('stripLegacyPrefix', () => {
       'We should Add Update to the plan',
     );
   });
+
+  // Bare engine-generated type prefix stripping
+  it('strips bare "Idea: " prefix from engine title', () => {
+    expect(stripLegacyPrefix('Idea: Gamify data collection (next-field rewards)')).toBe(
+      'Gamify data collection (next-field rewards)',
+    );
+  });
+
+  it('strips bare "Update: " prefix from engine title', () => {
+    expect(stripLegacyPrefix('Update: Defer mobile redesign')).toBe(
+      'Defer mobile redesign',
+    );
+  });
+
+  it('strips bare "Risk: " prefix from engine title', () => {
+    expect(stripLegacyPrefix('Risk: Data pipeline risk')).toBe(
+      'Data pipeline risk',
+    );
+  });
+
+  it('strips bare "Bug: " prefix from engine title', () => {
+    expect(stripLegacyPrefix('Bug: Login crash')).toBe('Login crash');
+  });
+
+  it('strips both "Add Idea: " and bare "Idea: " in chained case', () => {
+    // Edge case: "Add Idea: Idea: X" should become "X"
+    expect(stripLegacyPrefix('Add Idea: Idea: Double prefix')).toBe(
+      'Double prefix',
+    );
+  });
 });
 
 // ============================================

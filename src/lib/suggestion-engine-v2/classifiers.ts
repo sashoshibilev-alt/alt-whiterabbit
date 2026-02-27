@@ -588,6 +588,74 @@ export function isStrategyHeadingSection(
   return true;
 }
 
+// ============================================
+// Spec / Framework Section Classifier
+// ============================================
+
+/**
+ * Combined regex for quick presence check (any spec/framework token).
+ */
+const SPEC_FRAMEWORK_TOKENS = /\b(scoring|prioriti[sz]ation|three[-\s]factor|eligibility|additionality|weighting|framework|system)\b/i;
+
+/**
+ * Individual token regexes for counting distinct matches in the body.
+ * A single incidental mention (e.g. "later prioritization") is not enough;
+ * the heading must contain a token OR the body must contain >= 2 distinct tokens.
+ */
+const SPEC_FRAMEWORK_TOKEN_LIST: RegExp[] = [
+  /\bscoring\b/i,
+  /\bprioritization\b/i,
+  /\bprioritisation\b/i,
+  /\bthree[-\s]factor\b/i,
+  /\beligibility\b/i,
+  /\badditionality\b/i,
+  /\bweighting\b/i,
+  /\bframework\b/i,
+  /\bsystem\b/i,
+];
+
+/**
+ * Timeline / status tokens whose presence means the section describes a
+ * concrete schedule event, NOT a pure specification.
+ */
+const SPEC_FRAMEWORK_TIMELINE_EXCLUSIONS = /\b(deploy(?:ed|ing|ment)?|launch(?:ed|ing)?|eta|target\s+date|window|shipped|in\s+progress|complete[d]?)\b/i;
+
+/**
+ * Returns true when a section describes a specification, scoring rubric,
+ * eligibility framework, or similar "design document" content — meaning it
+ * should NEVER be typed as project_update.
+ *
+ * Conditions (ALL must hold):
+ *   1. The heading contains a SPEC_FRAMEWORK_TOKEN (strongest signal),
+ *      OR the body contains >= 2 distinct tokens (to avoid false positives
+ *      from incidental mentions like "later prioritization").
+ *   2. The combined text does NOT contain any timeline / status token.
+ *   3. The combined text does NOT contain a concrete delta (date change, duration).
+ *   4. The combined text does NOT contain schedule-event language (delay, launch, etc.).
+ *
+ * When this returns true, the section should only emit `idea` candidates.
+ */
+export function isSpecOrFrameworkSection(
+  sectionText: string,
+  bullets: number,
+  heading: string
+): boolean {
+  const combined = (heading + ' ' + sectionText);
+
+  // Heading token match is the strongest signal
+  const headingHasToken = SPEC_FRAMEWORK_TOKENS.test(heading);
+  if (!headingHasToken) {
+    // Fallback: body must contain >= 2 distinct spec/framework tokens
+    const bodyMatches = SPEC_FRAMEWORK_TOKEN_LIST.filter(re => re.test(sectionText));
+    if (bodyMatches.length < 2) return false;
+  }
+
+  if (SPEC_FRAMEWORK_TIMELINE_EXCLUSIONS.test(combined)) return false;
+  if (hasSectionConcreteDelta(combined)) return false;
+  if (hasSectionScheduleEvent(combined)) return false;
+  return true;
+}
+
 /**
  * Mechanism verbs that indicate a real initiative or feature proposal.
  * These are concrete construction/implementation verbs, not vague directional verbs.
@@ -1912,6 +1980,16 @@ export function computeTypeLabel(
     return 'project_update';
   }
   if (isPlanChangeIntentLabel(intent)) {
+    const headingText = section.heading_text || '';
+    const sectionText = (headingText + ' ' + section.raw_text);
+    const numListItems = section.structural_features?.num_list_items ?? 0;
+
+    // SPEC/FRAMEWORK OVERRIDE: sections describing scoring rubrics, eligibility
+    // criteria, weighting frameworks, etc. are design documents — never project_update.
+    if (isSpecOrFrameworkSection(sectionText, numListItems, headingText)) {
+      return 'idea';
+    }
+
     // Strategy-only language ("shift from enterprise to SMB", "pivot the go-to-market
     // approach") has change operators but no concrete delta or schedule event.
     // These sections describe strategic direction, not a schedule mutation, so they
@@ -1922,9 +2000,6 @@ export function computeTypeLabel(
     //   - A schedule event word (launch, deploy, ETA): "Ham Light deployment"
     //   - A structured task / heading + bullet cluster (role assignments, decision markers
     //     are already handled above via forceDecisionMarker / forceRoleAssignment)
-    const headingText = section.heading_text || '';
-    const sectionText = (headingText + ' ' + section.raw_text);
-    const numListItems = section.structural_features?.num_list_items ?? 0;
     if (isStrategyOnlySection(sectionText)) {
       // TYPE ARBITRATION: Strategy heading + bullet list + no delta → force idea.
       // Sections like "### Agatha Gamification Strategy" with 3+ bullet points are

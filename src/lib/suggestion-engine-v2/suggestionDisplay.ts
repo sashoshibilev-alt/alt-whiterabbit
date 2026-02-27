@@ -31,9 +31,17 @@ export function getTypePrefix(type: SuggestionType | undefined): string | undefi
 const LEGACY_PREFIX_RE = /^Add\s+(Update|Idea|Risk|Bug)\s*:\s*/i;
 
 /**
- * Strips legacy "Add <Type>:" prefix from a title string.
- * Returns the cleaned title.
+ * Regex that matches bare engine-generated type prefixes at the start of titles.
+ * Examples: "Update: …", "Idea: …", "Risk: …", "Bug: …"
+ * These are added by normalizeTitlePrefix in the engine pipeline and must be
+ * stripped so the UI can re-add the prefix from suggestion.type without doubling.
+ */
+const ENGINE_PREFIX_RE = /^(Update|Idea|Risk|Bug)\s*:\s*/i;
+
+/**
+ * Strips legacy "Add <Type>:" and bare engine "<Type>:" prefixes from a title.
+ * Returns the cleaned title suitable for display with getTypePrefix().
  */
 export function stripLegacyPrefix(title: string): string {
-  return title.replace(LEGACY_PREFIX_RE, '');
+  return title.replace(LEGACY_PREFIX_RE, '').replace(ENGINE_PREFIX_RE, '');
 }
