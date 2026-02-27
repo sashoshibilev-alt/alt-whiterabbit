@@ -72,10 +72,23 @@ export interface DebugLedgerOptions {
   userId?: string;
 }
 
+/**
+ * Compute djb2 hash of a string (same algorithm as computeNoteHash in index.ts).
+ * Returns 8-character lowercase hex string.
+ */
+function djb2Hash(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = (Math.imul(h, 33) + s.charCodeAt(i)) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
 export class DebugLedger {
   private runId: string;
   private noteId: string;
   private noteLines: string[];
+  private noteHash: string;
   private verbosity: DebugVerbosity;
   private config: GeneratorConfig;
   private userId?: string;
@@ -88,6 +101,7 @@ export class DebugLedger {
     this.runId = generateUUID();
     this.noteId = options.noteId;
     this.noteLines = options.noteBody.split("\n");
+    this.noteHash = djb2Hash(options.noteBody);
     this.verbosity = options.verbosity;
     this.config = options.config;
     this.userId = options.userId;
@@ -700,6 +714,7 @@ export class DebugLedger {
       createdByUserId: this.userId,
       verbosity: this.verbosity,
       runtimeFingerprint: RUNTIME_FINGERPRINT,
+      noteHash: this.noteHash,
     };
 
     const config = this.buildConfigSnapshot();

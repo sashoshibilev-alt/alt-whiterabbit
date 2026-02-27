@@ -89,7 +89,7 @@ export const getWithComputedSuggestions = action({
     if (!note) return null;
 
     // Dynamically import suggestion engine (only works in actions)
-    const { generateSuggestions: generateSuggestionsImport, adaptConvexNote: adaptConvexNoteImport } = await import("../src/lib/suggestion-engine-v2");
+    const { generateRunResult: generateRunResultImport, adaptConvexNote: adaptConvexNoteImport } = await import("../src/lib/suggestion-engine-v2");
 
     // Adapt note to engine format
     const engineNote = adaptConvexNoteImport({
@@ -99,15 +99,16 @@ export const getWithComputedSuggestions = action({
       title: note.title,
     });
 
-    // Run suggestion engine v2
-    const result = generateSuggestionsImport(engineNote);
+    // Run suggestion engine v2 — single source of truth for UI and debug panel
+    const runResult = generateRunResultImport(engineNote);
 
     // Load existing decisions for this note
     const decisions = await ctx.runQuery(api.suggestionDecisions.getByNote, { noteId: args.id });
     const decisionMap = new Map(decisions.map(d => [d.suggestionKey, d]));
 
-    // Transform engine suggestions to UI-ready format
-    const uiSuggestions = result.suggestions.map((engineSug) => {
+    // Transform engine suggestions to UI-ready format.
+    // Source: runResult.finalSuggestions (canonical post-threshold, post-dedupe list).
+    const uiSuggestions = runResult.finalSuggestions.map((engineSug) => {
       // Map to V0Suggestion-like structure for UI compatibility
       return {
         _id: engineSug.suggestion_id as any, // Use engine ID as UI ID
@@ -149,8 +150,19 @@ export const getWithComputedSuggestions = action({
     return {
       note,
       suggestions: filteredSuggestions,
-      noteHash: result.noteHash,
-      finalSuggestionsCount: result.suggestions.length,
+      // The full RunResult — single source of truth for the suggestion list UI.
+      // The UI must render cards from runResult.finalSuggestions (after applying decisions),
+      // and the "Copy JSON" button must copy this same object.
+      runResult: {
+        runId: runResult.runId,
+        noteId: runResult.noteId,
+        createdAt: runResult.createdAt,
+        noteHash: runResult.noteHash,
+        lineCount: runResult.lineCount,
+        finalSuggestions: runResult.finalSuggestions,
+        invariants: runResult.invariants,
+        config: runResult.config,
+      },
     };
   },
 });

@@ -401,6 +401,74 @@ export interface GeneratorResult {
 }
 
 // ============================================
+// Run Result (single-source-of-truth)
+// ============================================
+
+/**
+ * Invariant check results for a run.
+ * All checks must pass for the run to be considered valid.
+ */
+export interface RunInvariants {
+  /** finalSuggestions.length <= config.maxSuggestionsPerNote (or uncapped if maxSuggestionsPerNote is 0) */
+  maxSuggestionsRespected: boolean;
+  /** All finalSuggestions have validation_results with every result passing, OR applyAnyway mode is enabled */
+  allSuggestionsPassed: boolean;
+  /** If maxSuggestionsRespected is false, the list was trimmed to maxSuggestionsPerNote */
+  trimmedToMax: boolean;
+}
+
+/**
+ * A single drop record from the pipeline.
+ */
+export interface RunDrop {
+  section_id: string;
+  reason: string;
+  validator?: string;
+}
+
+/**
+ * The single-source-of-truth result from one engine run.
+ *
+ * Both the suggestion list UI and the debug panel MUST read from this object
+ * so they are guaranteed to reflect the same engine execution.
+ *
+ * finalSuggestions = the post-threshold, post-dedupe suggestions shown to the user.
+ * allCandidates (optional) = every candidate considered, including dropped ones.
+ * drops (optional) = records of every candidate that was dropped.
+ */
+export interface RunResult {
+  /** Unique identifier for this run (UUID) */
+  runId: string;
+  /** Note ID this run was executed for */
+  noteId: string;
+  /** ISO timestamp when the run completed */
+  createdAt: string;
+  /** Config snapshot used for this run */
+  config: GeneratorConfig;
+  /**
+   * Simple hash of the note markdown content.
+   * Used to detect note changes between runs.
+   * Computed as: note content length + ':' + sum of char codes (mod 2^32), hex-encoded.
+   */
+  noteHash: string;
+  /** Number of lines in the note */
+  lineCount: number;
+  /**
+   * The final suggestions shown to the user.
+   * Post-threshold, post-dedupe. This is the canonical list.
+   */
+  finalSuggestions: Suggestion[];
+  /** Sections debug info (if enable_debug was true) */
+  sections?: GeneratorDebugInfo;
+  /** All candidates including dropped (if enable_debug was true) */
+  allCandidates?: Suggestion[];
+  /** All drops from the pipeline (if enable_debug was true) */
+  drops?: RunDrop[];
+  /** Invariant check results */
+  invariants: RunInvariants;
+}
+
+// ============================================
 // Preprocessing Result
 // ============================================
 

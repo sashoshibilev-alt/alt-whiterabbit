@@ -23,6 +23,9 @@ import type {
   Section,
   ClassifiedSection,
   DEFAULT_CONFIG,
+  RunResult,
+  RunInvariants,
+  RunDrop,
 } from './types';
 import { DEFAULT_CONFIG as defaultConfig } from './types';
 import { preprocessNote, resetSectionCounter } from './preprocessing';
@@ -891,4 +894,143 @@ export function getSectionCount(note: NoteInput): {
     total: sections.length,
     actionable: actionable.length,
   };
+}
+
+// ============================================
+// Run Result (single-source-of-truth)
+// ============================================
+
+/**
+ * Compute a simple, deterministic hash of the note markdown content.
+ *
+ * Used to detect whether note content changed between two runs.
+ * NOT cryptographically secure — used only for change-detection.
+ *
+ * Algorithm: djb2-style 32-bit hash, hex-encoded.
+ */
+export function computeNoteHash(rawMarkdown: string): string {
+  let h = 5381;
+  for (let i = 0; i < rawMarkdown.length; i++) {
+    // h = ((h << 5) + h) + charCode  (mod 2^32)
+    h = (Math.imul(h, 33) + rawMarkdown.charCodeAt(i)) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+/**
+ * Generate a UUID v4 (random).
+ * Avoids importing the crypto module at the top level to keep tree-shaking clean.
+ */
+function generateRunId(): string {
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    crypto.getRandomValues(bytes);
+  } else {
+    // Fallback for environments without Web Crypto (e.g., some Node versions)
+    for (let i = 0; i < 16; i++) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant RFC4122
+  const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
+ * Generate suggestions and return a RunResult — the single source of truth
+ * for both the suggestion list UI and the debug panel.
+ *
+ * The returned RunResult contains:
+ *   - runId: unique identifier for this execution
+ *   - finalSuggestions: the canonical suggestion list (post-threshold, post-dedupe)
+ *   - invariants: checked conditions (max cap, all validators passed)
+ *   - optional debug fields when enable_debug is true
+ *
+ * When maxSuggestionsPerNote > 0 and the engine produces more suggestions than
+ * that limit, the invariant `maxSuggestionsRespected` will be false and
+ * `trimmedToMax` will be true — the list is trimmed before returning.
+ *
+ * applyAnyway: when true, suggestions that failed validation are still included
+ * in finalSuggestions. The `allSuggestionsPassed` invariant reflects whether
+ * any suggestions were included despite failing (false if applyAnyway was needed).
+ */
+export function generateRunResult(
+  note: NoteInput,
+  context?: GeneratorContext,
+  config?: Partial<GeneratorConfig>,
+  options?: {
+    /** When true, include allCandidates and drops in the result (requires enable_debug). */
+    includeDebugFields?: boolean;
+    /** When true, suggestions that failed validation are still included (applies-anyway mode). */
+    applyAnyway?: boolean;
+    /**
+     * Hard cap on finalSuggestions. 0 = uncapped.
+     * When exceeded, finalSuggestions is trimmed and invariants.trimmedToMax = true.
+     */
+    maxSuggestionsPerNote?: number;
+  }
+): RunResult {
+  const finalConfig: GeneratorConfig = {
+    ...defaultConfig,
+    ...config,
+    thresholds: {
+      ...defaultConfig.thresholds,
+      ...config?.thresholds,
+    },
+  };
+
+  const applyAnyway = options?.applyAnyway ?? false;
+  const maxCap = options?.maxSuggestionsPerNote ?? 0; // 0 = uncapped
+
+  // Run the engine
+  const generatorResult = generateSuggestions(note, context, finalConfig);
+  let finalSuggestions = generatorResult.suggestions;
+
+  // --- Invariant: all suggestions passed validation ---
+  const allPassed = applyAnyway
+    ? true // applyAnyway mode bypasses the check
+    : finalSuggestions.every(s => {
+        // If no validation_results recorded, assume passed (additive candidates don't have them)
+        if (!s.validation_results || s.validation_results.length === 0) return true;
+        return s.validation_results.every(r => r.passed);
+      });
+
+  // --- Invariant: maxSuggestionsPerNote ---
+  const exceededMax = maxCap > 0 && finalSuggestions.length > maxCap;
+  if (exceededMax) {
+    finalSuggestions = finalSuggestions.slice(0, maxCap);
+  }
+
+  const invariants: RunInvariants = {
+    maxSuggestionsRespected: !exceededMax,
+    allSuggestionsPassed: allPassed,
+    trimmedToMax: exceededMax,
+  };
+
+  const noteHash = computeNoteHash(note.raw_markdown);
+  const lineCount = note.raw_markdown.split('\n').length;
+
+  const runResult: RunResult = {
+    runId: generateRunId(),
+    noteId: note.note_id,
+    createdAt: new Date().toISOString(),
+    config: finalConfig,
+    noteHash,
+    lineCount,
+    finalSuggestions,
+    invariants,
+  };
+
+  // Optional debug fields
+  if (options?.includeDebugFields && finalConfig.enable_debug && generatorResult.debug) {
+    runResult.sections = generatorResult.debug;
+    runResult.drops = generatorResult.debug.dropped_suggestions.map(d => ({
+      section_id: d.section_id,
+      reason: d.reason,
+      validator: d.validator,
+    }));
+  }
+
+  return runResult;
 }

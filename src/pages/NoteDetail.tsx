@@ -18,6 +18,7 @@ import { ArrowLeft, Calendar, Clock, FileText, CheckCircle2, XCircle, Sparkles, 
 import { SuggestionDebugPanel } from "@/components/debug/SuggestionDebugPanel";
 import { format, formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
+import type { RunResult } from "@/lib/suggestion-engine-v2/types";
 
 export default function NoteDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -31,9 +32,13 @@ export default function NoteDetailPage() {
   const [noteData, setNoteData] = useState<{
     note: any;
     suggestions: any[];
-    noteHash: string;
-    finalSuggestionsCount: number;
+    runResult?: RunResult;
   } | null | undefined>(undefined);
+
+  // Single source of truth for the rendered suggestion list.
+  // Set from getWithComputedSuggestions (initial load / regenerate) or from
+  // the debug panel when the user triggers a debug run.
+  const [lastRunResult, setLastRunResult] = useState<RunResult | null>(null);
 
   // Trigger to refetch note data
   const [refetchTrigger, setRefetchTrigger] = useState(0);
@@ -45,7 +50,14 @@ export default function NoteDetailPage() {
 
     setNoteData(undefined); // Set to loading state
     getWithComputedSuggestions({ id: id as Id<"notes"> })
-      .then(data => setNoteData(data))
+      .then(data => {
+        setNoteData(data);
+        // Hydrate lastRunResult from the server response so the suggestion list
+        // renders from the same RunResult that getWithComputedSuggestions used.
+        if (data && data.runResult) {
+          setLastRunResult(data.runResult as RunResult);
+        }
+      })
       .catch(err => {
         console.error("Failed to load note:", err);
         setNoteData(null);
@@ -101,6 +113,8 @@ export default function NoteDetailPage() {
   // Track suggestionKey for apply flow (must be before early returns)
   const [applyingSuggestionKey, setApplyingSuggestionKey] = useState<string | null>(null);
 
+  // lastRunResult is already declared above — no additional meta state needed.
+
   // Record shown events for new suggestions
   useEffect(() => {
     if (!noteData?.suggestions) return;
@@ -142,7 +156,8 @@ export default function NoteDetailPage() {
     );
   }
 
-  const { note, suggestions, noteHash } = noteData;
+  const { note, suggestions, runResult } = noteData;
+  const noteHash = runResult?.noteHash || "unknown";
   const newSuggestions = suggestions.filter((s) => s.status === "new");
   const appliedSuggestions = suggestions.filter((s) => s.status === "applied");
   const dismissedSuggestions = suggestions.filter((s) => s.status === "dismissed");
@@ -447,10 +462,19 @@ export default function NoteDetailPage() {
             <div className="flex items-center justify-between">
               <h2 className="font-semibold flex items-center gap-2">
                 <Sparkles className="h-4 w-4" />
+<<<<<<< HEAD
                 Suggestions ({suggestions.length})
                 <span className="text-xs font-normal text-muted-foreground">
                   hash:{noteHash}
                 </span>
+=======
+                Suggestions ({lastRunResult ? lastRunResult.finalSuggestions.length : suggestions.length})
+                {lastRunResult && (
+                  <span className="text-xs font-normal text-muted-foreground ml-1">
+                    run:{lastRunResult.runId.slice(0, 8)} hash:{lastRunResult.noteHash}
+                  </span>
+                )}
+>>>>>>> origin/main
               </h2>
               <Button
                 variant="outline"
@@ -664,7 +688,10 @@ export default function NoteDetailPage() {
             )}
 
             {/* Debug Panel - Admin only */}
-            <SuggestionDebugPanel noteId={id as Id<"notes">} />
+            <SuggestionDebugPanel
+              noteId={id as Id<"notes">}
+              onRunResult={setLastRunResult}
+            />
           </ScrollArea>
         </div>
       </div>
