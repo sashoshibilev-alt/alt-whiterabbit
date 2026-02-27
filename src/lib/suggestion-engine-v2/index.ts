@@ -901,23 +901,6 @@ export function getSectionCount(note: NoteInput): {
 // ============================================
 
 /**
- * Compute a simple, deterministic hash of the note markdown content.
- *
- * Used to detect whether note content changed between two runs.
- * NOT cryptographically secure — used only for change-detection.
- *
- * Algorithm: djb2-style 32-bit hash, hex-encoded.
- */
-export function computeNoteHash(rawMarkdown: string): string {
-  let h = 5381;
-  for (let i = 0; i < rawMarkdown.length; i++) {
-    // h = ((h << 5) + h) + charCode  (mod 2^32)
-    h = (Math.imul(h, 33) + rawMarkdown.charCodeAt(i)) >>> 0;
-  }
-  return h.toString(16).padStart(8, '0');
-}
-
-/**
  * Generate a UUID v4 (random).
  * Avoids importing the crypto module at the top level to keep tree-shaking clean.
  */
