@@ -24,6 +24,7 @@ import {
 import { preprocessNote, resetSectionCounter } from "./preprocessing";
 import { classifySections, filterActionableSections, isPlanChangeIntentLabel, qualifiesForStructuralIdeaBypass } from "./classifiers";
 import { sectionHasDeltaSignal } from "./consolidateBySection";
+import { applyFinalEmissionEnforcement } from "./finalEmissionEnforcement";
 import { normalizeTitlePrefix } from "./title-normalization";
 import { extractIdeaCandidates, resetIdeaSemanticCounter } from "./extractIdeaCandidates";
 import { computeSuggestionKey } from "../suggestion-keys";
@@ -1243,11 +1244,16 @@ export function generateSuggestionsWithDebug(
     // Stage 7: Dedupe (if any)
     // ============================================
     const dedupeStart = Date.now();
-    const finalSuggestions = dedupeSuggestions(routedSuggestions, ledger);
+    const dedupedSuggestions = dedupeSuggestions(routedSuggestions, ledger);
 
     if (ledger) {
       ledger.recordStageTiming(DropStage.DEDUPE, Date.now() - dedupeStart);
     }
+
+    // ============================================
+    // Stage 8: Final-emission enforcement
+    // ============================================
+    const finalSuggestions = applyFinalEmissionEnforcement(dedupedSuggestions, sectionMap, note.note_id);
 
     // Instrumentation: Log final suggestions state
     if (process.env.DEBUG_AGGREGATION === 'true' || finalConfig.enable_debug) {

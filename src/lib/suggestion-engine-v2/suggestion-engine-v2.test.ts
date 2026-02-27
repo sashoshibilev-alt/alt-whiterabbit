@@ -2843,9 +2843,15 @@ V1 launch has been pushed from 12th to 19th due to vendor dependency.
       }
 
       // INVARIANT: Emitted candidates should roughly match final suggestions
-      // (allowing for dedupe/cap drops which are separately tracked)
+      // (allowing for dedupe/cap drops which are separately tracked, and
+      // final-emission enforcement which may add synthetic suggestions for
+      // timeline sections or consolidate spec/framework sections)
       if (emittedCandidatesCount > 0) {
-        expect(aggregatedSuggestionsCount).toBeLessThanOrEqual(emittedCandidatesCount);
+        // Synthetic enforcement can add up to N timeline sections worth of suggestions
+        const syntheticAllowance = result.suggestions.filter(s =>
+          s.suggestion_id.startsWith('sug_timeline_')
+        ).length;
+        expect(aggregatedSuggestionsCount - syntheticAllowance).toBeLessThanOrEqual(emittedCandidatesCount);
       }
     });
 

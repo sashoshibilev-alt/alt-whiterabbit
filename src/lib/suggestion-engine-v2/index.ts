@@ -42,6 +42,7 @@ import { consolidateBySection, resetConsolidationCounter, sectionHasDeltaSignal 
 import { enforceTitleContract, normalizeTitlePrefix, truncateTitleSmart, ensureUpdateTitleIncludesDelta, stripKnownPrefix } from './title-normalization';
 import { computeSuggestionKey } from '../suggestion-keys';
 import { computeNoteHash } from './noteHash';
+import { applyFinalEmissionEnforcement } from './finalEmissionEnforcement';
 
 // Re-export types
 export * from './types';
@@ -1130,94 +1131,7 @@ export function generateRunResult(
   // correctly preserved the overrides.
   const emissionSectionMap = generatorResult._sectionMap;
   if (emissionSectionMap) {
-    const EMISSION_AUTOMATION_RE = /\b(data\s+collection\s+automation|automation|parsing|ocr|upload)\b/i;
-    const EMISSION_GAM_TOKENS = [
-      'next episode', 'one more', 'worth €', 'earning potential',
-      'next highest-value field', 'next field', 'reward', 'gamif', 'streak', 'badge',
-    ];
-
-    finalSuggestions = finalSuggestions.filter(s => {
-      // 1) Spec/framework suppression: remove project_update from spec/framework sections
-      if (s.type === 'project_update') {
-        const sec = emissionSectionMap.get(s.section_id) ||
-          (s.section_id.includes('__topic_')
-            ? emissionSectionMap.get(s.section_id.split('__topic_')[0])
-            : undefined);
-        if (sec) {
-          const heading = sec.heading_text || '';
-          const numBullets = sec.structural_features?.num_list_items ?? 0;
-          if (isSpecOrFrameworkSection(sec.raw_text, numBullets, heading)) {
-            return false;
-          }
-        }
-      }
-      return true;
-    });
-
-    for (let i = 0; i < finalSuggestions.length; i++) {
-      const s = finalSuggestions[i];
-      const sec = emissionSectionMap.get(s.section_id) ||
-        (s.section_id.includes('__topic_')
-          ? emissionSectionMap.get(s.section_id.split('__topic_')[0])
-          : undefined);
-      if (!sec) continue;
-
-      const heading = sec.heading_text?.trim() ?? '';
-      const allItems = sec.body_lines
-        .filter(l => l.line_type === 'list_item')
-        .map(l => l.text.replace(/^[\s\-*+]+/, '').replace(/^\d+\.\s*/, '').trim())
-        .filter(t => t.length > 0);
-
-      // 2) Gamification cluster override: enforce cluster title + multi-bullet body
-      const bulletJoined = allItems.join(' ').toLowerCase();
-      const gamCount = EMISSION_GAM_TOKENS.filter(t => bulletJoined.includes(t)).length;
-      if (allItems.length >= 4 && gamCount >= 2 && s.type === 'idea') {
-        let clusterTitle: string;
-        if (bulletJoined.includes('next highest-value field') || bulletJoined.includes('next field')) {
-          clusterTitle = 'Gamify data collection (next-field rewards)';
-        } else if (bulletJoined.includes('earning potential')) {
-          clusterTitle = 'Gamify data collection (earning-potential rewards)';
-        } else {
-          clusterTitle = heading || 'Gamify data collection';
-        }
-        const prefixed = normalizeTitlePrefix('idea', clusterTitle);
-        const kept = allItems.slice(0, 4);
-        const clusterBody = kept.join('. ').replace(/\.+/g, '.').replace(/\.\s*$/, '') + '.';
-
-        finalSuggestions[i] = {
-          ...s,
-          title: prefixed,
-          suggestion: s.suggestion
-            ? { ...s.suggestion, title: prefixed, body: clusterBody }
-            : s.suggestion,
-          payload: {
-            ...s.payload,
-            draft_initiative: s.payload.draft_initiative
-              ? { ...s.payload.draft_initiative, title: clusterTitle, description: clusterBody }
-              : s.payload.draft_initiative,
-          },
-        };
-        continue;
-      }
-
-      // 3) Automation multi-bullet enrichment: enforce multi-bullet body for automation sections
-      if (s.type === 'idea' && EMISSION_AUTOMATION_RE.test(heading) && allItems.length >= 2) {
-        const kept = allItems.slice(0, 4);
-        const multiBullet = kept.map(b => `- ${b}`).join('\n');
-        finalSuggestions[i] = {
-          ...s,
-          suggestion: s.suggestion
-            ? { ...s.suggestion, body: multiBullet }
-            : s.suggestion,
-          payload: {
-            ...s.payload,
-            draft_initiative: s.payload.draft_initiative
-              ? { ...s.payload.draft_initiative, description: multiBullet }
-              : s.payload.draft_initiative,
-          },
-        };
-      }
-    }
+    finalSuggestions = applyFinalEmissionEnforcement(finalSuggestions, emissionSectionMap, note.note_id);
   }
 
   // --- Invariant: all suggestions passed validation ---

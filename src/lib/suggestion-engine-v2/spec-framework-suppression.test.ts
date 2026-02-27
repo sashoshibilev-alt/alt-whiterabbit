@@ -324,6 +324,247 @@ describe('Final-emission enforcement via generateRunResult', () => {
 });
 
 // ============================================
+// Fix (2): Black Box deduplication — single Idea with multi-bullet body
+// ============================================
+
+describe('Black Box: single Idea, multi-bullet body, no baked prefix (Agatha full note)', () => {
+  const NOTE: NoteInput = {
+    note_id: 'test-bbox-agatha-full',
+    raw_markdown: [
+      '# Agatha Carbon Credit Platform',
+      '',
+      '### Black Box Prioritization System',
+      '',
+      '- Three-factor scoring: evaluate each claim using data quality, source reliability, and verification status',
+      '- Additionality extension: apply additionality scoring to distinguish new mitigation from business-as-usual',
+      '- Eligibility weighting: weight eligibility criteria based on regional factors and historical accuracy',
+      '- Carbon accuracy layer: layer in third-party audits to improve measurement accuracy and reduce fraud',
+    ].join('\n'),
+  };
+
+  it('emits exactly ONE suggestion with sourceHeading including "Black Box Prioritization System"', () => {
+    const result = generateRunResult(NOTE, undefined, { enable_debug: true }, { applyAnyway: true });
+    const bbox = result.finalSuggestions.filter(s =>
+      (s.suggestion?.sourceHeading ?? '').includes('Black Box Prioritization System')
+    );
+    expect(bbox.length, `Expected 1, got ${bbox.length}: ${bbox.map(s => `${s.type}:${s.title}`).join(', ')}`).toBe(1);
+  });
+
+  it('type is "idea"', () => {
+    const result = generateRunResult(NOTE, undefined, { enable_debug: true }, { applyAnyway: true });
+    const bbox = result.finalSuggestions.find(s =>
+      (s.suggestion?.sourceHeading ?? '').includes('Black Box Prioritization System')
+    );
+    expect(bbox).toBeDefined();
+    expect(bbox!.type).toBe('idea');
+  });
+
+  it('title has no baked prefix ("Idea:"/"Update:")', () => {
+    const result = generateRunResult(NOTE, undefined, { enable_debug: true }, { applyAnyway: true });
+    const bbox = result.finalSuggestions.find(s =>
+      (s.suggestion?.sourceHeading ?? '').includes('Black Box Prioritization System')
+    );
+    expect(bbox).toBeDefined();
+    // The raw engine title uses normalizeTitlePrefix which adds "Idea: ", but
+    // the suggestion.title (card payload) should strip legacy prefixes for display
+    const displayTitle = stripLegacyPrefix(bbox!.suggestion?.title ?? bbox!.title);
+    expect(displayTitle).not.toMatch(/^(Idea|Update|Risk|Bug)\s*:/i);
+  });
+
+  it('body contains multiple "- " bullets and includes at least 3 expected Black Box bullets', () => {
+    const result = generateRunResult(NOTE, undefined, { enable_debug: true }, { applyAnyway: true });
+    const bbox = result.finalSuggestions.find(s =>
+      (s.suggestion?.sourceHeading ?? '').includes('Black Box Prioritization System')
+    );
+    expect(bbox).toBeDefined();
+    const body = bbox!.suggestion?.body ?? '';
+    const bullets = body.split('\n').filter(l => l.startsWith('- '));
+    expect(bullets.length, `Expected >= 3 bullets, got ${bullets.length}: ${body.slice(0, 200)}`).toBeGreaterThanOrEqual(3);
+    const lower = body.toLowerCase();
+    expect(lower).toContain('three-factor scoring');
+    expect(lower).toContain('additionality');
+    expect(lower).toContain('eligibility weighting');
+  });
+});
+
+// ============================================
+// Fix (2b): Black Box with concrete deltas still suppresses project_update
+// ============================================
+
+describe('Black Box with concrete deltas: still single Idea (no project_update)', () => {
+  const NOTE: NoteInput = {
+    note_id: 'test-bbox-delta',
+    raw_markdown: [
+      '# Meeting Notes',
+      '',
+      'Thu, 18 Dec 25',
+      '',
+      '### Black Box Prioritization System',
+      '',
+      '- Three-factor scoring for field prioritization:',
+      '1. Field size (20% of farm coverage priority)',
+      '2. Eligibility (crop API validation against eligible list)',
+      '3. Additionality (cover crop score 0-1, extending to 5-year analysis)',
+      '- Remote sensing integration',
+      '- Existing API determines regenerative practice scores',
+      '- Extend from current 1-year to 5-year assessment',
+      '',
+      '### Agatha Gamification Strategy',
+      '',
+      '- Netflix-style "next episode" approach for data collection',
+      '- Present earning potential per field (e.g., "Next field worth €300, takes 2 minutes 45 seconds")',
+      '- Create "just do one more" mentality similar to gambling psychology',
+      '- Always show next highest-value field after completion',
+    ].join('\n'),
+  };
+
+  it('emits at most ONE suggestion for Black Box (no project_update)', () => {
+    const result = generateRunResult(NOTE, undefined, { enable_debug: true }, { applyAnyway: true });
+    const bbox = result.finalSuggestions.filter(s =>
+      (s.suggestion?.sourceHeading ?? '').includes('Black Box')
+    );
+    const updates = bbox.filter(s => s.type === 'project_update');
+    expect(updates.length, `Unexpected project_updates: ${updates.map(s => s.title).join(', ')}`).toBe(0);
+    const ideas = bbox.filter(s => s.type === 'idea');
+    expect(ideas.length).toBeLessThanOrEqual(1);
+  });
+
+  it('if Black Box idea exists, body has multi-bullet content', () => {
+    const result = generateRunResult(NOTE, undefined, { enable_debug: true }, { applyAnyway: true });
+    const bbox = result.finalSuggestions.find(s =>
+      (s.suggestion?.sourceHeading ?? '').includes('Black Box') && s.type === 'idea'
+    );
+    if (bbox) {
+      const body = bbox.suggestion?.body ?? '';
+      const bullets = body.split('\n').filter(l => l.startsWith('- '));
+      expect(bullets.length, `Expected >= 3 bullets, got ${bullets.length}`).toBeGreaterThanOrEqual(3);
+    }
+  });
+});
+
+// ============================================
+// Fix (4): Implementation Timeline — single Update with multi-bullet body
+// ============================================
+
+describe('Implementation Timeline: single project_update, multi-bullet body (Agatha note)', () => {
+  const NOTE: NoteInput = {
+    note_id: 'test-impl-timeline-agatha',
+    raw_markdown: [
+      '# Project Status',
+      '',
+      '## Implementation Timeline',
+      '',
+      '- Immediate focus: Ham Light deployment (3-month window, target January)',
+      '- Backend services ready; frontend integration in progress',
+      '- Security considerations: Database logging includes user IDs which raises privacy and PII risk',
+      '- Need to mask user IDs before logging goes live',
+    ].join('\n'),
+  };
+
+  it('emits exactly ONE suggestion for Implementation Timeline section', () => {
+    const result = generateRunResult(NOTE, undefined, { enable_debug: true }, { applyAnyway: true });
+    const timeline = result.finalSuggestions.filter(s =>
+      (s.suggestion?.sourceHeading ?? '').toLowerCase().includes('implementation timeline')
+    );
+    expect(
+      timeline.length,
+      `Expected 1, got ${timeline.length}: ${timeline.map(s => `${s.type}:${s.title}`).join(', ')}`
+    ).toBe(1);
+  });
+
+  it('type is project_update', () => {
+    const result = generateRunResult(NOTE, undefined, { enable_debug: true }, { applyAnyway: true });
+    const timeline = result.finalSuggestions.find(s =>
+      (s.suggestion?.sourceHeading ?? '').toLowerCase().includes('implementation timeline')
+    );
+    expect(timeline).toBeDefined();
+    expect(timeline!.type).toBe('project_update');
+  });
+
+  it('body includes "3-month" and "January"', () => {
+    const result = generateRunResult(NOTE, undefined, { enable_debug: true }, { applyAnyway: true });
+    const timeline = result.finalSuggestions.find(s =>
+      (s.suggestion?.sourceHeading ?? '').toLowerCase().includes('implementation timeline')
+    );
+    expect(timeline).toBeDefined();
+    const body = (timeline!.suggestion?.body ?? '').toLowerCase();
+    expect(body).toContain('3-month');
+    expect(body.includes('january') || body.includes('jan')).toBe(true);
+  });
+
+  it('suggestion is emitted (not dropped)', () => {
+    const result = generateRunResult(NOTE, undefined, { enable_debug: true }, { applyAnyway: true, includeDebugFields: true });
+    const timeline = result.finalSuggestions.find(s =>
+      (s.suggestion?.sourceHeading ?? '').toLowerCase().includes('implementation timeline')
+    );
+    expect(timeline).toBeDefined();
+  });
+});
+
+// ============================================
+// Fix (4b): Implementation Timeline synthetic creation when pipeline drops all candidates
+// ============================================
+
+describe('Implementation Timeline: synthetic project_update when pipeline drops all candidates', () => {
+  // This fixture uses the real-world note structure where the Implementation Timeline
+  // section has no strong actionability signals and gets dropped by V4_HEADING_ONLY.
+  // The final-emission enforcement should still create a synthetic project_update.
+  const NOTE: NoteInput = {
+    note_id: 'test-impl-timeline-synthetic',
+    raw_markdown: [
+      '# Meeting Notes',
+      '',
+      'Thu, 18 Dec 25',
+      '',
+      '### Agatha Gamification Strategy',
+      '',
+      '- Netflix-style "next episode" approach for data collection',
+      '- Present earning potential per field (e.g., "Next field worth €300, takes 2 minutes")',
+      '- Create "just do one more" mentality similar to gambling psychology',
+      '- Always show next highest-value field after completion',
+      '',
+      '### Implementation Timeline',
+      '',
+      '- Immediate focus: Ham Light deployment',
+      '- 3-month target window starting early January',
+      '- Prioritize quick wins: photo upload, eligibility API',
+      '- Backend services deployment strategy',
+      '- Security considerations',
+      '- User testing phase after initial deployment',
+      '- Full rollout by end of Q1',
+    ].join('\n'),
+  };
+
+  it('emits exactly ONE suggestion for Implementation Timeline', () => {
+    const result = generateRunResult(NOTE, undefined, { enable_debug: true }, { applyAnyway: true });
+    const timeline = result.finalSuggestions.filter(s =>
+      (s.suggestion?.sourceHeading ?? '').toLowerCase().includes('implementation timeline')
+    );
+    expect(timeline.length, `Expected 1, got ${timeline.length}: ${timeline.map(s => `${s.type}:${s.title}`).join(', ')}`).toBe(1);
+  });
+
+  it('type is project_update', () => {
+    const result = generateRunResult(NOTE, undefined, { enable_debug: true }, { applyAnyway: true });
+    const timeline = result.finalSuggestions.find(s =>
+      (s.suggestion?.sourceHeading ?? '').toLowerCase().includes('implementation timeline')
+    );
+    expect(timeline).toBeDefined();
+    expect(timeline!.type).toBe('project_update');
+  });
+
+  it('body includes "3-month" and "January"', () => {
+    const result = generateRunResult(NOTE, undefined, { enable_debug: true }, { applyAnyway: true });
+    const timeline = result.finalSuggestions.find(s =>
+      (s.suggestion?.sourceHeading ?? '').toLowerCase().includes('implementation timeline')
+    );
+    expect(timeline).toBeDefined();
+    const body = (timeline!.suggestion?.body ?? '').toLowerCase();
+    expect(body).toContain('3-month');
+    expect(body.includes('january') || body.includes('jan')).toBe(true);
+  });
+});
+
+// ============================================
 // UI prefix rendering: no embedded prefixes in engine titles
 // ============================================
 
