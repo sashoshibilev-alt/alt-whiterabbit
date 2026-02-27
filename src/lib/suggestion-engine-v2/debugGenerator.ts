@@ -44,6 +44,7 @@ import { runQualityValidators } from "./validators";
 import { runScoringPipeline } from "./scoring";
 import { routeSuggestions } from "./routing";
 import { shouldSuppressProcessSentence } from "./processNoiseSuppression";
+import { computeNoteHash } from "./noteHash";
 
 // ============================================
 // Debug Generator Options
@@ -95,6 +96,9 @@ export function generateSuggestionsWithDebug(
   resetIdeaSemanticCounter();
   resetDebugBypassCounter();
 
+  // Compute deterministic hash of note content
+  const noteHash = computeNoteHash(note.raw_markdown);
+
   // Merge config with defaults
   const finalConfig: GeneratorConfig = {
     ...DEFAULT_CONFIG,
@@ -138,7 +142,7 @@ export function generateSuggestionsWithDebug(
     }
 
     if (sections.length === 0) {
-      return buildResult([], ledger, finalConfig.enable_debug);
+      return buildResult([], noteHash, ledger, finalConfig.enable_debug);
     }
 
     // ============================================
@@ -226,7 +230,7 @@ export function generateSuggestionsWithDebug(
     });
 
     if (actionableSections.length === 0 && !hasStructuralBypassCandidate) {
-      return buildResult([], ledger, finalConfig.enable_debug);
+      return buildResult([], noteHash, ledger, finalConfig.enable_debug);
     }
 
     // ============================================
@@ -823,7 +827,7 @@ export function generateSuggestionsWithDebug(
     }
 
     if (synthesizedSuggestions.length === 0 && !hasStructuralBypassCandidate) {
-      return buildResult([], ledger, finalConfig.enable_debug);
+      return buildResult([], noteHash, ledger, finalConfig.enable_debug);
     }
 
     // ============================================
@@ -911,7 +915,7 @@ export function generateSuggestionsWithDebug(
     }
 
     if (validatedSuggestions.length === 0 && !hasStructuralBypassCandidate) {
-      return buildResult([], ledger, finalConfig.enable_debug);
+      return buildResult([], noteHash, ledger, finalConfig.enable_debug);
     }
 
     // ============================================
@@ -1222,7 +1226,7 @@ export function generateSuggestionsWithDebug(
     }
 
     if (scoringResult.suggestions.length === 0) {
-      return buildResult([], ledger, finalConfig.enable_debug);
+      return buildResult([], noteHash, ledger, finalConfig.enable_debug);
     }
 
     // ============================================
@@ -1319,7 +1323,7 @@ export function generateSuggestionsWithDebug(
       }
     }
 
-    return buildResult(finalSuggestions, ledger, finalConfig.enable_debug);
+    return buildResult(finalSuggestions, noteHash, ledger, finalConfig.enable_debug);
   } catch (error) {
     // Handle global error
     if (ledger) {
@@ -1338,11 +1342,13 @@ export function generateSuggestionsWithDebug(
  */
 function buildResult(
   suggestions: Suggestion[],
+  noteHash: string,
   ledger: DebugLedger | null,
   includeDebug: boolean
 ): DebugGeneratorResult {
   const result: DebugGeneratorResult = {
     suggestions,
+    noteHash,
   };
 
   if (ledger) {

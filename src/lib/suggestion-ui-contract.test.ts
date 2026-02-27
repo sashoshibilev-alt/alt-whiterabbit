@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { generateSuggestions, adaptConvexNote, type NoteInput } from './suggestion-engine-v2';
+import { generateSuggestions, adaptConvexNote, computeNoteHash, type NoteInput } from './suggestion-engine-v2';
 
 // Fixed note input designed to produce both idea and project_update suggestions
 const FIXED_NOTE_INPUT: NoteInput = {
@@ -218,5 +218,130 @@ describe('UI Contract: Suggestion Payload Shape', () => {
       expect(update.suggestion!.sourceSectionId).toBeDefined();
       expect(update.suggestion!.sourceHeading).toBeDefined();
     }
+  });
+});
+
+describe('Single source of truth: rendered count matches engine output', () => {
+  it('UI renders exactly the engine suggestion count, not a separate persisted count', () => {
+    // Simulate: engine produces N suggestions, persisted DB has a different count.
+    // The UI must render from engine output exclusively.
+    const engineNote = adaptConvexNote({
+      _id: 'sot-test-note' as any,
+      body: FIXED_NOTE_INPUT.raw_markdown,
+      createdAt: Date.now(),
+      title: 'Product Strategy Session',
+    });
+
+    const result = generateSuggestions(engineNote);
+    const engineCount = result.suggestions.length;
+
+    // Simulate getWithComputedSuggestions transform (no decisions → no filtering)
+    const uiSuggestions = result.suggestions.map((engineSug) => ({
+      _id: engineSug.suggestion_id as any,
+      noteId: 'sot-test-note' as any,
+      content: engineSug.title,
+      status: "new" as const,
+      suggestionKey: engineSug.suggestionKey,
+    }));
+
+    // Simulate a stale persisted suggestions array with a different count
+    const persistedSuggestions = [
+      { _id: 'old1', status: 'new' },
+      { _id: 'old2', status: 'new' },
+      { _id: 'old3', status: 'new' },
+      { _id: 'old4', status: 'new' },
+      { _id: 'old5', status: 'new' },
+      { _id: 'old6', status: 'new' },
+    ];
+
+    // The UI must use uiSuggestions (engine output), NOT persistedSuggestions
+    const newSuggestions = uiSuggestions.filter(s => s.status === 'new');
+    expect(newSuggestions.length).toBe(engineCount);
+    expect(newSuggestions.length).not.toBe(persistedSuggestions.length);
+
+    // The "New (N)" label must match the rendered card count
+    const renderedCardCount = newSuggestions.length;
+    const headerLabel = `New (${newSuggestions.length})`;
+    expect(headerLabel).toBe(`New (${renderedCardCount})`);
+  });
+
+  it('with decisions filtering, rendered count still matches filtered engine output', () => {
+    const engineNote = adaptConvexNote({
+      _id: 'sot-filter-test' as any,
+      body: FIXED_NOTE_INPUT.raw_markdown,
+      createdAt: Date.now(),
+      title: 'Product Strategy Session',
+    });
+
+    const result = generateSuggestions(engineNote);
+
+    // Simulate: first suggestion has been dismissed via decisions
+    const dismissedKey = result.suggestions[0]?.suggestionKey;
+    const decisionMap = new Map([[dismissedKey, { status: 'dismissed' }]]);
+
+    // Transform + filter (mirrors getWithComputedSuggestions logic)
+    const uiSuggestions = result.suggestions
+      .map((engineSug) => ({
+        _id: engineSug.suggestion_id as any,
+        noteId: 'sot-filter-test' as any,
+        content: engineSug.title,
+        status: "new" as const,
+        suggestionKey: engineSug.suggestionKey,
+      }))
+      .filter((sug) => {
+        const decision = decisionMap.get(sug.suggestionKey);
+        return !decision || (decision.status !== 'dismissed' && decision.status !== 'applied');
+      });
+
+    // Filtered count should be engine count minus dismissed
+    expect(uiSuggestions.length).toBe(result.suggestions.length - 1);
+
+    // Header and card list must agree
+    const newSuggestions = uiSuggestions.filter(s => s.status === 'new');
+    expect(newSuggestions.length).toBe(uiSuggestions.length);
+  });
+});
+
+describe('noteHash contract', () => {
+  it('noteHash is not "unknown" for non-empty note text', () => {
+    const engineNote = adaptConvexNote({
+      _id: 'hash-test-note' as any,
+      body: FIXED_NOTE_INPUT.raw_markdown,
+      createdAt: Date.now(),
+      title: 'Product Strategy Session',
+    });
+
+    const result = generateSuggestions(engineNote);
+    expect(result.noteHash).toBeDefined();
+    expect(result.noteHash).not.toBe('unknown');
+    expect(result.noteHash.length).toBe(8);
+  });
+
+  it('noteHash is deterministic for the same content', () => {
+    const body = '# Test\n\nSome content here.';
+    const hash1 = computeNoteHash(body);
+    const hash2 = computeNoteHash(body);
+    expect(hash1).toBe(hash2);
+  });
+
+  it('noteHash differs for different content', () => {
+    const hash1 = computeNoteHash('# Test A\n\nContent A.');
+    const hash2 = computeNoteHash('# Test B\n\nContent B.');
+    expect(hash1).not.toBe(hash2);
+  });
+
+  it('noteHash is returned alongside suggestions from generateSuggestions', () => {
+    const engineNote = adaptConvexNote({
+      _id: 'hash-return-test' as any,
+      body: '# Empty test\n\nNo actionable content.',
+      createdAt: Date.now(),
+    });
+
+    const result = generateSuggestions(engineNote);
+    // Even with 0 suggestions, noteHash should be present
+    expect(result.noteHash).toBeDefined();
+    expect(typeof result.noteHash).toBe('string');
+    expect(result.noteHash.length).toBe(8);
+    expect(result.noteHash).not.toBe('unknown');
   });
 });

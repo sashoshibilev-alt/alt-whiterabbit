@@ -395,6 +395,8 @@ export interface GeneratorDebugInfo {
  */
 export interface GeneratorResult {
   suggestions: Suggestion[];
+  /** Deterministic hash of the note content used for this run */
+  noteHash: string;
   debug?: GeneratorDebugInfo;
 }
 

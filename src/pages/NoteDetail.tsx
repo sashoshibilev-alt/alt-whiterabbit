@@ -156,7 +156,8 @@ export default function NoteDetailPage() {
     );
   }
 
-  const { note, suggestions } = noteData;
+  const { note, suggestions, runResult } = noteData;
+  const noteHash = runResult?.noteHash || "unknown";
   const newSuggestions = suggestions.filter((s) => s.status === "new");
   const appliedSuggestions = suggestions.filter((s) => s.status === "applied");
   const dismissedSuggestions = suggestions.filter((s) => s.status === "dismissed");
@@ -461,12 +462,19 @@ export default function NoteDetailPage() {
             <div className="flex items-center justify-between">
               <h2 className="font-semibold flex items-center gap-2">
                 <Sparkles className="h-4 w-4" />
+<<<<<<< HEAD
+                Suggestions ({suggestions.length})
+                <span className="text-xs font-normal text-muted-foreground">
+                  hash:{noteHash}
+                </span>
+=======
                 Suggestions ({lastRunResult ? lastRunResult.finalSuggestions.length : suggestions.length})
                 {lastRunResult && (
                   <span className="text-xs font-normal text-muted-foreground ml-1">
                     run:{lastRunResult.runId.slice(0, 8)} hash:{lastRunResult.noteHash}
                   </span>
                 )}
+>>>>>>> origin/main
               </h2>
               <Button
                 variant="outline"

@@ -41,6 +41,7 @@ import { extractIdeaCandidates, resetIdeaSemanticCounter } from './extractIdeaCa
 import { consolidateBySection, resetConsolidationCounter, sectionHasDeltaSignal } from './consolidateBySection';
 import { enforceTitleContract, normalizeTitlePrefix, truncateTitleSmart, ensureUpdateTitleIncludesDelta, stripKnownPrefix } from './title-normalization';
 import { computeSuggestionKey } from '../suggestion-keys';
+import { computeNoteHash } from './noteHash';
 
 // Re-export types
 export * from './types';
@@ -87,6 +88,7 @@ export {
 export { groupSuggestionsForDisplay } from './presentation';
 export type { SuggestionBucket, GroupedSuggestions, GroupSuggestionsOptions } from './presentation';
 export { routeSuggestions, routeSuggestion, computeRoutingStats } from './routing';
+export { computeNoteHash } from './noteHash';
 export { enforceTitleContract, normalizeTitlePrefix, ensureUpdateTitleIncludesDelta, stripKnownPrefix } from './title-normalization';
 export {
   evaluateNote,
@@ -172,6 +174,9 @@ export function generateSuggestions(
   resetConsolidationCounter();
   resetStructuralBypassCounter();
 
+  // Compute deterministic hash of note content
+  const noteHash = computeNoteHash(note.raw_markdown);
+
   // Merge config with defaults
   const finalConfig: GeneratorConfig = {
     ...defaultConfig,
@@ -209,7 +214,7 @@ export function generateSuggestions(
   debug.sections_count = sections.length;
 
   if (sections.length === 0) {
-    return buildResult([], debug, finalConfig.enable_debug);
+    return buildResult([], noteHash, debug, finalConfig.enable_debug);
   }
 
   // ============================================
@@ -233,7 +238,7 @@ export function generateSuggestions(
     });
 
   if (actionableSections.length === 0 && !hasStructuralBypassCandidate) {
-    return buildResult([], debug, finalConfig.enable_debug);
+    return buildResult([], noteHash, debug, finalConfig.enable_debug);
   }
 
   // ============================================
@@ -274,7 +279,7 @@ export function generateSuggestions(
   // When synthesis is empty AND there are no structural bypass candidates, exit early.
   // If structural bypass candidates exist we continue so Stage 4.59 can emit them.
   if (synthesizedSuggestions.length === 0 && !hasStructuralBypassCandidate) {
-    return buildResult([], debug, finalConfig.enable_debug);
+    return buildResult([], noteHash, debug, finalConfig.enable_debug);
   }
 
   // ============================================
@@ -705,7 +710,7 @@ export function generateSuggestions(
   }
 
   if (scoringResult.suggestions.length === 0) {
-    return buildResult([], debug, finalConfig.enable_debug);
+    return buildResult([], noteHash, debug, finalConfig.enable_debug);
   }
 
   // ============================================
@@ -771,7 +776,7 @@ export function generateSuggestions(
     };
   });
 
-  return buildResult(contractedSuggestions, debug, finalConfig.enable_debug);
+  return buildResult(contractedSuggestions, noteHash, debug, finalConfig.enable_debug);
 }
 
 /**
@@ -779,11 +784,13 @@ export function generateSuggestions(
  */
 function buildResult(
   suggestions: Suggestion[],
+  noteHash: string,
   debug: GeneratorDebugInfo,
   includeDebug: boolean
 ): GeneratorResult {
   const result: GeneratorResult = {
     suggestions,
+    noteHash,
   };
 
   if (includeDebug) {
