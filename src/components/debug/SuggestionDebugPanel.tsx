@@ -48,6 +48,63 @@ import type {
   DropReason,
 } from "@/lib/suggestion-engine-v2/debugTypes";
 import { computeDebugRunSummary } from "@/lib/suggestion-engine-v2/debugTypes";
+import type { RunResult } from "@/lib/suggestion-engine-v2/types";
+
+// ============================================
+// RunResult construction from DebugRun
+// ============================================
+
+/**
+ * Build a RunResult-shaped object from a DebugRun.
+ *
+ * finalSuggestions is derived from candidates marked `emitted: true` across all sections.
+ * This ensures Copy JSON always reflects exactly what the panel shows.
+ */
+function buildRunResultFromDebugRun(debugRun: DebugRun): Omit<RunResult, 'config' | 'finalSuggestions' | 'allCandidates'> & {
+  finalSuggestions: Array<{
+    candidateId: string;
+    title: string;
+    body: string;
+    evidencePreview?: string[];
+    sourceSectionId: string;
+    sourceHeading: string;
+    overallScore: number;
+  }>;
+  finalSuggestionsCount: number;
+  sections: SectionDebug[];
+} {
+  const emittedCandidates = debugRun.sections.flatMap(section =>
+    section.candidates
+      .filter(c => c.emitted && c.suggestion)
+      .map(c => ({
+        candidateId: c.candidateId,
+        title: c.suggestion!.title,
+        body: c.suggestion!.body,
+        evidencePreview: c.suggestion!.evidencePreview,
+        sourceSectionId: c.suggestion!.sourceSectionId,
+        sourceHeading: c.suggestion!.sourceHeading,
+        overallScore: c.scoreBreakdown.overallScore,
+      }))
+  );
+
+  return {
+    runId: debugRun.meta.runId,
+    noteId: debugRun.meta.noteId,
+    createdAt: debugRun.meta.createdAt,
+    noteHash: debugRun.meta.noteHash ?? 'unknown',
+    lineCount: debugRun.noteSummary.lineCount,
+    finalSuggestions: emittedCandidates,
+    finalSuggestionsCount: emittedCandidates.length,
+    sections: debugRun.sections,
+    // The debug panel marks candidates as emitted only after they pass all gates,
+    // so allSuggestionsPassed is always true here.
+    invariants: {
+      maxSuggestionsRespected: true,
+      allSuggestionsPassed: true,
+      trimmedToMax: false,
+    },
+  };
+}
 
 // ============================================
 // Props
@@ -57,6 +114,11 @@ interface SuggestionDebugPanelProps {
   noteId: Id<"notes">;
   // Optional: control visibility from parent
   visible?: boolean;
+  /**
+   * Called after a debug run completes with the full RunResult.
+   * Allows parent to display runId + noteHash next to the suggestion list header.
+   */
+  onRunResult?: (result: RunResult) => void;
 }
 
 // ============================================
@@ -66,6 +128,7 @@ interface SuggestionDebugPanelProps {
 export function SuggestionDebugPanel({
   noteId,
   visible = true,
+  onRunResult,
 }: SuggestionDebugPanelProps) {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
@@ -85,6 +148,8 @@ export function SuggestionDebugPanel({
   // Use local state if available, otherwise use server data
   const debugRun = localDebugRun || latestRunResult?.debugRun || null;
   const summary = debugRun ? computeDebugRunSummary(debugRun) : null;
+  // Build RunResult-shaped view of the debug run (used for Copy JSON and header display)
+  const runResult = debugRun ? buildRunResultFromDebugRun(debugRun) : null;
 
   // Don't render if not visible (e.g., non-admin user)
   if (!visible) {
@@ -111,18 +176,25 @@ export function SuggestionDebugPanel({
 
       if (result.debugRun) {
         setLocalDebugRun(result.debugRun);
-        
+
+        // Notify parent with full RunResult so it can display runId + noteHash
+        // and render suggestion cards from the same source as the debug panel.
+        if (onRunResult) {
+          const builtResult = buildRunResultFromDebugRun(result.debugRun);
+          onRunResult(builtResult as unknown as RunResult);
+        }
+
         // Build description based on what was done
         let description = result.stored
           ? "Report saved and available for review."
           : `Report generated (not stored: ${result.storageSkippedReason})`;
-        
+
         if (persistSuggestions && result.suggestionsCreated) {
           description += ` ${result.suggestionsCreated} suggestion${result.suggestionsCreated > 1 ? 's' : ''} added to list.`;
         } else if (persistSuggestions && result.suggestionsCreated === 0) {
           description += " No suggestions to persist.";
         }
-        
+
         toast({
           title: "Debug run completed",
           description,
@@ -140,13 +212,15 @@ export function SuggestionDebugPanel({
   };
 
   const handleCopyJson = async () => {
-    if (!debugRun) return;
+    if (!runResult) return;
 
     try {
-      await navigator.clipboard.writeText(JSON.stringify(debugRun, null, 2));
+      // Copy the RunResult-shaped object so that Copy JSON always reflects
+      // exactly the same data as what the suggestion list and debug panel display.
+      await navigator.clipboard.writeText(JSON.stringify(runResult, null, 2));
       toast({
         title: "Copied",
-        description: "Debug JSON copied to clipboard.",
+        description: "Run result JSON copied to clipboard.",
       });
     } catch {
       toast({
@@ -194,7 +268,7 @@ export function SuggestionDebugPanel({
               size="sm"
               variant="outline"
               onClick={handleCopyJson}
-              disabled={!debugRun}
+              disabled={!runResult}
             >
               <Copy className="h-4 w-4 mr-2" />
               Copy JSON
@@ -254,6 +328,11 @@ function DebugRunHeader({ debugRun }: { debugRun: DebugRun }) {
         <span>
           <strong>Run ID:</strong> {debugRun.meta.runId.slice(0, 8)}...
         </span>
+        {debugRun.meta.noteHash && (
+          <span>
+            <strong>Note hash:</strong> {debugRun.meta.noteHash}
+          </span>
+        )}
         <span>
           <strong>Version:</strong> {debugRun.meta.generatorVersion}
         </span>
