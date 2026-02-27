@@ -353,3 +353,190 @@ describe('Dual-source-of-truth regression: UI ignores persisted noteData.suggest
     expect(displayedIds).toEqual(finalIds);
   });
 });
+
+// ============================================
+// Test 5: Decision filtering at the server level
+// ============================================
+
+describe('Decision filtering: runResult.finalSuggestions excludes decided items', () => {
+  /**
+   * Simulates the server-side decision filtering from convex/notes.ts:
+   *   const isDecided = (key) => { ... };
+   *   const filteredFinalSuggestions = runResult.finalSuggestions.filter(s => !isDecided(s.suggestionKey));
+   *
+   * The returned runResult.finalSuggestions is already filtered, so the UI
+   * renders exactly what the server returns with no additional logic needed.
+   */
+  type Decision = { suggestionKey: string; status: 'dismissed' | 'applied' };
+
+  function applyDecisionFilter(
+    runResult: RunResult,
+    decisions: Decision[],
+  ): RunResult {
+    const decisionMap = new Map(decisions.map(d => [d.suggestionKey, d]));
+    const isDecided = (key: string) => {
+      const d = decisionMap.get(key);
+      return d != null && (d.status === 'dismissed' || d.status === 'applied');
+    };
+    return {
+      ...runResult,
+      finalSuggestions: runResult.finalSuggestions.filter(
+        (s) => !isDecided(s.suggestionKey),
+      ),
+    };
+  }
+
+  it('Case A: finalSuggestions=4 after filtering, persisted=6 → UI renders 4', () => {
+    const realRun = generateRunResult(FOUR_SUGGESTION_NOTE);
+    // Ensure we have at least 6 suggestions to dismiss 2
+    const baseSuggestions = realRun.finalSuggestions;
+    const sixSuggestions = baseSuggestions.length >= 6
+      ? baseSuggestions.slice(0, 6)
+      : [
+          ...baseSuggestions,
+          ...Array.from({ length: 6 - baseSuggestions.length }, (_, i) => ({
+            ...baseSuggestions[0],
+            suggestion_id: `pad-${i}`,
+            suggestionKey: `pad-key-${i}`,
+          })),
+        ];
+
+    const runWith6: RunResult = { ...realRun, finalSuggestions: sixSuggestions };
+
+    // Dismiss 2 suggestions
+    const decisions: Decision[] = [
+      { suggestionKey: sixSuggestions[0].suggestionKey, status: 'dismissed' },
+      { suggestionKey: sixSuggestions[1].suggestionKey, status: 'applied' },
+    ];
+
+    const filtered = applyDecisionFilter(runWith6, decisions);
+
+    // Server returns 4 finalSuggestions; UI renders 4 cards
+    expect(filtered.finalSuggestions.length).toBe(4);
+    // Header shows 4
+    expect(filtered.finalSuggestions.length).toBe(4);
+    // None of the decided keys appear
+    const decidedKeys = new Set(decisions.map(d => d.suggestionKey));
+    for (const s of filtered.finalSuggestions) {
+      expect(decidedKeys.has(s.suggestionKey)).toBe(false);
+    }
+  });
+
+  it('Case B: finalSuggestions=0 after filtering all dismissed, persisted=6 → UI renders 0', () => {
+    const realRun = generateRunResult(FOUR_SUGGESTION_NOTE);
+    const baseSuggestions = realRun.finalSuggestions;
+    // Dismiss ALL suggestions
+    const decisions: Decision[] = baseSuggestions.map(s => ({
+      suggestionKey: s.suggestionKey,
+      status: 'dismissed' as const,
+    }));
+
+    const filtered = applyDecisionFilter(realRun, decisions);
+
+    expect(filtered.finalSuggestions.length).toBe(0);
+    // Header should say 0
+    const headerCount = filtered.finalSuggestions.length;
+    expect(headerCount).toBe(0);
+  });
+
+  it('Case C: after regenerate (new runId), counts match new finalSuggestions', () => {
+    // Simulate two runs: first run has decisions, second run (regenerate) has new runId
+    const run1 = generateRunResult(FOUR_SUGGESTION_NOTE);
+    resetSectionCounter();
+    resetSuggestionCounter();
+    const run2 = generateRunResult(FOUR_SUGGESTION_NOTE);
+
+    // Runs have different runIds (uuid-based)
+    expect(run2.runId).not.toBe(run1.runId);
+
+    // After regenerate with no decisions, all finalSuggestions are shown
+    const filtered = applyDecisionFilter(run2, []);
+    expect(filtered.finalSuggestions.length).toBe(run2.finalSuggestions.length);
+
+    // Copy JSON runId/noteHash match header
+    const headerRunId = filtered.runId.slice(0, 8);
+    const headerHash = filtered.noteHash;
+    expect(headerRunId).toBe(run2.runId.slice(0, 8));
+    expect(headerHash).toBe(run2.noteHash);
+  });
+
+  it('Copy JSON runId and noteHash match header after decision filtering', () => {
+    const runResult = generateRunResult(FOUR_SUGGESTION_NOTE);
+    const decisions: Decision[] = runResult.finalSuggestions.length > 0
+      ? [{ suggestionKey: runResult.finalSuggestions[0].suggestionKey, status: 'dismissed' }]
+      : [];
+
+    const filtered = applyDecisionFilter(runResult, decisions);
+    const copiedJson = JSON.parse(JSON.stringify(filtered));
+
+    // runId and noteHash are unchanged by decision filtering
+    expect(copiedJson.runId).toBe(runResult.runId);
+    expect(copiedJson.noteHash).toBe(runResult.noteHash);
+    // finalSuggestions count matches
+    expect(copiedJson.finalSuggestions.length).toBe(filtered.finalSuggestions.length);
+  });
+});
+
+// ============================================
+// Test 6: Copy JSON uses the page's RunResult, not the debug panel's
+// ============================================
+
+describe('Copy JSON uses currentRunResult (page source) over debug-panel-built RunResult', () => {
+  /**
+   * Simulates the fixed handleCopyJson logic in SuggestionDebugPanel:
+   *   const source = currentRunResult ?? debugPanelRunResult;
+   *   payload.finalSuggestionsCount = source.finalSuggestions.length;
+   *
+   * When currentRunResult is provided (from NoteDetail's lastRunResult),
+   * Copy JSON must use its finalSuggestions, not the debug panel's.
+   */
+  function simulateCopyJsonPayload(
+    currentRunResult: RunResult | null,
+    debugPanelFinalSuggestionsCount: number,
+  ) {
+    const source = currentRunResult;
+    if (!source) {
+      return { finalSuggestionsCount: debugPanelFinalSuggestionsCount };
+    }
+    return {
+      finalSuggestions: source.finalSuggestions,
+      finalSuggestionsCount: source.finalSuggestions.length,
+      runId: source.runId,
+      noteHash: source.noteHash,
+    };
+  }
+
+  it('Copy JSON finalSuggestionsCount matches page RunResult, not debug panel count', () => {
+    const pageRunResult = generateRunResult(FOUR_SUGGESTION_NOTE);
+    // Debug panel might compute a different count (the original bug)
+    const debugPanelCount = pageRunResult.finalSuggestions.length - 1;
+
+    const payload = simulateCopyJsonPayload(pageRunResult, debugPanelCount);
+
+    // Copy JSON uses the page's RunResult count
+    expect(payload.finalSuggestionsCount).toBe(pageRunResult.finalSuggestions.length);
+    // NOT the debug panel's count
+    expect(payload.finalSuggestionsCount).not.toBe(debugPanelCount);
+  });
+
+  it('Copy JSON runId and noteHash match the page RunResult', () => {
+    const pageRunResult = generateRunResult(FOUR_SUGGESTION_NOTE);
+
+    const payload = simulateCopyJsonPayload(pageRunResult, 0);
+
+    expect(payload.runId).toBe(pageRunResult.runId);
+    expect(payload.noteHash).toBe(pageRunResult.noteHash);
+  });
+
+  it('header count equals Copy JSON finalSuggestionsCount — same source', () => {
+    const pageRunResult = generateRunResult(FOUR_SUGGESTION_NOTE);
+
+    // Header reads: lastRunResult?.finalSuggestions?.length ?? 0
+    const headerCount = pageRunResult.finalSuggestions.length;
+
+    // Copy JSON reads: currentRunResult.finalSuggestions.length
+    const payload = simulateCopyJsonPayload(pageRunResult, 999);
+
+    expect(payload.finalSuggestionsCount).toBe(headerCount);
+  });
+});

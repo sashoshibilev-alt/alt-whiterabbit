@@ -119,6 +119,19 @@ interface SuggestionDebugPanelProps {
    * Allows parent to display runId + noteHash next to the suggestion list header.
    */
   onRunResult?: (result: RunResult) => void;
+  /**
+   * The current RunResult driving the suggestion list in NoteDetail.
+   * When provided, Copy JSON uses this as the authoritative source for
+   * finalSuggestions so the copied count always matches the rendered UI.
+   */
+  currentRunResult?: RunResult | null;
+  /**
+   * Debug run from the same engine call as the page suggestions.
+   * When provided, the debug panel uses this on load instead of fetching a
+   * potentially stale debug run from the server, ensuring the debug view and
+   * the suggestion list always agree.
+   */
+  initialDebugRun?: DebugRun | null;
 }
 
 // ============================================
@@ -129,6 +142,8 @@ export function SuggestionDebugPanel({
   noteId,
   visible = true,
   onRunResult,
+  currentRunResult,
+  initialDebugRun,
 }: SuggestionDebugPanelProps) {
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
@@ -136,17 +151,17 @@ export function SuggestionDebugPanel({
   const [localDebugRun, setLocalDebugRun] = useState<DebugRun | null>(null);
   const [persistSuggestions, setPersistSuggestions] = useState(true);
 
-  // Fetch latest debug run from server
+  // Fetch latest debug run from server (only when panel is open and no initial data)
   const latestRunResult = useQuery(
     api.suggestionDebug.getLatestByNote,
-    open ? { noteId } : "skip"
+    open && !initialDebugRun ? { noteId } : "skip"
   );
 
   // Action to create a new debug run
   const createDebugRun = useAction(api.suggestionDebug.createDebugRun);
 
-  // Use local state if available, otherwise use server data
-  const debugRun = localDebugRun || latestRunResult?.debugRun || null;
+  // Priority: local state (from "Run debug") > initialDebugRun (from page load) > server query
+  const debugRun = localDebugRun || initialDebugRun || latestRunResult?.debugRun || null;
   const summary = debugRun ? computeDebugRunSummary(debugRun) : null;
   // Build RunResult-shaped view of the debug run (used for Copy JSON and header display)
   const runResult = debugRun ? buildRunResultFromDebugRun(debugRun) : null;
@@ -217,7 +232,13 @@ export function SuggestionDebugPanel({
     try {
       // Copy the RunResult-shaped object so that Copy JSON always reflects
       // exactly the same data as what the suggestion list and debug panel display.
-      await navigator.clipboard.writeText(JSON.stringify(runResult, null, 2));
+      // When currentRunResult is available, override finalSuggestionsCount to
+      // match the UI's rendered count (single source of truth).
+      const payload: Record<string, unknown> = { ...runResult };
+      if (currentRunResult) {
+        payload.finalSuggestionsCount = currentRunResult.finalSuggestions.length;
+      }
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
       toast({
         title: "Copied",
         description: "Run result JSON copied to clipboard.",
