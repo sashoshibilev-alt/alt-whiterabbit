@@ -11,6 +11,7 @@ import type { Signal } from './signals/types';
 import { extractSignalsFromSentences } from './signals';
 import { computeSuggestionKey } from '../suggestion-keys';
 import { shouldSuppressProcessSentence } from './processNoiseSuppression';
+import { isStrategyHeadingSection, isStrategyOnlySection } from './classifiers';
 
 // ============================================
 // ID generation (mirrors synthesis.ts counter)
@@ -65,6 +66,17 @@ function extractObjectFromSentence(sentence: string): string | null {
 // When present, the heading itself becomes the title base for risk signals.
 const RISK_SECTION_HEADING_PATTERN = /\b(security|compliance|risk|considerations)\b/i;
 
+// Headings that indicate an implementation/timeline section.
+// When present, date-bearing bullet lines are treated as project_update anchors.
+const TIMELINE_SECTION_HEADING_PATTERN = /\b(timeline|implementation|schedule|roadmap|milestones?)\b/i;
+
+// Tokens that mark a bullet line as date/window-bearing (timeline update evidence).
+// Matches: "3-month window", "target January", "Q1 2025", "target Jan", numeric months.
+const TIMELINE_DATE_TOKENS = /\b(\d+-(?:week|day|month|year|sprint)s?|target\s+\w+|q[1-4]\s*\d{4}|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?))\b/i;
+
+// Risk/PII lexical tokens — lines with these are security candidates, not timeline anchors.
+const SECURITY_LEXICAL_TOKENS = /\b(pii|security|compliance|gdpr|privacy|vulnerability|exposure|logging|blocker)\b/i;
+
 /**
  * Generate a risk signal title using structure-assist when available.
  *
@@ -79,6 +91,63 @@ function titleForRiskSignal(signal: Signal, headingText: string): string {
   }
   const obj = extractObjectFromSentence(signal.sentence);
   return obj ? `Risk: ${obj}` : 'Mitigate release risk';
+}
+
+/**
+ * Generate a project_update title for a timeline-section bullet line (or merged lines).
+ *
+ * For multi-line merged bodies, uses only the first line for the title.
+ * Strips list markers and derives a concise "Update: <content>" title.
+ * Truncates to 60 chars so the title stays readable.
+ */
+function titleForTimelineUpdate(sentence: string): string {
+  // For merged multi-line bodies, use only the first line for the title
+  const firstLine = sentence.split('\n')[0];
+  // Strip leading list markers
+  const cleaned = firstLine.replace(/^[-*+\s]+/, '').replace(/^\d+\.\s*/, '').trim();
+  // Strip "Immediate focus:" or similar prefixes
+  const withoutPrefix = cleaned.replace(/^[\w\s]+:\s*/i, '').trim() || cleaned;
+  const truncated = withoutPrefix.length > 60
+    ? withoutPrefix.slice(0, 57) + '...'
+    : withoutPrefix;
+  return `Update: ${truncated}`;
+}
+
+/**
+ * Extract timeline-update signals from a list of sentences when the section
+ * heading matches the TIMELINE_SECTION_HEADING_PATTERN.
+ *
+ * Fires on lines that contain date/window tokens (e.g., "3-month window",
+ * "target January", "Q1 2025") but NOT on lines with security/PII lexical tokens
+ * (those are handled as SCOPE_RISK signals by extractScopeRisk).
+ *
+ * All qualifying lines are MERGED into ONE signal whose body is the
+ * concatenation of the matching lines. This prevents multiple project_update
+ * candidates from a single timeline section when dates are spread across bullets.
+ *
+ * Returns at most one PLAN_CHANGE signal, or an empty array.
+ */
+function extractTimelineUpdateSignals(sentences: string[]): Signal[] {
+  const matchingSentences: string[] = [];
+  let firstIndex = -1;
+  for (let i = 0; i < sentences.length; i++) {
+    const sentence = sentences[i];
+    if (TIMELINE_DATE_TOKENS.test(sentence) && !SECURITY_LEXICAL_TOKENS.test(sentence)) {
+      if (firstIndex === -1) firstIndex = i;
+      matchingSentences.push(sentence);
+    }
+  }
+  if (matchingSentences.length === 0) return [];
+  // Merge all matching lines into one body so all date/window info is in one candidate
+  const mergedBody = matchingSentences.join('\n');
+  return [{
+    signalType: 'PLAN_CHANGE',
+    label: 'project_update',
+    proposedType: 'project_update',
+    confidence: 0.75,
+    sentence: mergedBody,
+    sentenceIndex: firstIndex,
+  }];
 }
 
 /**
@@ -111,10 +180,11 @@ export function titleFromSignal(signal: Signal, headingText: string = ''): strin
 
 /**
  * Create a Suggestion candidate from a B-signal and its parent section.
+ * @param titleOverride - Optional title to use instead of the derived title.
  */
-function candidateFromSignal(signal: Signal, section: ClassifiedSection): Suggestion {
+function candidateFromSignal(signal: Signal, section: ClassifiedSection, titleOverride?: string): Suggestion {
   const headingText = section.heading_text?.trim() ?? '';
-  const title = titleFromSignal(signal, headingText);
+  const title = titleOverride ?? titleFromSignal(signal, headingText);
   const type = signal.proposedType;
 
   const payload: SuggestionPayload =
@@ -138,9 +208,21 @@ function candidateFromSignal(signal: Signal, section: ClassifiedSection): Sugges
     create_new: true,
   };
 
+  // Find the body line that contains this signal sentence so the evidence span
+  // points to the correct line — not the entire section range.
+  const normalizedSentence = signal.sentence.toLowerCase().trim().replace(/^[-*+\s]+/, '');
+  const matchedLine = section.body_lines.find(l => {
+    const normalizedLine = l.text.toLowerCase().trim().replace(/^[-*+\s]+/, '');
+    return normalizedLine.length > 0 && (
+      normalizedLine === normalizedSentence ||
+      normalizedLine.includes(normalizedSentence.slice(0, 40)) ||
+      normalizedSentence.includes(normalizedLine.slice(0, 40))
+    );
+  });
+
   const evidenceSpan = {
-    start_line: section.start_line,
-    end_line: section.end_line,
+    start_line: matchedLine ? matchedLine.index : section.start_line,
+    end_line: matchedLine ? matchedLine.index : section.end_line,
     text: signal.sentence,
   };
 
@@ -222,15 +304,47 @@ function deduplicateSignalCandidates(
  * to the existing candidate list after normal synthesis.
  */
 export function seedCandidatesFromBSignals(section: ClassifiedSection): Suggestion[] {
-  // Split raw_text into sentences for the extractors
-  const sentences = section.raw_text
+  // Split raw_text into sentences for the extractors.
+  // First split by sentence-ending punctuation, then by newlines (for bullet lists
+  // where items don't end with ".!?"). This ensures each bullet line is a distinct
+  // candidate sentence so signal extraction anchors to the correct line — preventing
+  // cross-mix where a risk signal on line N returns the entire section as its body.
+  const rawSentences = section.raw_text
     .split(/(?<=[.!?])\s+/)
     .map(s => s.trim())
     .filter(s => s.length > 0);
 
+  // If the split produced only one long chunk (typical of bullet lists without
+  // trailing punctuation), further split each chunk by newline.
+  const sentences: string[] = [];
+  for (const chunk of rawSentences) {
+    if (chunk.includes('\n')) {
+      const lines = chunk.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+      sentences.push(...lines);
+    } else {
+      sentences.push(chunk);
+    }
+  }
+
   if (sentences.length === 0) return [];
 
-  const signals = extractSignalsFromSentences(sentences);
+  const headingText = section.heading_text?.trim() ?? '';
+  // Only fire timeline-update extraction when the heading explicitly signals a
+  // timeline/schedule section. Do NOT use has_dates as a fallback — that flag is
+  // too broad and also fires for decision tables with quarter references.
+  const isTimelineSection = TIMELINE_SECTION_HEADING_PATTERN.test(headingText);
+
+  // For timeline sections, also extract timeline-update signals from date-bearing lines.
+  // These supplement the standard PLAN_CHANGE detection (which requires shift verbs)
+  // so that focus/window/target lines in timeline sections produce project_update candidates.
+  const timelineSignals: Signal[] = isTimelineSection
+    ? extractTimelineUpdateSignals(sentences)
+    : [];
+
+  const signals = [
+    ...extractSignalsFromSentences(sentences),
+    ...timelineSignals,
+  ];
 
   if (signals.length === 0) return [];
 
@@ -248,7 +362,48 @@ export function seedCandidatesFromBSignals(section: ClassifiedSection): Suggesti
 
   if (filteredSignals.length === 0) return [];
 
-  const dedupedSignals = deduplicateSignalCandidates(filteredSignals);
+  // Part 1 guard: strategy-heading sections with no concrete delta/timeline tokens
+  // must not emit project_update candidates from PLAN_CHANGE signals.
+  // isStrategyOnlySection returns true when there are no concrete delta or schedule event
+  // words — exactly the condition where plan_change override should be suppressed.
+  const numListItems = section.structural_features?.num_list_items ?? 0;
+  const sectionText = (headingText + ' ' + section.raw_text);
+  const isStrategySection =
+    isStrategyHeadingSection(headingText, sectionText, numListItems) &&
+    isStrategyOnlySection(sectionText);
+  const afterStrategyGuard = isStrategySection
+    ? filteredSignals.filter(s => s.signalType !== 'PLAN_CHANGE')
+    : filteredSignals;
 
-  return dedupedSignals.map(signal => candidateFromSignal(signal, section));
+  if (afterStrategyGuard.length === 0) return [];
+
+  // Part 2B: PII specificity preference — if any SCOPE_RISK signal has high confidence
+  // (PII+logging pair at 0.85), suppress lower-confidence generic SCOPE_RISK signals.
+  // This prevents a "Security considerations" line from generating a duplicate generic
+  // risk alongside the specific PII risk.
+  const riskSignals = afterStrategyGuard.filter(s => s.signalType === 'SCOPE_RISK');
+  const hasPiiSpecificRisk = riskSignals.some(s => s.confidence >= 0.85);
+  const afterPiiPreference = hasPiiSpecificRisk
+    ? afterStrategyGuard.filter(s => s.signalType !== 'SCOPE_RISK' || s.confidence >= 0.85)
+    : afterStrategyGuard;
+
+  if (afterPiiPreference.length === 0) return [];
+
+  const dedupedSignals = deduplicateSignalCandidates(afterPiiPreference);
+
+  return dedupedSignals.map(signal => {
+    // For timeline sections with a PLAN_CHANGE signal on a date-bearing line
+    // (fired from our timeline extractor, not from extractPlanChange's shift-verb path),
+    // use the timeline-specific title format so the update title is anchored to the
+    // timeline bullet text rather than the generic "Update: project plan" fallback.
+    if (
+      isTimelineSection &&
+      signal.signalType === 'PLAN_CHANGE' &&
+      TIMELINE_DATE_TOKENS.test(signal.sentence) &&
+      !SECURITY_LEXICAL_TOKENS.test(signal.sentence)
+    ) {
+      return candidateFromSignal(signal, section, titleForTimelineUpdate(signal.sentence));
+    }
+    return candidateFromSignal(signal, section);
+  });
 }

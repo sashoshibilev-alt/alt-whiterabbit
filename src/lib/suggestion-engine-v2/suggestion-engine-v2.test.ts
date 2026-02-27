@@ -4059,15 +4059,18 @@ Shift the beta milestone from April to June.
 
       // Assert a suggestion is emitted
       expect(result.suggestions.length).toBeGreaterThanOrEqual(1);
-      const suggestion = result.suggestions[0];
+
+      // Find the idea suggestion that should anchor on the imperative action clause
+      // (the section may also emit a bug B-signal for "error threshold monitoring")
+      const ideaSuggestion = result.suggestions.find(s => s.type === 'idea') ?? result.suggestions[0];
 
       // Assert suggestion.body contains the action clause
-      expect(suggestion.suggestion?.body).toBeDefined();
-      expect(suggestion.suggestion!.body).toContain('Add inline alert');
+      expect(ideaSuggestion.suggestion?.body).toBeDefined();
+      expect(ideaSuggestion.suggestion!.body).toContain('Add inline alert');
 
       // Assert evidencePreview contains the action clause
-      expect(suggestion.suggestion?.evidencePreview).toBeDefined();
-      const allPreviews = suggestion.suggestion!.evidencePreview!.join(' ');
+      expect(ideaSuggestion.suggestion?.evidencePreview).toBeDefined();
+      const allPreviews = ideaSuggestion.suggestion!.evidencePreview!.join(' ');
       expect(allPreviews).toContain('Add inline alert');
     });
 
