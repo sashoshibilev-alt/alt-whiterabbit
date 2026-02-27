@@ -21,6 +21,7 @@ import { useToast } from "@/hooks/use-toast";
 import { V0_DISMISS_REASON_LABELS } from "@/types";
 import type { RunResult, Suggestion as RunSuggestion } from "@/lib/suggestion-engine-v2/types";
 import type { DebugRun } from "@/lib/suggestion-engine-v2/debugTypes";
+import { getTypePrefix, stripLegacyPrefix } from "@/lib/suggestion-engine-v2/suggestionDisplay";
 
 export default function NoteDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -121,8 +122,6 @@ export default function NoteDetailPage() {
 
   // Track suggestionKey for apply flow (must be before early returns)
   const [applyingSuggestionKey, setApplyingSuggestionKey] = useState<string | null>(null);
-
-  // lastRunResult is already declared above — no additional meta state needed.
 
   // Record shown events for new suggestions
   useEffect(() => {
@@ -509,14 +508,19 @@ export default function NoteDetailPage() {
                     {displayed.map((suggestion) => {
                       const needsClarification = suggestion.needs_clarification === true;
 
-                      const displayTitle = suggestion.suggestion?.title || suggestion.title;
+                      const rawTitle = suggestion.suggestion?.title || suggestion.title;
+                      const displayTitle = stripLegacyPrefix(rawTitle);
+                      const typePrefix = getTypePrefix(suggestion.type);
                       const displayBody = suggestion.suggestion?.body;
                       const evidencePreview = suggestion.suggestion?.evidencePreview;
 
                       return (
                         <Card key={suggestion.suggestion_id} className={needsClarification ? "border-warning dark:bg-surface-elevated dark:border-border" : "dark:bg-surface-elevated dark:border-border"}>
                           <CardContent className="p-4">
-                            <p className="text-sm font-medium mb-2">{displayTitle}</p>
+                            <p className="text-sm font-medium mb-2">
+                              {typePrefix && <span className="text-muted-foreground">{typePrefix}:&nbsp;</span>}
+                              {displayTitle}
+                            </p>
                             {displayBody && (
                               <p className="text-xs text-muted-foreground mb-3 line-clamp-3">{displayBody}</p>
                             )}
@@ -667,7 +671,6 @@ export default function NoteDetailPage() {
             {/* Debug Panel - Admin only */}
             <SuggestionDebugPanel
               noteId={id as Id<"notes">}
-              onRunResult={setLastRunResult}
               currentRunResult={lastRunResult}
               initialDebugRun={initialDebugRun}
             />

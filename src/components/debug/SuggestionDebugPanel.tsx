@@ -115,11 +115,6 @@ interface SuggestionDebugPanelProps {
   // Optional: control visibility from parent
   visible?: boolean;
   /**
-   * Called after a debug run completes with the full RunResult.
-   * Allows parent to display runId + noteHash next to the suggestion list header.
-   */
-  onRunResult?: (result: RunResult) => void;
-  /**
    * The current RunResult driving the suggestion list in NoteDetail.
    * When provided, Copy JSON uses this as the authoritative source for
    * finalSuggestions so the copied count always matches the rendered UI.
@@ -141,7 +136,6 @@ interface SuggestionDebugPanelProps {
 export function SuggestionDebugPanel({
   noteId,
   visible = true,
-  onRunResult,
   currentRunResult,
   initialDebugRun,
 }: SuggestionDebugPanelProps) {
@@ -191,13 +185,6 @@ export function SuggestionDebugPanel({
 
       if (result.debugRun) {
         setLocalDebugRun(result.debugRun);
-
-        // Notify parent with full RunResult so it can display runId + noteHash
-        // and render suggestion cards from the same source as the debug panel.
-        if (onRunResult) {
-          const builtResult = buildRunResultFromDebugRun(result.debugRun);
-          onRunResult(builtResult as unknown as RunResult);
-        }
 
         // Build description based on what was done
         let description = result.stored
@@ -592,6 +579,11 @@ function CandidateCard({ candidate }: { candidate: CandidateSuggestionDebug }) {
         ) : (
           <Badge variant="outline" className="text-[10px]">
             Dropped
+          </Badge>
+        )}
+        {candidate.metadata?.type && (
+          <Badge variant="secondary" className="text-[10px]">
+            {String(candidate.metadata.type)}
           </Badge>
         )}
         {!candidate.emitted && candidate.dropStage && candidate.dropReason && (
