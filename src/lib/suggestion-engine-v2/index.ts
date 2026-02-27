@@ -29,7 +29,7 @@ import type {
 } from './types';
 import { DEFAULT_CONFIG as defaultConfig } from './types';
 import { preprocessNote, resetSectionCounter } from './preprocessing';
-import { classifySections, filterActionableSections, qualifiesForStructuralIdeaBypass } from './classifiers';
+import { classifySections, filterActionableSections, qualifiesForStructuralIdeaBypass, isSpecOrFrameworkSection } from './classifiers';
 import { synthesizeSuggestions, resetSuggestionCounter, shouldSplitByTopic, splitSectionByTopic, checkSectionSuppression, shouldSplitDenseParagraph, splitDenseParagraphIntoSentences } from './synthesis';
 import { runQualityValidators } from './validators';
 import { runScoringPipeline, refineSuggestionScores } from './scoring';
@@ -65,7 +65,7 @@ export type { DebugGeneratorOptions, DebugGeneratorResult } from './debugGenerat
 
 // Re-export modules for advanced usage
 export { preprocessNote } from './preprocessing';
-export { classifySections, classifySection, classifyIntent, classifyType, filterActionableSections, isActionable, computeActionabilitySignals, isPlanChangeIntentLabel, isPlanChangeCandidate, hasPlanChangeEligibility, isStrategyHeadingSection, qualifiesForStructuralIdeaBypass, computeTypeLabel, classifySectionWithLLM, classifySectionsWithLLM } from './classifiers';
+export { classifySections, classifySection, classifyIntent, classifyType, filterActionableSections, isActionable, computeActionabilitySignals, isPlanChangeIntentLabel, isPlanChangeCandidate, hasPlanChangeEligibility, isStrategyHeadingSection, qualifiesForStructuralIdeaBypass, computeTypeLabel, isSpecOrFrameworkSection, classifySectionWithLLM, classifySectionsWithLLM } from './classifiers';
 export type { LLMClassificationOptions } from './classifiers';
 export { classifyIntentWithLLM, classifyTypeWithLLM, blendIntentScores, MockLLMProvider } from './llmClassifiers';
 export type { LLMProvider, LLMIntentResponse, LLMTypeResponse } from './llmClassifiers';
@@ -512,6 +512,46 @@ export function generateSuggestions(
   }
 
   // ============================================
+  // Stage 4.59 Helpers: Automation & Gamification cluster synthesis
+  // ============================================
+
+  /**
+   * Heading patterns that indicate an automation / data-pipeline section.
+   * When matched and bulletCount >= 2, the body is formatted as a compact
+   * multi-bullet list preserving the key action items.
+   */
+  const AUTOMATION_HEADING_RE = /\b(data\s+collection\s+automation|automation|parsing|ocr|upload)\b/i;
+
+  /** Returns true when heading looks like an automation section. */
+  function isAutomationHeading(heading: string): boolean {
+    return AUTOMATION_HEADING_RE.test(heading);
+  }
+
+  /**
+   * Gamification engagement tokens.  When ≥ 2 of these appear in the section's
+   * bullet text AND the section has ≥ 4 bullets, the section gets a
+   * cluster-level title and multi-bullet body instead of a single-bullet anchor.
+   */
+  const GAMIFICATION_TOKENS = [
+    'next episode',
+    'one more',
+    'worth €',
+    'earning potential',
+    'next highest-value field',
+    'next field',
+    'reward',
+    'gamif',
+    'streak',
+    'badge',
+  ];
+
+  /** Count how many distinct gamification tokens appear in text. */
+  function countGamificationTokens(text: string): number {
+    const lower = text.toLowerCase();
+    return GAMIFICATION_TOKENS.filter(t => lower.includes(t)).length;
+  }
+
+  // ============================================
   // Stage 4.59: Structural Idea Bypass (additive)
   // ============================================
   // For structured conceptual sections (heading level ≤ 3, ≥ 3 bullets, no
@@ -545,21 +585,54 @@ export function generateSuggestions(
     if (!qualifiesForStructuralIdeaBypass(section, hasDelta)) continue;
 
     // Collect the first 2–4 list item texts as the body
-    const listItems = section.body_lines
+    const allListItems = section.body_lines
       .filter((l) => l.line_type === 'list_item')
-      .slice(0, 4)
       .map((l) => {
         // Strip leading list markers (-, *, +, digits.) and trim
         return l.text.replace(/^[\s\-*+]+/, '').replace(/^\d+\.\s*/, '').trim();
       })
       .filter((t) => t.length > 0);
 
+    const listItems = allListItems.slice(0, 4);
+
     if (listItems.length === 0) continue;
 
-    const bodyText = listItems.join('. ').replace(/\.+/g, '.').replace(/\.\s*$/, '') + '.';
+    // --- Automation section: format body as compact multi-bullet list ---
+    const isAutoSection = isAutomationHeading(headingText) && allListItems.length >= 2;
 
-    // Title from heading (normalizeTitlePrefix handles prefix)
-    const rawTitle = section.heading_text?.trim() || listItems[0];
+    // --- Gamification section: cluster-level title + multi-bullet body ---
+    const gamTokenCount = countGamificationTokens(allListItems.join(' '));
+    const isGamificationCluster = allListItems.length >= 4 && gamTokenCount >= 2;
+
+    let bodyText: string;
+    if (isAutoSection) {
+      // Compact multi-bullet body: "- bullet1\n- bullet2\n..."
+      const kept = allListItems.slice(0, 4);
+      bodyText = kept.map(b => `- ${b}`).join('\n');
+    } else if (isGamificationCluster) {
+      // Compress top bullets into a flowing body
+      const kept = allListItems.slice(0, 4);
+      bodyText = kept.join('. ').replace(/\.+/g, '.').replace(/\.\s*$/, '') + '.';
+    } else {
+      bodyText = listItems.join('. ').replace(/\.+/g, '.').replace(/\.\s*$/, '') + '.';
+    }
+
+    // Title: heading-based by default, cluster-level for gamification
+    let rawTitle: string;
+    if (isGamificationCluster) {
+      // Build a cluster-level title from the heading and key token
+      const heading = section.heading_text?.trim() || '';
+      const lowerBullets = allListItems.join(' ').toLowerCase();
+      if (lowerBullets.includes('next highest-value field') || lowerBullets.includes('next field')) {
+        rawTitle = 'Gamify data collection (next-field rewards)';
+      } else if (lowerBullets.includes('earning potential')) {
+        rawTitle = 'Gamify data collection (earning-potential rewards)';
+      } else {
+        rawTitle = heading || 'Gamify data collection';
+      }
+    } else {
+      rawTitle = section.heading_text?.trim() || listItems[0];
+    }
     const title = normalizeTitlePrefix('idea', rawTitle);
 
     // Evidence span: first list item line for grounding
@@ -614,6 +687,51 @@ export function generateSuggestions(
     };
 
     filteredValidatedSuggestions.push(bypassCandidate);
+  }
+
+  // ============================================
+  // Stage 4.595: Automation multi-bullet body enrichment
+  // ============================================
+  // For sections whose heading matches the automation pattern AND whose only
+  // coverage is a single idea candidate with a single-line body, enrich the
+  // body with the section's list items (up to 4 bullets).
+  for (let i = 0; i < filteredValidatedSuggestions.length; i++) {
+    const suggestion = filteredValidatedSuggestions[i];
+    if (suggestion.type !== 'idea') continue;
+    const section = sectionMap.get(suggestion.section_id) ||
+      (suggestion.section_id.includes('__topic_')
+        ? sectionMap.get(suggestion.section_id.split('__topic_')[0])
+        : undefined);
+    if (!section) continue;
+    const heading = section.heading_text?.trim() ?? '';
+    if (!isAutomationHeading(heading)) continue;
+
+    // Only enrich if this is the single candidate for the section
+    const sectionCandidates = filteredValidatedSuggestions.filter(
+      s => s.section_id === suggestion.section_id
+    );
+    if (sectionCandidates.length !== 1) continue;
+
+    const items = section.body_lines
+      .filter(l => l.line_type === 'list_item')
+      .map(l => l.text.replace(/^[\s\-*+]+/, '').replace(/^\d+\.\s*/, '').trim())
+      .filter(t => t.length > 0)
+      .slice(0, 4);
+    if (items.length < 2) continue;
+
+    const multiBulletBody = items.map(b => `- ${b}`).join('\n');
+    filteredValidatedSuggestions[i] = {
+      ...suggestion,
+      suggestion: suggestion.suggestion
+        ? { ...suggestion.suggestion, body: multiBulletBody }
+        : suggestion.suggestion,
+      payload: {
+        ...suggestion.payload,
+        draft_initiative: suggestion.payload.draft_initiative
+          ? { ...suggestion.payload.draft_initiative, description: multiBulletBody }
+          : suggestion.payload.draft_initiative,
+      },
+    };
   }
 
   // ============================================
@@ -674,10 +792,39 @@ export function generateSuggestions(
   }
 
   // ============================================
+  // Stage 4.8: Spec/Framework project_update suppression
+  // ============================================
+  // Sections describing scoring rubrics, eligibility criteria, weighting
+  // frameworks, etc. should only emit idea candidates. Any project_update
+  // candidate from such a section (from synthesis, b-signal, or additive
+  // stages) is dropped here.
+  const specFilteredSuggestions: Suggestion[] = [];
+  for (const suggestion of noiseFilteredSuggestions) {
+    if (suggestion.type === 'project_update') {
+      const section = sectionMap.get(suggestion.section_id) ||
+        (suggestion.section_id.includes('__topic_')
+          ? sectionMap.get(suggestion.section_id.split('__topic_')[0])
+          : undefined);
+      if (section) {
+        const heading = section.heading_text || '';
+        const numBullets = section.structural_features?.num_list_items ?? 0;
+        if (isSpecOrFrameworkSection(section.raw_text, numBullets, heading)) {
+          debug.dropped_suggestions.push({
+            section_id: suggestion.section_id,
+            reason: 'SPEC_FRAMEWORK_UPDATE_SUPPRESSED',
+          });
+          continue;
+        }
+      }
+    }
+    specFilteredSuggestions.push(suggestion);
+  }
+
+  // ============================================
   // Stage 5: Scoring & Thresholding
   // ============================================
   const scoringResult = runScoringPipeline(
-    noiseFilteredSuggestions,
+    specFilteredSuggestions,
     sectionMap,
     finalConfig
   );
@@ -686,7 +833,7 @@ export function generateSuggestions(
   debug.low_confidence_downgraded_count = scoringResult.downgraded_to_clarification || 0;
 
   // Track plan_change metrics per suggestion-suppression-fix plan
-  const planChangeBeforeScoring = noiseFilteredSuggestions.filter(s => s.type === 'project_update').length;
+  const planChangeBeforeScoring = specFilteredSuggestions.filter(s => s.type === 'project_update').length;
   const planChangeAfterScoring = scoringResult.suggestions.filter(s => s.type === 'project_update').length;
   debug.plan_change_count = planChangeBeforeScoring;
   debug.plan_change_emitted_count = planChangeAfterScoring;
@@ -776,7 +923,7 @@ export function generateSuggestions(
     };
   });
 
-  return buildResult(contractedSuggestions, noteHash, debug, finalConfig.enable_debug);
+  return buildResult(contractedSuggestions, noteHash, debug, finalConfig.enable_debug, sectionMap);
 }
 
 /**
@@ -786,7 +933,8 @@ function buildResult(
   suggestions: Suggestion[],
   noteHash: string,
   debug: GeneratorDebugInfo,
-  includeDebug: boolean
+  includeDebug: boolean,
+  sectionMap?: Map<string, ClassifiedSection>
 ): GeneratorResult {
   const result: GeneratorResult = {
     suggestions,
@@ -795,6 +943,10 @@ function buildResult(
 
   if (includeDebug) {
     result.debug = debug;
+  }
+
+  if (sectionMap) {
+    result._sectionMap = sectionMap;
   }
 
   return result;
@@ -969,6 +1121,104 @@ export function generateRunResult(
   // Run the engine
   const generatorResult = generateSuggestions(note, context, finalConfig);
   let finalSuggestions = generatorResult.suggestions;
+
+  // ============================================
+  // Final-emission enforcement
+  // ============================================
+  // Applied after the full pipeline to guarantee invariants regardless of
+  // whether earlier stages (synthesis, consolidation, scoring, title contract)
+  // correctly preserved the overrides.
+  const emissionSectionMap = generatorResult._sectionMap;
+  if (emissionSectionMap) {
+    const EMISSION_AUTOMATION_RE = /\b(data\s+collection\s+automation|automation|parsing|ocr|upload)\b/i;
+    const EMISSION_GAM_TOKENS = [
+      'next episode', 'one more', 'worth €', 'earning potential',
+      'next highest-value field', 'next field', 'reward', 'gamif', 'streak', 'badge',
+    ];
+
+    finalSuggestions = finalSuggestions.filter(s => {
+      // 1) Spec/framework suppression: remove project_update from spec/framework sections
+      if (s.type === 'project_update') {
+        const sec = emissionSectionMap.get(s.section_id) ||
+          (s.section_id.includes('__topic_')
+            ? emissionSectionMap.get(s.section_id.split('__topic_')[0])
+            : undefined);
+        if (sec) {
+          const heading = sec.heading_text || '';
+          const numBullets = sec.structural_features?.num_list_items ?? 0;
+          if (isSpecOrFrameworkSection(sec.raw_text, numBullets, heading)) {
+            return false;
+          }
+        }
+      }
+      return true;
+    });
+
+    for (let i = 0; i < finalSuggestions.length; i++) {
+      const s = finalSuggestions[i];
+      const sec = emissionSectionMap.get(s.section_id) ||
+        (s.section_id.includes('__topic_')
+          ? emissionSectionMap.get(s.section_id.split('__topic_')[0])
+          : undefined);
+      if (!sec) continue;
+
+      const heading = sec.heading_text?.trim() ?? '';
+      const allItems = sec.body_lines
+        .filter(l => l.line_type === 'list_item')
+        .map(l => l.text.replace(/^[\s\-*+]+/, '').replace(/^\d+\.\s*/, '').trim())
+        .filter(t => t.length > 0);
+
+      // 2) Gamification cluster override: enforce cluster title + multi-bullet body
+      const bulletJoined = allItems.join(' ').toLowerCase();
+      const gamCount = EMISSION_GAM_TOKENS.filter(t => bulletJoined.includes(t)).length;
+      if (allItems.length >= 4 && gamCount >= 2 && s.type === 'idea') {
+        let clusterTitle: string;
+        if (bulletJoined.includes('next highest-value field') || bulletJoined.includes('next field')) {
+          clusterTitle = 'Gamify data collection (next-field rewards)';
+        } else if (bulletJoined.includes('earning potential')) {
+          clusterTitle = 'Gamify data collection (earning-potential rewards)';
+        } else {
+          clusterTitle = heading || 'Gamify data collection';
+        }
+        const prefixed = normalizeTitlePrefix('idea', clusterTitle);
+        const kept = allItems.slice(0, 4);
+        const clusterBody = kept.join('. ').replace(/\.+/g, '.').replace(/\.\s*$/, '') + '.';
+
+        finalSuggestions[i] = {
+          ...s,
+          title: prefixed,
+          suggestion: s.suggestion
+            ? { ...s.suggestion, title: prefixed, body: clusterBody }
+            : s.suggestion,
+          payload: {
+            ...s.payload,
+            draft_initiative: s.payload.draft_initiative
+              ? { ...s.payload.draft_initiative, title: clusterTitle, description: clusterBody }
+              : s.payload.draft_initiative,
+          },
+        };
+        continue;
+      }
+
+      // 3) Automation multi-bullet enrichment: enforce multi-bullet body for automation sections
+      if (s.type === 'idea' && EMISSION_AUTOMATION_RE.test(heading) && allItems.length >= 2) {
+        const kept = allItems.slice(0, 4);
+        const multiBullet = kept.map(b => `- ${b}`).join('\n');
+        finalSuggestions[i] = {
+          ...s,
+          suggestion: s.suggestion
+            ? { ...s.suggestion, body: multiBullet }
+            : s.suggestion,
+          payload: {
+            ...s.payload,
+            draft_initiative: s.payload.draft_initiative
+              ? { ...s.payload.draft_initiative, description: multiBullet }
+              : s.payload.draft_initiative,
+          },
+        };
+      }
+    }
+  }
 
   // --- Invariant: all suggestions passed validation ---
   const allPassed = applyAnyway

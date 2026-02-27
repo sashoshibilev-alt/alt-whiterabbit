@@ -398,6 +398,8 @@ export interface GeneratorResult {
   /** Deterministic hash of the note content used for this run */
   noteHash: string;
   debug?: GeneratorDebugInfo;
+  /** Internal: section map for final-emission enforcement in generateRunResult. */
+  _sectionMap?: Map<string, ClassifiedSection>;
 }
 
 // ============================================

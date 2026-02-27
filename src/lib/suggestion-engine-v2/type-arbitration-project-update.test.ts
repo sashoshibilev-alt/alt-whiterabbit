@@ -415,7 +415,8 @@ describe('computeTypeLabel — extended keywords emit idea not project_update', 
   });
 
   it('num_list_items < 3 does NOT trigger strategy heading override (falls through)', () => {
-    // With only 2 bullets, isStrategyHeadingSection returns false regardless of heading
+    // With only 2 bullets, isStrategyHeadingSection returns false regardless of heading.
+    // "system" alone in body is not enough for isSpecOrFrameworkSection (needs 2+ tokens).
     const section = makeSection(
       'Agatha Gamification Strategy',
       'Create a points system\nPresent leaderboards',

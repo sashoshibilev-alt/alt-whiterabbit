@@ -28,6 +28,23 @@ import { computeSuggestionKey } from '../suggestion-keys';
 import { normalizeForComparison } from './preprocessing';
 
 // ============================================
+// Gamification cluster tokens (shared with index.ts Stage 4.59)
+// ============================================
+
+const GAMIFICATION_TOKENS = [
+  'next episode',
+  'one more',
+  'worth €',
+  'earning potential',
+  'next highest-value field',
+  'next field',
+  'reward',
+  'gamif',
+  'streak',
+  'badge',
+];
+
+// ============================================
 // Delta/timeline signal detection
 // ============================================
 
@@ -204,9 +221,28 @@ export function consolidateBySection(
 
       const mergedSpans = mergeTopSpansFromCandidates(group, 5);
 
-      // Title from section heading (normalizeTitlePrefix strips/replaces any stale prefix)
+      // Title from section heading — with cluster-level override for gamification
       const headingText = section.heading_text?.trim() || anchor.title;
-      const consolidatedTitle = normalizeTitlePrefix('idea', headingText);
+      let consolidatedTitle: string;
+
+      // Gamification cluster-level title override
+      const bulletTexts = section.body_lines
+        .filter((l) => l.line_type === 'list_item')
+        .map((l) => l.text)
+        .join(' ')
+        .toLowerCase();
+      const gamTokens = GAMIFICATION_TOKENS.filter(t => bulletTexts.includes(t));
+      if (bulletCount >= 4 && gamTokens.length >= 2) {
+        if (bulletTexts.includes('next highest-value field') || bulletTexts.includes('next field')) {
+          consolidatedTitle = normalizeTitlePrefix('idea', 'Gamify data collection (next-field rewards)');
+        } else if (bulletTexts.includes('earning potential')) {
+          consolidatedTitle = normalizeTitlePrefix('idea', 'Gamify data collection (earning-potential rewards)');
+        } else {
+          consolidatedTitle = normalizeTitlePrefix('idea', headingText);
+        }
+      } else {
+        consolidatedTitle = normalizeTitlePrefix('idea', headingText);
+      }
 
       const consolidatedId = generateConsolidatedId(anchor.note_id);
       const suggestionKey = computeSuggestionKey({
