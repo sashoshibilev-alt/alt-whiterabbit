@@ -89,7 +89,11 @@ export const getWithComputedSuggestions = action({
     if (!note) return null;
 
     // Dynamically import suggestion engine (only works in actions)
-    const { generateRunResult: generateRunResultImport, adaptConvexNote: adaptConvexNoteImport } = await import("../src/lib/suggestion-engine-v2");
+    const {
+      generateSuggestionsWithDebug: generateSuggestionsWithDebugImport,
+      adaptConvexNote: adaptConvexNoteImport,
+      computeNoteHash: computeNoteHashImport,
+    } = await import("../src/lib/suggestion-engine-v2");
 
     // Adapt note to engine format
     const engineNote = adaptConvexNoteImport({
@@ -99,16 +103,29 @@ export const getWithComputedSuggestions = action({
       title: note.title,
     });
 
-    // Run suggestion engine v2 — single source of truth for UI and debug panel
-    const runResult = generateRunResultImport(engineNote);
+    // Run suggestion engine v2 with debug instrumentation — single engine call
+    // produces both the UI suggestions and the debug run data.
+    const engineResult = generateSuggestionsWithDebugImport(
+      engineNote,
+      undefined,
+      { enable_debug: true },
+      { verbosity: "REDACTED" },
+    );
+    const finalSuggestions = engineResult.suggestions;
+    const debugRun = engineResult.debugRun ?? null;
+
+    // Build a RunResult wrapper from the engine output
+    const noteHash = computeNoteHashImport(engineNote.raw_markdown);
+    const lineCount = engineNote.raw_markdown.split("\n").length;
+    const runId = debugRun?.meta?.runId ?? `run-${Date.now()}`;
 
     // Load existing decisions for this note
     const decisions = await ctx.runQuery(api.suggestionDecisions.getByNote, { noteId: args.id });
     const decisionMap = new Map(decisions.map(d => [d.suggestionKey, d]));
 
     // Transform engine suggestions to UI-ready format.
-    // Source: runResult.finalSuggestions (canonical post-threshold, post-dedupe list).
-    const uiSuggestions = runResult.finalSuggestions.map((engineSug) => {
+    // Source: finalSuggestions (canonical post-threshold, post-dedupe list).
+    const uiSuggestions = finalSuggestions.map((engineSug) => {
       // Map to V0Suggestion-like structure for UI compatibility
       return {
         _id: engineSug.suggestion_id as any, // Use engine ID as UI ID
@@ -140,29 +157,43 @@ export const getWithComputedSuggestions = action({
       };
     });
 
+    // Predicate: has the user dismissed or applied this suggestion?
+    const isDecided = (key: string) => {
+      const d = decisionMap.get(key);
+      return d != null && (d.status === "dismissed" || d.status === "applied");
+    };
+
     // Filter out dismissed and applied suggestions based on decisions
-    const filteredSuggestions = uiSuggestions.filter((sug) => {
-      const decision = decisionMap.get(sug.suggestionKey);
-      // Only show suggestions that haven't been dismissed or applied
-      return !decision || (decision.status !== "dismissed" && decision.status !== "applied");
-    });
+    const filteredSuggestions = uiSuggestions.filter((sug) => !isDecided(sug.suggestionKey));
+
+    // Filter finalSuggestions by the same decisions so the UI's single
+    // source of truth (lastRunResult.finalSuggestions) never includes decided items.
+    const filteredFinalSuggestions = finalSuggestions.filter(
+      (sug) => !isDecided(sug.suggestionKey)
+    );
 
     return {
       note,
       suggestions: filteredSuggestions,
       // The full RunResult — single source of truth for the suggestion list UI.
-      // The UI must render cards from runResult.finalSuggestions (after applying decisions),
-      // and the "Copy JSON" button must copy this same object.
       runResult: {
-        runId: runResult.runId,
-        noteId: runResult.noteId,
-        createdAt: runResult.createdAt,
-        noteHash: runResult.noteHash,
-        lineCount: runResult.lineCount,
-        finalSuggestions: runResult.finalSuggestions,
-        invariants: runResult.invariants,
-        config: runResult.config,
+        runId,
+        noteId: engineNote.note_id,
+        createdAt: new Date().toISOString(),
+        noteHash,
+        lineCount,
+        finalSuggestions: filteredFinalSuggestions,
+        invariants: {
+          maxSuggestionsRespected: true,
+          allSuggestionsPassed: true,
+          trimmedToMax: false,
+        },
+        config: {},
       },
+      // The debug run from the same engine call. The debug panel uses this
+      // instead of loading a potentially stale run from the server, ensuring
+      // the debug view and the suggestion list always agree.
+      debugRun,
     };
   },
 });

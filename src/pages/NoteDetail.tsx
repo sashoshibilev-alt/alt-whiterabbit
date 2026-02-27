@@ -20,6 +20,7 @@ import { format, formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { V0_DISMISS_REASON_LABELS } from "@/types";
 import type { RunResult, Suggestion as RunSuggestion } from "@/lib/suggestion-engine-v2/types";
+import type { DebugRun } from "@/lib/suggestion-engine-v2/debugTypes";
 
 export default function NoteDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -41,6 +42,10 @@ export default function NoteDetailPage() {
   // the debug panel when the user triggers a debug run.
   const [lastRunResult, setLastRunResult] = useState<RunResult | null>(null);
 
+  // Debug run from the same engine call as the suggestions.
+  // Passed to the debug panel so it shows data from the same source as the UI.
+  const [initialDebugRun, setInitialDebugRun] = useState<DebugRun | null>(null);
+
   // Trigger to refetch note data
   const [refetchTrigger, setRefetchTrigger] = useState(0);
   const refetchNoteData = () => setRefetchTrigger(prev => prev + 1);
@@ -57,6 +62,10 @@ export default function NoteDetailPage() {
         // renders from the same RunResult that getWithComputedSuggestions used.
         if (data && data.runResult) {
           setLastRunResult(data.runResult as RunResult);
+        }
+        // Pass the debug run from the same engine call to the debug panel
+        if (data && data.debugRun) {
+          setInitialDebugRun(data.debugRun as DebugRun);
         }
       })
       .catch(err => {
@@ -659,6 +668,8 @@ export default function NoteDetailPage() {
             <SuggestionDebugPanel
               noteId={id as Id<"notes">}
               onRunResult={setLastRunResult}
+              currentRunResult={lastRunResult}
+              initialDebugRun={initialDebugRun}
             />
           </ScrollArea>
         </div>
