@@ -322,6 +322,8 @@ export interface DebugRunMetadata {
   createdByUserId?: string;
   verbosity: DebugVerbosity;
   runtimeFingerprint?: string; // Runtime code version fingerprint
+  /** Hash of note markdown content (djb2, hex). Used for change detection. */
+  noteHash?: string;
 }
 
 /**
