@@ -26,23 +26,12 @@ import type { Suggestion, EvidenceSpan, ClassifiedSection } from './types';
 import { normalizeTitlePrefix } from './title-normalization';
 import { computeSuggestionKey } from '../suggestion-keys';
 import { normalizeForComparison } from './preprocessing';
+import {
+  countGamificationTokens,
+  computeGamificationClusterTitle,
+} from './sectionSignals';
 
-// ============================================
-// Gamification cluster tokens (shared with index.ts Stage 4.59)
-// ============================================
-
-const GAMIFICATION_TOKENS = [
-  'next episode',
-  'one more',
-  'worth €',
-  'earning potential',
-  'next highest-value field',
-  'next field',
-  'reward',
-  'gamif',
-  'streak',
-  'badge',
-];
+// Gamification cluster tokens are imported from ./sectionSignals.
 
 // ============================================
 // Delta/timeline signal detection
@@ -231,15 +220,12 @@ export function consolidateBySection(
         .map((l) => l.text)
         .join(' ')
         .toLowerCase();
-      const gamTokens = GAMIFICATION_TOKENS.filter(t => bulletTexts.includes(t));
-      if (bulletCount >= 4 && gamTokens.length >= 2) {
-        if (bulletTexts.includes('next highest-value field') || bulletTexts.includes('next field')) {
-          consolidatedTitle = normalizeTitlePrefix('idea', 'Gamify data collection (next-field rewards)');
-        } else if (bulletTexts.includes('earning potential')) {
-          consolidatedTitle = normalizeTitlePrefix('idea', 'Gamify data collection (earning-potential rewards)');
-        } else {
-          consolidatedTitle = normalizeTitlePrefix('idea', headingText);
-        }
+      const gamCount = countGamificationTokens(bulletTexts);
+      if (bulletCount >= 4 && gamCount >= 2) {
+        consolidatedTitle = normalizeTitlePrefix(
+          'idea',
+          computeGamificationClusterTitle(headingText, bulletTexts),
+        );
       } else {
         consolidatedTitle = normalizeTitlePrefix('idea', headingText);
       }

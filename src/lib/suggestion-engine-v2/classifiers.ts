@@ -21,6 +21,11 @@ import type {
   ThresholdConfig,
 } from './types';
 import { extractSignalsFromSentences } from './signals';
+import {
+  SPEC_FRAMEWORK_TOKENS,
+  SPEC_FRAMEWORK_TOKEN_LIST,
+  SPEC_FRAMEWORK_TIMELINE_EXCLUSIONS,
+} from './sectionSignals';
 
 // ============================================
 // Intent Classification Patterns
@@ -591,34 +596,8 @@ export function isStrategyHeadingSection(
 // ============================================
 // Spec / Framework Section Classifier
 // ============================================
-
-/**
- * Combined regex for quick presence check (any spec/framework token).
- */
-const SPEC_FRAMEWORK_TOKENS = /\b(scoring|prioriti[sz]ation|three[-\s]factor|eligibility|additionality|weighting|framework|system)\b/i;
-
-/**
- * Individual token regexes for counting distinct matches in the body.
- * A single incidental mention (e.g. "later prioritization") is not enough;
- * the heading must contain a token OR the body must contain >= 2 distinct tokens.
- */
-const SPEC_FRAMEWORK_TOKEN_LIST: RegExp[] = [
-  /\bscoring\b/i,
-  /\bprioritization\b/i,
-  /\bprioritisation\b/i,
-  /\bthree[-\s]factor\b/i,
-  /\beligibility\b/i,
-  /\badditionality\b/i,
-  /\bweighting\b/i,
-  /\bframework\b/i,
-  /\bsystem\b/i,
-];
-
-/**
- * Timeline / status tokens whose presence means the section describes a
- * concrete schedule event, NOT a pure specification.
- */
-const SPEC_FRAMEWORK_TIMELINE_EXCLUSIONS = /\b(deploy(?:ed|ing|ment)?|launch(?:ed|ing)?|eta|target\s+date|window|shipped|in\s+progress|complete[d]?)\b/i;
+// Token constants (SPEC_FRAMEWORK_TOKENS, SPEC_FRAMEWORK_TOKEN_LIST,
+// SPEC_FRAMEWORK_TIMELINE_EXCLUSIONS) are imported from ./sectionSignals.
 
 /**
  * Returns true when a section describes a specification, scoring rubric,

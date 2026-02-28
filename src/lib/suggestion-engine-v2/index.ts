@@ -43,6 +43,12 @@ import { enforceTitleContract, normalizeTitlePrefix, truncateTitleSmart, ensureU
 import { computeSuggestionKey } from '../suggestion-keys';
 import { computeNoteHash } from './noteHash';
 import { applyFinalEmissionEnforcement } from './finalEmissionEnforcement';
+import {
+  isAutomationSection,
+  countGamificationTokens,
+  computeGamificationClusterTitle,
+  buildAutomationMultiBulletBody,
+} from './sectionSignals';
 
 // Re-export types
 export * from './types';
@@ -105,6 +111,16 @@ export {
 
 let structuralBypassCounter = 0;
 
+/**
+ * Internal result type — not exported. Carries sectionMap alongside the
+ * public GeneratorResult so generateRunResult can access it without
+ * module-level mutable state.
+ */
+interface InternalGeneratorResult {
+  result: GeneratorResult;
+  sectionMap: Map<string, ClassifiedSection>;
+}
+
 function resetStructuralBypassCounter(): void {
   structuralBypassCounter = 0;
 }
@@ -166,6 +182,19 @@ export function generateSuggestions(
   context?: GeneratorContext,
   config?: Partial<GeneratorConfig>
 ): GeneratorResult {
+  return generateSuggestionsInternal(note, context, config).result;
+}
+
+/**
+ * Internal implementation — returns both the public result and the sectionMap
+ * so that generateRunResult can use it for final-emission enforcement without
+ * module-level mutable state.
+ */
+function generateSuggestionsInternal(
+  note: NoteInput,
+  context?: GeneratorContext,
+  config?: Partial<GeneratorConfig>
+): InternalGeneratorResult {
   // Reset counters for deterministic IDs (useful for testing)
   resetSectionCounter();
   resetSuggestionCounter();
@@ -215,7 +244,7 @@ export function generateSuggestions(
   debug.sections_count = sections.length;
 
   if (sections.length === 0) {
-    return buildResult([], noteHash, debug, finalConfig.enable_debug);
+    return { result: buildResult([], noteHash, debug, finalConfig.enable_debug), sectionMap: new Map() };
   }
 
   // ============================================
@@ -239,7 +268,7 @@ export function generateSuggestions(
     });
 
   if (actionableSections.length === 0 && !hasStructuralBypassCandidate) {
-    return buildResult([], noteHash, debug, finalConfig.enable_debug);
+    return { result: buildResult([], noteHash, debug, finalConfig.enable_debug), sectionMap: new Map() };
   }
 
   // ============================================
@@ -280,7 +309,7 @@ export function generateSuggestions(
   // When synthesis is empty AND there are no structural bypass candidates, exit early.
   // If structural bypass candidates exist we continue so Stage 4.59 can emit them.
   if (synthesizedSuggestions.length === 0 && !hasStructuralBypassCandidate) {
-    return buildResult([], noteHash, debug, finalConfig.enable_debug);
+    return { result: buildResult([], noteHash, debug, finalConfig.enable_debug), sectionMap };
   }
 
   // ============================================
@@ -513,46 +542,6 @@ export function generateSuggestions(
   }
 
   // ============================================
-  // Stage 4.59 Helpers: Automation & Gamification cluster synthesis
-  // ============================================
-
-  /**
-   * Heading patterns that indicate an automation / data-pipeline section.
-   * When matched and bulletCount >= 2, the body is formatted as a compact
-   * multi-bullet list preserving the key action items.
-   */
-  const AUTOMATION_HEADING_RE = /\b(data\s+collection\s+automation|automation|parsing|ocr|upload)\b/i;
-
-  /** Returns true when heading looks like an automation section. */
-  function isAutomationHeading(heading: string): boolean {
-    return AUTOMATION_HEADING_RE.test(heading);
-  }
-
-  /**
-   * Gamification engagement tokens.  When ≥ 2 of these appear in the section's
-   * bullet text AND the section has ≥ 4 bullets, the section gets a
-   * cluster-level title and multi-bullet body instead of a single-bullet anchor.
-   */
-  const GAMIFICATION_TOKENS = [
-    'next episode',
-    'one more',
-    'worth €',
-    'earning potential',
-    'next highest-value field',
-    'next field',
-    'reward',
-    'gamif',
-    'streak',
-    'badge',
-  ];
-
-  /** Count how many distinct gamification tokens appear in text. */
-  function countGamificationTokens(text: string): number {
-    const lower = text.toLowerCase();
-    return GAMIFICATION_TOKENS.filter(t => lower.includes(t)).length;
-  }
-
-  // ============================================
   // Stage 4.59: Structural Idea Bypass (additive)
   // ============================================
   // For structured conceptual sections (heading level ≤ 3, ≥ 3 bullets, no
@@ -599,17 +588,17 @@ export function generateSuggestions(
     if (listItems.length === 0) continue;
 
     // --- Automation section: format body as compact multi-bullet list ---
-    const isAutoSection = isAutomationHeading(headingText) && allListItems.length >= 2;
+    const isAutoSection = isAutomationSection(headingText) && allListItems.length >= 2;
 
     // --- Gamification section: cluster-level title + multi-bullet body ---
-    const gamTokenCount = countGamificationTokens(allListItems.join(' '));
+    const lowerBullets = allListItems.join(' ').toLowerCase();
+    const gamTokenCount = countGamificationTokens(lowerBullets);
     const isGamificationCluster = allListItems.length >= 4 && gamTokenCount >= 2;
 
     let bodyText: string;
     if (isAutoSection) {
       // Compact multi-bullet body: "- bullet1\n- bullet2\n..."
-      const kept = allListItems.slice(0, 4);
-      bodyText = kept.map(b => `- ${b}`).join('\n');
+      bodyText = buildAutomationMultiBulletBody(allListItems);
     } else if (isGamificationCluster) {
       // Compress top bullets into a flowing body
       const kept = allListItems.slice(0, 4);
@@ -621,16 +610,7 @@ export function generateSuggestions(
     // Title: heading-based by default, cluster-level for gamification
     let rawTitle: string;
     if (isGamificationCluster) {
-      // Build a cluster-level title from the heading and key token
-      const heading = section.heading_text?.trim() || '';
-      const lowerBullets = allListItems.join(' ').toLowerCase();
-      if (lowerBullets.includes('next highest-value field') || lowerBullets.includes('next field')) {
-        rawTitle = 'Gamify data collection (next-field rewards)';
-      } else if (lowerBullets.includes('earning potential')) {
-        rawTitle = 'Gamify data collection (earning-potential rewards)';
-      } else {
-        rawTitle = heading || 'Gamify data collection';
-      }
+      rawTitle = computeGamificationClusterTitle(section.heading_text?.trim() || '', lowerBullets);
     } else {
       rawTitle = section.heading_text?.trim() || listItems[0];
     }
@@ -705,7 +685,7 @@ export function generateSuggestions(
         : undefined);
     if (!section) continue;
     const heading = section.heading_text?.trim() ?? '';
-    if (!isAutomationHeading(heading)) continue;
+    if (!isAutomationSection(heading)) continue;
 
     // Only enrich if this is the single candidate for the section
     const sectionCandidates = filteredValidatedSuggestions.filter(
@@ -716,11 +696,10 @@ export function generateSuggestions(
     const items = section.body_lines
       .filter(l => l.line_type === 'list_item')
       .map(l => l.text.replace(/^[\s\-*+]+/, '').replace(/^\d+\.\s*/, '').trim())
-      .filter(t => t.length > 0)
-      .slice(0, 4);
+      .filter(t => t.length > 0);
     if (items.length < 2) continue;
 
-    const multiBulletBody = items.map(b => `- ${b}`).join('\n');
+    const multiBulletBody = buildAutomationMultiBulletBody(items);
     filteredValidatedSuggestions[i] = {
       ...suggestion,
       suggestion: suggestion.suggestion
@@ -858,7 +837,7 @@ export function generateSuggestions(
   }
 
   if (scoringResult.suggestions.length === 0) {
-    return buildResult([], noteHash, debug, finalConfig.enable_debug);
+    return { result: buildResult([], noteHash, debug, finalConfig.enable_debug), sectionMap };
   }
 
   // ============================================
@@ -924,7 +903,7 @@ export function generateSuggestions(
     };
   });
 
-  return buildResult(contractedSuggestions, noteHash, debug, finalConfig.enable_debug, sectionMap);
+  return { result: buildResult(contractedSuggestions, noteHash, debug, finalConfig.enable_debug), sectionMap };
 }
 
 /**
@@ -935,7 +914,6 @@ function buildResult(
   noteHash: string,
   debug: GeneratorDebugInfo,
   includeDebug: boolean,
-  sectionMap?: Map<string, ClassifiedSection>
 ): GeneratorResult {
   const result: GeneratorResult = {
     suggestions,
@@ -944,10 +922,6 @@ function buildResult(
 
   if (includeDebug) {
     result.debug = debug;
-  }
-
-  if (sectionMap) {
-    result._sectionMap = sectionMap;
   }
 
   return result;
@@ -1119,8 +1093,8 @@ export function generateRunResult(
   const applyAnyway = options?.applyAnyway ?? false;
   const maxCap = options?.maxSuggestionsPerNote ?? 0; // 0 = uncapped
 
-  // Run the engine
-  const generatorResult = generateSuggestions(note, context, finalConfig);
+  // Run the engine (internal variant returns sectionMap alongside result)
+  const { result: generatorResult, sectionMap } = generateSuggestionsInternal(note, context, finalConfig);
   let finalSuggestions = generatorResult.suggestions;
 
   // ============================================
@@ -1129,9 +1103,8 @@ export function generateRunResult(
   // Applied after the full pipeline to guarantee invariants regardless of
   // whether earlier stages (synthesis, consolidation, scoring, title contract)
   // correctly preserved the overrides.
-  const emissionSectionMap = generatorResult._sectionMap;
-  if (emissionSectionMap) {
-    finalSuggestions = applyFinalEmissionEnforcement(finalSuggestions, emissionSectionMap, note.note_id);
+  if (sectionMap.size > 0) {
+    finalSuggestions = applyFinalEmissionEnforcement(finalSuggestions, sectionMap, note.note_id);
   }
 
   // --- Invariant: all suggestions passed validation ---
