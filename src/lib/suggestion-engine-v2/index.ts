@@ -29,7 +29,7 @@ import type {
 } from './types';
 import { DEFAULT_CONFIG as defaultConfig } from './types';
 import { preprocessNote, resetSectionCounter } from './preprocessing';
-import { classifySections, filterActionableSections, qualifiesForStructuralIdeaBypass, isSpecOrFrameworkSection } from './classifiers';
+import { classifySections, filterActionableSections, qualifiesForStructuralIdeaBypass } from './classifiers';
 import { synthesizeSuggestions, resetSuggestionCounter, shouldSplitByTopic, splitSectionByTopic, checkSectionSuppression, shouldSplitDenseParagraph, splitDenseParagraphIntoSentences } from './synthesis';
 import { runQualityValidators } from './validators';
 import { runScoringPipeline, refineSuggestionScores } from './scoring';
@@ -45,9 +45,10 @@ import { computeNoteHash } from './noteHash';
 import { applyFinalEmissionEnforcement } from './finalEmissionEnforcement';
 import {
   isAutomationSection,
-  countGamificationTokens,
+  isGamificationSection,
   computeGamificationClusterTitle,
   buildAutomationMultiBulletBody,
+  isSpecOrFrameworkSection,
 } from './sectionSignals';
 
 // Re-export types
@@ -592,8 +593,7 @@ function generateSuggestionsInternal(
 
     // --- Gamification section: cluster-level title + multi-bullet body ---
     const lowerBullets = allListItems.join(' ').toLowerCase();
-    const gamTokenCount = countGamificationTokens(lowerBullets);
-    const isGamificationCluster = allListItems.length >= 4 && gamTokenCount >= 2;
+    const isGamificationCluster = isGamificationSection(allListItems);
 
     let bodyText: string;
     if (isAutoSection) {

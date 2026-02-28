@@ -25,7 +25,13 @@ import {
   SPEC_FRAMEWORK_TOKENS,
   SPEC_FRAMEWORK_TOKEN_LIST,
   SPEC_FRAMEWORK_TIMELINE_EXCLUSIONS,
+  hasSectionConcreteDelta,
+  hasSectionScheduleEvent,
+  isSpecOrFrameworkSection,
 } from './sectionSignals';
+
+// Re-export functions moved to sectionSignals for backwards compatibility
+export { isSpecOrFrameworkSection, hasSectionConcreteDelta } from './sectionSignals';
 
 // ============================================
 // Intent Classification Patterns
@@ -420,29 +426,7 @@ const V3_CHANGE_OPERATORS = [
  *   describes "change + how much" qualifies for plan_change override.
  */
 
-// Month names (abbreviated or full) for use in date-delta patterns
-const MONTH_NAMES = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
-
-// Quarter references
-const QUARTER_REFS = '(?:q[1-4]|quarter)';
-
-// Date-like tokens: ordinals, months, quarters, "next <timeframe>"
-const DATE_LIKE = `(?:\\d+(?:th|st|nd|rd)|${MONTH_NAMES}|${QUARTER_REFS}|next\\s+\\w+|this\\s+\\w+)`;
-
-const PLAN_CHANGE_CONCRETE_DELTA = new RegExp(
-  // Shape 1a: hyphenated numeric time unit (e.g. "4-week", "2-month")
-  '\\b\\d+-(?:week|day|month|sprint|quarter)s?\\b'
-  // Shape 1b: bare numeric time unit (e.g. "2 weeks", "14 days")
-  + '|\\b\\d+\\s+(?:week|day|month|sprint|quarter)s?\\b'
-  // Shape 2a: arrow between ordinals or numbers (e.g. "12th → 19th", "3 -> 5")
-  + '|\\d+(?:th|st|nd|rd)?\\s*[→>-]+\\s*\\d+(?:th|st|nd|rd)?'
-  // Shape 2b: "from <date-like> to <date-like>" (restricted to date tokens;
-  //            optional "the" before each ordinal, e.g. "from the 12th to the 19th")
-  + `|\\bfrom\\s+(?:the\\s+)?${DATE_LIKE}\\s+to\\s+(?:the\\s+)?${DATE_LIKE}`
-  // Shape 2c: "moved/pushed/delayed/postponed to/until <date-like>"
-  + `|\\b(?:moved?|pushed?|delayed?|postponed?|rescheduled?)\\s+(?:to|until|from)\\s+${DATE_LIKE}`,
-  'i'
-);
+// Date-delta regex and hasSectionConcreteDelta moved to ./sectionSignals.
 
 /**
  * Returns true when a text span qualifies for plan_change override at the
@@ -450,7 +434,7 @@ const PLAN_CHANGE_CONCRETE_DELTA = new RegExp(
  *
  * Requires BOTH:
  *   A) At least one explicit change marker (a word from V3_CHANGE_OPERATORS), AND
- *   B) Concrete delta evidence (PLAN_CHANGE_CONCRETE_DELTA).
+ *   B) Concrete delta evidence (hasSectionConcreteDelta).
  *
  * The section-level isPlanChangeDominant flag uses the broader hasChangeOperators
  * check (any V3_CHANGE_OPERATOR without requiring a delta) to preserve existing
@@ -464,36 +448,10 @@ const PLAN_CHANGE_CONCRETE_DELTA = new RegExp(
 export function hasPlanChangeEligibility(text: string): boolean {
   const hasChangeOperator = V3_CHANGE_OPERATORS.some((op) => text.toLowerCase().includes(op));
   if (!hasChangeOperator) return false;
-  return PLAN_CHANGE_CONCRETE_DELTA.test(text);
+  return hasSectionConcreteDelta(text);
 }
 
-/**
- * Returns true when the section text (full body) contains a concrete delta.
- * Used at the section level to gate the ACTIONABILITY bypass and type tie-breaking.
- *
- * This is intentionally identical to hasPlanChangeEligibility applied to the
- * full section text — so that sections with ANY sentence containing a concrete
- * delta qualify, even if other sentences are strategy-only.
- */
-export function hasSectionConcreteDelta(sectionText: string): boolean {
-  return PLAN_CHANGE_CONCRETE_DELTA.test(sectionText);
-}
-
-/**
- * Delay/launch/ETA signal words.  When these appear in a section, the section
- * describes a concrete schedule event (deployment, launch, ETA) rather than a
- * strategic direction — so it should still be classified as project_update even
- * if no numeric delta is present.
- */
-const SCHEDULE_EVENT_WORDS = /\b(?:delay(?:ed|ing)?|launch(?:ed|ing)?|deploy(?:ed|ing|ment)?|release(?:d|ing)?|ship(?:ped|ping)?|eta|go-live|go\s+live|target\s+date|due\s+date|deadline|milestone)\b/i;
-
-/**
- * Returns true when the section text contains schedule-event language (delay,
- * launch, deploy, ETA, etc.) without requiring a numeric delta.
- */
-function hasSectionScheduleEvent(sectionText: string): boolean {
-  return SCHEDULE_EVENT_WORDS.test(sectionText);
-}
+// SCHEDULE_EVENT_WORDS and hasSectionScheduleEvent moved to ./sectionSignals.
 
 /**
  * Returns true when the section is "strategy-only" — it has change-operator
@@ -595,45 +553,7 @@ export function isStrategyHeadingSection(
 
 // ============================================
 // Spec / Framework Section Classifier
-// ============================================
-// Token constants (SPEC_FRAMEWORK_TOKENS, SPEC_FRAMEWORK_TOKEN_LIST,
-// SPEC_FRAMEWORK_TIMELINE_EXCLUSIONS) are imported from ./sectionSignals.
-
-/**
- * Returns true when a section describes a specification, scoring rubric,
- * eligibility framework, or similar "design document" content — meaning it
- * should NEVER be typed as project_update.
- *
- * Conditions (ALL must hold):
- *   1. The heading contains a SPEC_FRAMEWORK_TOKEN (strongest signal),
- *      OR the body contains >= 2 distinct tokens (to avoid false positives
- *      from incidental mentions like "later prioritization").
- *   2. The combined text does NOT contain any timeline / status token.
- *   3. The combined text does NOT contain a concrete delta (date change, duration).
- *   4. The combined text does NOT contain schedule-event language (delay, launch, etc.).
- *
- * When this returns true, the section should only emit `idea` candidates.
- */
-export function isSpecOrFrameworkSection(
-  sectionText: string,
-  bullets: number,
-  heading: string
-): boolean {
-  const combined = (heading + ' ' + sectionText);
-
-  // Heading token match is the strongest signal
-  const headingHasToken = SPEC_FRAMEWORK_TOKENS.test(heading);
-  if (!headingHasToken) {
-    // Fallback: body must contain >= 2 distinct spec/framework tokens
-    const bodyMatches = SPEC_FRAMEWORK_TOKEN_LIST.filter(re => re.test(sectionText));
-    if (bodyMatches.length < 2) return false;
-  }
-
-  if (SPEC_FRAMEWORK_TIMELINE_EXCLUSIONS.test(combined)) return false;
-  if (hasSectionConcreteDelta(combined)) return false;
-  if (hasSectionScheduleEvent(combined)) return false;
-  return true;
-}
+// isSpecOrFrameworkSection moved to ./sectionSignals (re-exported above).
 
 /**
  * Mechanism verbs that indicate a real initiative or feature proposal.

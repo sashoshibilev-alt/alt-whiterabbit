@@ -27,11 +27,9 @@ import { normalizeTitlePrefix } from './title-normalization';
 import { computeSuggestionKey } from '../suggestion-keys';
 import { normalizeForComparison } from './preprocessing';
 import {
-  countGamificationTokens,
+  isGamificationSection,
   computeGamificationClusterTitle,
 } from './sectionSignals';
-
-// Gamification cluster tokens are imported from ./sectionSignals.
 
 // ============================================
 // Delta/timeline signal detection
@@ -215,16 +213,14 @@ export function consolidateBySection(
       let consolidatedTitle: string;
 
       // Gamification cluster-level title override
-      const bulletTexts = section.body_lines
+      const bulletItems = section.body_lines
         .filter((l) => l.line_type === 'list_item')
-        .map((l) => l.text)
-        .join(' ')
-        .toLowerCase();
-      const gamCount = countGamificationTokens(bulletTexts);
-      if (bulletCount >= 4 && gamCount >= 2) {
+        .map((l) => l.text);
+      const bulletTextsLower = bulletItems.join(' ').toLowerCase();
+      if (isGamificationSection(bulletItems)) {
         consolidatedTitle = normalizeTitlePrefix(
           'idea',
-          computeGamificationClusterTitle(headingText, bulletTexts),
+          computeGamificationClusterTitle(headingText, bulletTextsLower),
         );
       } else {
         consolidatedTitle = normalizeTitlePrefix('idea', headingText);
