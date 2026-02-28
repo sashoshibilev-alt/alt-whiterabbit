@@ -12,14 +12,15 @@ import type { Suggestion, ClassifiedSection } from './types';
 import { isSpecOrFrameworkSection } from './classifiers';
 import { normalizeTitlePrefix } from './title-normalization';
 import { computeSuggestionKey } from '../suggestion-keys';
+import {
+  AUTOMATION_HEADING_RE,
+  SPEC_FRAMEWORK_TOKENS,
+  countGamificationTokens,
+  computeGamificationClusterTitle,
+  buildAutomationMultiBulletBody,
+} from './sectionSignals';
 
-const EMISSION_AUTOMATION_RE = /\b(data\s+collection\s+automation|automation|parsing|ocr|upload)\b/i;
 const EMISSION_TIMELINE_HEADING_RE = /\b(timeline|implementation\s+timeline|schedule)\b/i;
-const EMISSION_GAM_TOKENS = [
-  'next episode', 'one more', 'worth €', 'earning potential',
-  'next highest-value field', 'next field', 'reward', 'gamif', 'streak', 'badge',
-];
-const EMISSION_SPEC_HEADING_TOKENS = /\b(scoring|prioriti[sz]ation|three[-\s]factor|eligibility|additionality|weighting|framework|system)\b/i;
 
 /**
  * Apply final-emission enforcement rules to the suggestion list.
@@ -70,7 +71,7 @@ export function applyFinalEmissionEnforcement(
           return false;
         }
         // Heading has spec/framework tokens AND an idea coexists: suppress project_update
-        if (EMISSION_SPEC_HEADING_TOKENS.test(heading) && sectionsWithIdea.has(s.section_id)) {
+        if (SPEC_FRAMEWORK_TOKENS.test(heading) && sectionsWithIdea.has(s.section_id)) {
           return false;
         }
       }
@@ -89,16 +90,9 @@ export function applyFinalEmissionEnforcement(
 
     // 2) Gamification cluster override
     const bulletJoined = allItems.join(' ').toLowerCase();
-    const gamCount = EMISSION_GAM_TOKENS.filter(t => bulletJoined.includes(t)).length;
+    const gamCount = countGamificationTokens(bulletJoined);
     if (allItems.length >= 4 && gamCount >= 2 && s.type === 'idea') {
-      let clusterTitle: string;
-      if (bulletJoined.includes('next highest-value field') || bulletJoined.includes('next field')) {
-        clusterTitle = 'Gamify data collection (next-field rewards)';
-      } else if (bulletJoined.includes('earning potential')) {
-        clusterTitle = 'Gamify data collection (earning-potential rewards)';
-      } else {
-        clusterTitle = heading || 'Gamify data collection';
-      }
+      const clusterTitle = computeGamificationClusterTitle(heading, bulletJoined);
       const prefixed = normalizeTitlePrefix('idea', clusterTitle);
       const kept = allItems.slice(0, 4);
       const clusterBody = kept.join('. ').replace(/\.+/g, '.').replace(/\.\s*$/, '') + '.';
@@ -120,9 +114,8 @@ export function applyFinalEmissionEnforcement(
     }
 
     // 3) Automation multi-bullet enrichment
-    if (s.type === 'idea' && EMISSION_AUTOMATION_RE.test(heading) && allItems.length >= 2) {
-      const kept = allItems.slice(0, 4);
-      const multiBullet = kept.map(b => `- ${b}`).join('\n');
+    if (s.type === 'idea' && AUTOMATION_HEADING_RE.test(heading) && allItems.length >= 2) {
+      const multiBullet = buildAutomationMultiBulletBody(allItems);
       finalSuggestions[i] = {
         ...s,
         suggestion: s.suggestion
@@ -139,7 +132,7 @@ export function applyFinalEmissionEnforcement(
     }
 
     // 4) Spec/framework multi-bullet enrichment
-    if (s.type === 'idea' && EMISSION_SPEC_HEADING_TOKENS.test(heading) && allItems.length >= 3) {
+    if (s.type === 'idea' && SPEC_FRAMEWORK_TOKENS.test(heading) && allItems.length >= 3) {
       const multiBullet = allItems.map(b => `- ${b}`).join('\n');
       finalSuggestions[i] = {
         ...s,
