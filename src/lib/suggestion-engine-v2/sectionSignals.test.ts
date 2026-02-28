@@ -16,11 +16,17 @@ import {
   SPEC_FRAMEWORK_TOKENS,
   SPEC_FRAMEWORK_TOKEN_LIST,
   SPEC_FRAMEWORK_TIMELINE_EXCLUSIONS,
+  TIMELINE_HEADING_RE,
   countGamificationTokens,
   isGamificationSection,
   computeGamificationClusterTitle,
   isAutomationSection,
   buildAutomationMultiBulletBody,
+  hasSectionConcreteDelta,
+  hasSectionScheduleEvent,
+  isSpecOrFrameworkSection,
+  isTimelineSection,
+  shouldSuppressProjectUpdate,
 } from './sectionSignals';
 
 // ============================================
@@ -282,5 +288,151 @@ describe('SPEC_FRAMEWORK_TIMELINE_EXCLUSIONS', () => {
 
   it('does not match pure spec text', () => {
     expect(SPEC_FRAMEWORK_TIMELINE_EXCLUSIONS.test('Three-factor scoring with weighting')).toBe(false);
+  });
+});
+
+// ============================================
+// hasSectionConcreteDelta
+// ============================================
+
+describe('hasSectionConcreteDelta', () => {
+  it('detects hyphenated numeric time unit', () => {
+    expect(hasSectionConcreteDelta('4-week delay on delivery')).toBe(true);
+  });
+
+  it('detects bare numeric time unit', () => {
+    expect(hasSectionConcreteDelta('Delayed by 2 weeks')).toBe(true);
+  });
+
+  it('detects date arrow', () => {
+    expect(hasSectionConcreteDelta('Launch pushed from 12th → 19th.')).toBe(true);
+  });
+
+  it('detects from-to date pattern', () => {
+    expect(hasSectionConcreteDelta('Timeline moved from June to August.')).toBe(true);
+  });
+
+  it('returns false for strategic language', () => {
+    expect(hasSectionConcreteDelta('We should shift from enterprise to SMB customers.')).toBe(false);
+  });
+});
+
+// ============================================
+// hasSectionScheduleEvent
+// ============================================
+
+describe('hasSectionScheduleEvent', () => {
+  it('detects "delay"', () => {
+    expect(hasSectionScheduleEvent('The launch was delayed')).toBe(true);
+  });
+
+  it('detects "deployment"', () => {
+    expect(hasSectionScheduleEvent('deployment scheduled for next week')).toBe(true);
+  });
+
+  it('detects "go-live"', () => {
+    expect(hasSectionScheduleEvent('go-live date set')).toBe(true);
+  });
+
+  it('returns false for spec-only text', () => {
+    expect(hasSectionScheduleEvent('Three-factor scoring with weighting')).toBe(false);
+  });
+});
+
+// ============================================
+// isSpecOrFrameworkSection
+// ============================================
+
+describe('isSpecOrFrameworkSection', () => {
+  it('returns true for spec heading with no timeline', () => {
+    expect(isSpecOrFrameworkSection(
+      'Three-factor scoring: evaluate each claim',
+      3, 'Claim Assessment Framework'
+    )).toBe(true);
+  });
+
+  it('returns false when timeline exclusions present', () => {
+    expect(isSpecOrFrameworkSection(
+      'The scoring system was deployed last week',
+      3, 'Scoring Framework'
+    )).toBe(false);
+  });
+
+  it('returns false when concrete delta present', () => {
+    expect(isSpecOrFrameworkSection(
+      'Scoring framework delayed by 4 weeks',
+      3, 'Scoring Framework'
+    )).toBe(false);
+  });
+
+  it('returns false for unrelated text', () => {
+    expect(isSpecOrFrameworkSection(
+      'Upload form data to backend',
+      2, 'Upload Strategy'
+    )).toBe(false);
+  });
+});
+
+// ============================================
+// isTimelineSection / TIMELINE_HEADING_RE
+// ============================================
+
+describe('isTimelineSection', () => {
+  it('matches "Timeline"', () => {
+    expect(isTimelineSection('Timeline')).toBe(true);
+  });
+
+  it('matches "Implementation Timeline"', () => {
+    expect(isTimelineSection('Implementation Timeline')).toBe(true);
+  });
+
+  it('matches "Schedule"', () => {
+    expect(isTimelineSection('Schedule')).toBe(true);
+  });
+
+  it('does not match unrelated headings', () => {
+    expect(isTimelineSection('Gamification Strategy')).toBe(false);
+  });
+
+  it('matches TIMELINE_HEADING_RE directly', () => {
+    expect(TIMELINE_HEADING_RE.test('Implementation Timeline')).toBe(true);
+    expect(TIMELINE_HEADING_RE.test('Something else')).toBe(false);
+  });
+});
+
+// ============================================
+// shouldSuppressProjectUpdate
+// ============================================
+
+describe('shouldSuppressProjectUpdate', () => {
+  it('suppresses when section is spec/framework', () => {
+    expect(shouldSuppressProjectUpdate(
+      'Three-factor scoring: evaluate each claim using eligibility criteria',
+      3, 'Claim Assessment Framework', false
+    )).toBe(true);
+  });
+
+  it('suppresses when heading has spec token and idea coexists', () => {
+    expect(shouldSuppressProjectUpdate(
+      'The scoring system handles all claims',
+      2, 'Scoring System', true
+    )).toBe(true);
+  });
+
+  it('does not suppress for unrelated section', () => {
+    expect(shouldSuppressProjectUpdate(
+      'Upload form data to the backend',
+      2, 'Upload Strategy', false
+    )).toBe(false);
+  });
+
+  it('does not suppress when heading has spec token but no coexisting idea', () => {
+    // "system" in heading triggers SPEC_FRAMEWORK_TOKENS, but the section has
+    // timeline-exclusion words so isSpecOrFrameworkSection returns false,
+    // and hasCoexistingIdea is false.
+    expect(shouldSuppressProjectUpdate(
+      'The system was deployed last week. Launched in Q3.',
+      2, 'Content System', false
+    )).toBe(false);
   });
 });

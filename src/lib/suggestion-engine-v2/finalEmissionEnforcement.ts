@@ -9,18 +9,18 @@
  */
 
 import type { Suggestion, ClassifiedSection } from './types';
-import { isSpecOrFrameworkSection } from './classifiers';
 import { normalizeTitlePrefix } from './title-normalization';
 import { computeSuggestionKey } from '../suggestion-keys';
 import {
   AUTOMATION_HEADING_RE,
   SPEC_FRAMEWORK_TOKENS,
-  countGamificationTokens,
   computeGamificationClusterTitle,
   buildAutomationMultiBulletBody,
+  isSpecOrFrameworkSection,
+  isGamificationSection,
+  isTimelineSection,
+  shouldSuppressProjectUpdate,
 } from './sectionSignals';
-
-const EMISSION_TIMELINE_HEADING_RE = /\b(timeline|implementation\s+timeline|schedule)\b/i;
 
 /**
  * Apply final-emission enforcement rules to the suggestion list.
@@ -66,12 +66,7 @@ export function applyFinalEmissionEnforcement(
       if (sec) {
         const heading = sec.heading_text || '';
         const numBullets = sec.structural_features?.num_list_items ?? 0;
-        // Pure spec/framework (no deltas): always suppress project_update
-        if (isSpecOrFrameworkSection(sec.raw_text, numBullets, heading)) {
-          return false;
-        }
-        // Heading has spec/framework tokens AND an idea coexists: suppress project_update
-        if (SPEC_FRAMEWORK_TOKENS.test(heading) && sectionsWithIdea.has(s.section_id)) {
+        if (shouldSuppressProjectUpdate(sec.raw_text, numBullets, heading, sectionsWithIdea.has(s.section_id))) {
           return false;
         }
       }
@@ -90,8 +85,7 @@ export function applyFinalEmissionEnforcement(
 
     // 2) Gamification cluster override
     const bulletJoined = allItems.join(' ').toLowerCase();
-    const gamCount = countGamificationTokens(bulletJoined);
-    if (allItems.length >= 4 && gamCount >= 2 && s.type === 'idea') {
+    if (isGamificationSection(allItems) && s.type === 'idea') {
       const clusterTitle = computeGamificationClusterTitle(heading, bulletJoined);
       const prefixed = normalizeTitlePrefix('idea', clusterTitle);
       const kept = allItems.slice(0, 4);
@@ -153,7 +147,7 @@ export function applyFinalEmissionEnforcement(
   const timelineSectionIds = new Set<string>();
   for (const [secId, sec] of sectionMap) {
     const h = sec.heading_text?.trim() ?? '';
-    if (EMISSION_TIMELINE_HEADING_RE.test(h)) {
+    if (isTimelineSection(h)) {
       timelineSectionIds.add(secId);
     }
   }
